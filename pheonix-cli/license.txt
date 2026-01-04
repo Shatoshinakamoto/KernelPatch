@@ -1,0 +1,35 @@
+           cli: `  /************************************************************************************************************************
+   * Author: Johnathan Edward Brown                                                                                       *
+   * Purpose: CLI with worker thread entry point for the PheonixBox Class Object for the CLI Pheonix application.         *
+   * Last Modified: ${this.currentDate}                                                                                   *
+   * License: X11 License                                                                                                 *
+   * Version: ${this.version}                                                                                             *
+   ************************************************************************************************************************/`,
+            char: `  /************************************************************************************************************************
+   * Author: Johnathan Edward Brown                                                                                       *
+   * Purpose: Generate safe UTF-8 characters for use in the PheonixBox Class Object for the CLI Pheonix application.      *
+   * Last Modified: ${this.currentDate}                                                                                   *
+   * License: X11 License                                                                                                 *
+   * Version: ${this.version}                                                                                             *
+   ************************************************************************************************************************/`,
+            config: `  /************************************************************************************************************************
+   * Author: Johnathan Edward Brown                                                                                       *
+   * Purpose: Configuration class for the CLI Pheonix application.                                                        *
+   * Last Modified: ${this.currentDate}                                                                                   *
+   * License: X11 License                                                                                                 *
+   * Version: ${this.version}                                                                                             *
+   ************************************************************************************************************************/`,
+            main: `  /************************************************************************************************************************
+   * Author: Johnathan Edward Brown                                                                                       *
+   * Purpose: Main entry point for the PheonixBox Class Object for the CLI Pheonix application.                           *
+   * Last Modified: ${this.currentDate}                                                                                   *
+   * License: X11 License                                                                                                 *
+   * Version: ${this.version}                                                                                             *
+   ************************************************************************************************************************/`,
+            worker: `  /************************************************************************************************************************
+   * Author: Johnathan Edward Brown                                                                                       *
+   * Purpose: Worker class for the PheonixBox Class Object for the CLI Pheonix application.                               *
+   * Last Modified: ${this.currentDate}                                                                                   *
+   * License: X11 License                                                                                                 *
+   * Version: ${this.version}                                                                                             *
+   ************************************************************************************************************************/`

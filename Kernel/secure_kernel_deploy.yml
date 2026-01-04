@@ -1,0 +1,299 @@
+---
+# secure_kernel_deploy.yml - Ansible playbook to deploy secure kernel patch across multiple Linux distributions
+# This playbook:
+# 1. Identifies the target Linux distribution
+# 2. Installs required dependencies
+# 3. Transfers kernel module source and build script
+# 4. Executes the build script to patch, build and install the kernel
+# 5. Sets up the secure_sudo configuration with specified blacklist
+# 6. Optionally reboots the system
+
+- name: Deploy Secure Kernel Patch
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    kernel_version: "5.15.0"
+    workdir: "/tmp/secure_kernel_ansible"
+    module_src: "secure_sudo.c"
+    build_script: "secure_kernel_build.sh"
+    config_dir: "/etc/secure_sudo"
+    reboot_after_install: true
+    
+  tasks:
+    - name: Check if system is already patched
+      stat:
+        path: "/sys/kernel/security/secure_sudo"
+      register: secure_sudo_check
+      ignore_errors: yes
+      
+    - name: Create working directory
+      file:
+        path: "{{ workdir }}"
+        state: directory
+        mode: '0755'
+      when: not secure_sudo_check.stat.exists
+      
+    - name: Transfer secure_sudo module source
+      copy:
+        src: "{{ module_src }}"
+        dest: "{{ workdir }}/{{ module_src }}"
+        mode: '0644'
+      when: not secure_sudo_check.stat.exists
+      
+    - name: Transfer kernel build script
+      copy:
+        src: "{{ build_script }}"
+        dest: "{{ workdir }}/{{ build_script }}"
+        mode: '0755'
+      when: not secure_sudo_check.stat.exists
+      
+    - name: Install distribution-specific dependencies (Debian/Ubuntu)
+      apt:
+        name:
+          - build-essential
+          - libncurses-dev
+          - libssl-dev
+          - libelf-dev
+          - bison
+          - flex
+          - bc
+          - wget
+          - git
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian" and not secure_sudo_check.stat.exists
+
+    - name: Install distribution-specific dependencies (RedHat/CentOS/Fedora)
+      package:
+        name:
+          - gcc
+          - make
+          - ncurses-devel
+          - openssl-devel
+          - elfutils-libelf-devel
+          - bison
+          - flex
+          - bc
+          - wget
+          - git
+          - kernel-devel
+        state: present
+      when: ansible_os_family == "RedHat" and not secure_sudo_check.stat.exists
+
+    - name: Install distribution-specific dependencies (Arch/Manjaro)
+      pacman:
+        name:
+          - base-devel
+          - ncurses
+          - openssl
+          - libelf
+          - bison
+          - flex
+          - bc
+          - wget
+          - git
+          - linux-headers
+        state: present
+      when: ansible_os_family == "Archlinux" and not secure_sudo_check.stat.exists
+
+    - name: Install distribution-specific dependencies (SUSE)
+      zypper:
+        name:
+          - gcc
+          - make
+          - ncurses-devel
+          - libopenssl-devel
+          - libelf-devel
+          - bison
+          - flex
+          - bc
+          - wget
+          - git
+          - kernel-devel
+        state: present
+      when: ansible_os_family == "Suse" and not secure_sudo_check.stat.exists
+
+    - name: Execute kernel build script
+      command: "{{ workdir }}/{{ build_script }}"
+      args:
+        chdir: "{{ workdir }}"
+      register: build_result
+      failed_when: build_result.rc != 0
+      when: not secure_sudo_check.stat.exists
+      
+    - name: Display build output
+      debug:
+        var: build_result.stdout_lines
+      when: not secure_sudo_check.stat.exists
+      
+    - name: Create secure_sudo configuration directory
+      file:
+        path: "{{ config_dir }}"
+        state: directory
+        mode: '0755'
+        
+    - name: Create blacklist configuration file
+      copy:
+        dest: "{{ config_dir }}/blacklist.conf"
+        content: |
+          # Secure Sudo Blacklist Configuration
+          # List of commands that non-sudo users are not allowed to execute
+          # One command per line, comments start with #
+          
+          # System control commands
+          systemctl
+          service
+          init
+          telinit
+          poweroff
+          reboot
+          shutdown
+          
+          # Network control commands
+          ifconfig
+          ip
+          route
+          iptables
+          ufw
+          
+          # Process control commands
+          kill
+          pkill
+          killall
+          
+          # Package management
+          apt
+          apt-get
+          dpkg
+          snap
+          
+          # User management
+          useradd
+          usermod
+          userdel
+          groupadd
+          groupmod
+          groupdel
+          passwd
+          
+          # Hardware control
+          hdparm
+          flashrom
+          nvflash
+          
+          # Additional distribution-specific package managers
+          {% if ansible_os_family == "RedHat" %}
+          dnf
+          yum
+          rpm
+          {% elif ansible_os_family == "Archlinux" %}
+          pacman
+          pamac
+          {% elif ansible_os_family == "Suse" %}
+          zypper
+          rpm
+          {% endif %}
+
+          # Additional security-sensitive commands
+          chattr
+          lsattr
+          mount
+          umount
+          fdisk
+          gdisk
+          parted
+          dd
+          losetup
+          debugfs
+          insmod
+          modprobe
+          rmmod
+          lsmod
+        mode: '0600'
+        owner: root
+        group: root
+      notify: Reload blacklist
+
+    - name: Create sysctl security configuration
+      copy:
+        dest: "/etc/sysctl.d/99-security.conf"
+        content: |
+          # Kernel security settings
+          # Restrict access to kernel pointers
+          kernel.kptr_restrict=2
+          
+          # Restrict access to kernel logs
+          kernel.dmesg_restrict=1
+          
+          # Restrict ptrace scope
+          kernel.yama.ptrace_scope=2
+          
+          # Enable ASLR
+          kernel.randomize_va_space=2
+        mode: '0644'
+        owner: root
+        group: root
+      notify: Apply sysctl settings
+
+    - name: Enable kernel module signing
+      lineinfile:
+        path: "/etc/modprobe.d/secure-modules.conf"
+        line: "options module.sig_enforce=1"
+        create: yes
+        mode: '0644'
+        owner: root
+        group: root
+      when: ansible_kernel is version('4.4', '>=')
+
+    - name: Set secure filesystem mount options
+      copy:
+        dest: "/etc/modprobe.d/secure-fs.conf"
+        content: |
+          # Secure filesystem mount options
+          options vfat noexec,nosuid,nodev
+          options ntfs noexec,nosuid,nodev
+          options udf noexec,nosuid,nodev
+          options iso9660 noexec,nosuid,nodev
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Configure PAM to restrict non-sudo users
+      lineinfile:
+        path: "{{ item }}"
+        line: "auth required pam_wheel.so use_uid"
+        create: no
+        state: present
+      loop:
+        - "/etc/pam.d/su"
+        - "/etc/pam.d/sudo"
+      ignore_errors: yes
+      
+    - name: Configure secure boot if available
+      shell: |
+        if command -v mokutil >/dev/null 2>&1; then
+          if mokutil --sb-state | grep -q 'SecureBoot enabled'; then
+            echo "SecureBoot is already enabled"
+            exit 0
+          fi
+        fi
+      register: secureboot_result
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Reboot system to apply kernel changes
+      reboot:
+        msg: "Rebooting to apply secure kernel changes"
+        reboot_timeout: 600
+      when: reboot_after_install and not secure_sudo_check.stat.exists
+      
+  handlers:
+    - name: Reload blacklist
+      command: "echo 1 > /sys/kernel/secure_sudo/reload"
+      ignore_errors: yes
+      
+    - name: Apply sysctl settings
+      command: "sysctl -p /etc/sysctl.d/99-security.conf"
+...
