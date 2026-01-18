@@ -17,3 +17,7 @@ Maybe Even find a way to detect what process was trying to give the incorrect pa
 To include logging of all unallowed accesses instead of just printing to the kernel to a log file system in this kernel patch to allow users to look back on malicious actions and calls to confirm they where happening.
 Logging should include a date and time using the date and time of the kernel that is booted up in the log file
 Should potentially include a configurable oldest logs automatically delete and be able to set how many days of log files should be held and kept to decrease potential Storage DOS attacks from this new function.
+
+
+# Needs to include a encrypted kernel install
+Should include in the yml scaffold way to automate installing the kernel using a encrypted method as well to allow the kernel patch to be encrypted to decrease attack surfaces and properly still apply as a kernel patch by making a secondary yml scaffold install along with a secondary shell script to install using a encrypted kernel install method utilizing the already existing install methods just restructuring them to properly do so
