@@ -8,3 +8,9 @@ Only sudo users should be able to execute these commands to ensure its a secure 
 
 # Needs to blacklist the following command to prevent tpm clearing
 echo 5 | sudo tee /sys/class/tpm/tpm0/ppi/request
+
+
+# Needs
+To include logging of all unallowed accesses instead of just printing to the kernel to a log file system in this kernel patch to allow users to look back on malicious actions and calls to confirm they where happening.
+Logging should include a date and time using the date and time of the kernel that is booted up in the log file
+Should potentially include a configurable oldest logs automatically delete and be able to set how many days of log files should be held and kept to decrease potential Storage DOS attacks from this new function.
