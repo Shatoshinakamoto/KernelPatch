@@ -9,6 +9,9 @@ Only sudo users should be able to execute these commands to ensure its a secure 
 # Needs to blacklist the following command to prevent tpm clearing
 echo 5 | sudo tee /sys/class/tpm/tpm0/ppi/request
 
+# Needs a Cooldown
+Cooldown function on to many failed attempts to give the correct password for a user from a sudo account to set the sudo user in a stalled state to prevent access in the event a malicious actor attempts to bruteforce the password to find it out.
+Maybe Even find a way to detect what process was trying to give the incorrect password and shut it down to prevent DOS attack vectors from this design being included
 
 # Needs
 To include logging of all unallowed accesses instead of just printing to the kernel to a log file system in this kernel patch to allow users to look back on malicious actions and calls to confirm they where happening.
