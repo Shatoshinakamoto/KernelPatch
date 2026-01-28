@@ -18,6 +18,13 @@ To include logging of all unallowed accesses instead of just printing to the ker
 Logging should include a date and time using the date and time of the kernel that is booted up in the log file
 Should potentially include a configurable oldest logs automatically delete and be able to set how many days of log files should be held and kept to decrease potential Storage DOS attacks from this new function.
 
+# Restriction to network level access via configuration toggle to switch between being a monitoring computer, or a pure host computer.
+- Due to growing concerns on server host computers of potential exploits being discovered via the monitoring attacks one would think purely preventing pcap and all network level sniffing libraries from being installed if a system is configured with a simple boolean value in a cfg to prevent this would greatly reduce attack surfaces.
+
+These two should automate the iptable rules by detecting the subnets ranges for lan and the router network. And properly delete the rules when the configuration is changed.
+- Along with potential to fully cut off external network access calls as well and restrict to lan
+- Along with potential to fully cut off lan network access calls and restrict to public
+
 
 # Needs to include a encrypted kernel install
 Should include in the yml scaffold way to automate installing the kernel using a encrypted method as well to allow the kernel patch to be encrypted to decrease attack surfaces and properly still apply as a kernel patch by making a secondary yml scaffold install along with a secondary shell script to install using a encrypted kernel install method utilizing the already existing install methods just restructuring them to properly do so
