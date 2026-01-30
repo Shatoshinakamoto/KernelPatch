@@ -1,0 +1,152 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    OTP GENERATOR - QUICK REFERENCE                         ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ BASIC COMMANDS                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Generate New OTP:
+    ./otp -g account@service.com -i ServiceName -m
+
+  Show Current Code:
+    ./otp -l account@service.com.otp -s
+
+  Watch Mode (Live Updates):
+    ./otp -l account@service.com.otp -w
+
+  Verify Code:
+    ./otp -l account@service.com.otp -v 123456
+
+  Show Manual Key:
+    ./otp -l account@service.com.otp -m
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ COMMAND-LINE OPTIONS                                                     │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  -g, --generate <name>     Generate new OTP secret
+  -i, --issuer <issuer>     Set issuer name (default: OTPApp)
+  -l, --load <file>         Load existing OTP from file
+  -s, --show                Display current OTP code
+  -v, --verify <code>       Verify an OTP code
+  -q, --qr <file>           Save QR code info to file
+  -d, --display             Display QR code information
+  -m, --manual              Show manual entry key (Base32)
+  -w, --watch               Watch mode (continuous display)
+  -h, --help                Show help message
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ SETUP WORKFLOW                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  1. Generate Secret:
+     $ ./otp -g myemail@gmail.com -i Google -m
+     [Displays manual entry key and saves encrypted file]
+
+  2. Add to Authenticator App:
+     - Open Google/Microsoft Authenticator
+     - Tap "+" → "Enter a setup key"
+     - Enter the manual key displayed above
+
+  3. Verify It Works:
+     $ ./otp -l myemail@gmail.com.otp -v [code-from-app]
+     ✓ Code is VALID
+
+  4. Daily Use:
+     $ ./otp -l myemail@gmail.com.otp -s
+     Current OTP Code: 123456
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ SECURITY FEATURES                                                        │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  • Triple-Layer AES-256-CBC Encryption
+  • PBKDF2 with 100,000 iterations per layer
+  • Unique salts and IVs for each layer
+  • Cryptographically secure random generation
+  • Secure memory wiping (volatile)
+  • No plaintext secrets on disk
+  • Password-protected file storage
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ FILE LOCATIONS                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Executable:       ./otp
+  OTP Files:        *.otp (encrypted, password-protected)
+  Documentation:    README.md, QUICKSTART.md, BUILD.md
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ TROUBLESHOOTING                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Codes Don't Match:
+    • Check system time: date
+    • Sync time: sudo ntpdate pool.ntp.org
+
+  Build Failed:
+    • Install: make g++ libssl-dev
+    • Run: make
+
+  Password Forgotten:
+    • Cannot recover (by design)
+    • Use backup of manual entry key
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ BEST PRACTICES                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  ✓ Use strong, unique passwords (12+ characters)
+  ✓ Backup .otp files securely
+  ✓ Store manual keys separately
+  ✓ Test codes before relying on them
+  ✓ Keep system clock synchronized
+  ✓ Use password manager for passwords
+
+  ✗ Don't store passwords in scripts
+  ✗ Don't share .otp files or passwords
+  ✗ Don't use same password for multiple OTP files
+  ✗ Don't leave terminal showing codes
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ EXAMPLES                                                                 │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Gmail Setup:
+    $ ./otp -g user@gmail.com -i Google -m
+    [Follow prompts, save password securely]
+
+  Quick Lookup:
+    $ ./otp -l user@gmail.com.otp -s
+    Current OTP Code: 847392
+
+  Multiple Accounts:
+    $ ./otp -g work@company.com -i Company -m
+    $ ./otp -g personal@gmail.com -i Google -m
+    $ ./otp -l work@company.com.otp -s
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ COMPATIBILITY                                                            │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  ✓ Google Authenticator
+  ✓ Microsoft Authenticator
+  ✓ Authy
+  ✓ FreeOTP
+  ✓ Any RFC 6238 compliant app
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ TECHNICAL SPECS                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+  Algorithm:        TOTP (RFC 6238)
+  Hash:             HMAC-SHA1
+  Code Length:      6 digits
+  Time Step:        30 seconds
+  Encryption:       AES-256-CBC (3 layers)
+  Key Derivation:   PBKDF2-HMAC-SHA256 (100k iterations)
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║  For detailed documentation, see README.md or run: ./otp --help           ║
+╚════════════════════════════════════════════════════════════════════════════╝
