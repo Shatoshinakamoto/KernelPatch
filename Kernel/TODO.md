@@ -9,8 +9,9 @@ Should include a command line setup as well to allow displaying the QR image in 
 Should include a command line setup as well to allow displaying the manual entry code numbers to synchronize Authenticator apps with the current OTP code for generating the numbers!
 
 # Needs to blacklist the following command to prevent tpm clearing
+```shell
 echo 5 | sudo tee /sys/class/tpm/tpm0/ppi/request
-
+```
 # Needs a Cooldown
 Cooldown function on to many failed attempts to give the correct password for a user from a sudo account to set the sudo user in a stalled state to prevent access in the event a malicious actor attempts to bruteforce the password to find it out.
 Maybe Even find a way to detect what process was trying to give the incorrect password and shut it down to prevent DOS attack vectors from this design being included.
@@ -36,3 +37,11 @@ These two should automate the iptable rules by detecting the subnets ranges for 
 
 # Needs to include a encrypted kernel install
 Should include in the yml scaffold way to automate installing the kernel using a encrypted method as well to allow the kernel patch to be encrypted to decrease attack surfaces and properly still apply as a kernel patch by making a secondary yml scaffold install along with a secondary shell script to install using a encrypted kernel install method utilizing the already existing install methods just restructuring them to properly do so
+
+
+# Needs to include a Ram Spike detection system
+Lets say utilizing a monitoring system to detect an abnormal RAM spike lets say a configurable max ram usage if it peaks pass the maxed allowed configured ram usage it should initiate the following command to drop caches in a class object which executes the command from a private field inside the class or function when the class object is spawned to wipe the ram securely and not allow the execution of this command 
+```shell
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
+Or recreate however this is done in pure c++ code to do the exact thing in a secure manner that can work correctly with the configured max ram usage.
