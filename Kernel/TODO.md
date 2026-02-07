@@ -12,6 +12,14 @@ Should include a command line setup as well to allow displaying the manual entry
 ```shell
 echo 5 | sudo tee /sys/class/tpm/tpm0/ppi/request
 ```
+
+# Needs to include a Ram Spike detection system
+Lets say utilizing a monitoring system to detect an abnormal RAM spike lets say a configurable max ram usage if it peaks pass the maxed allowed configured ram usage it should initiate the following command to drop caches in a class object which executes the command from a private field inside the class or function when the class object is spawned to wipe the ram securely and not allow the execution of this command 
+```shell
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
+Or recreate however this is done in pure c++ code to do the exact thing in a secure manner that can work correctly with the configured max ram usage.
+
 # Needs a Cooldown
 Cooldown function on to many failed attempts to give the correct password for a user from a sudo account to set the sudo user in a stalled state to prevent access in the event a malicious actor attempts to bruteforce the password to find it out.
 Maybe Even find a way to detect what process was trying to give the incorrect password and shut it down to prevent DOS attack vectors from this design being included.
@@ -35,13 +43,11 @@ These two should automate the iptable rules by detecting the subnets ranges for 
 - Preventing Child processes from being spawned by NodeJS projects ones that arent compiled into a binary
 - Restricting what processes can have access to filesystem spaces like tmp directory which may purposely unbundled malicious binaries unless specifically allowed in the configuration files
 
+# TimeVault Mode
+- This would allow one to put the entire Operating system in TimeVault lockdown mode
+- By Adding a command to the Operating system through the kernel patch to allow one to flip the switch only from sudo users.. Would allow the administrator to specifically specify what processes can be run on the system and any processes running thats not in the specified list would automatically be killed over and over and over again until they could be compressed and stored in a zip file for later debugging to understand why they kept trying to run.....
+- By Adding a command which would toggle the ability to use snap, apt, yum, and any other package distribution downloading systems.... Should include a file change detection system on all folder spaces the moment a new file is added it will automatically wipe using a merkle tree and parent hash detection system..... Logs and records would have to be networked out in this OS so logs wouldnt be wiped during lockdown mode...
+
+
 # Needs to include a encrypted kernel install
 Should include in the yml scaffold way to automate installing the kernel using a encrypted method as well to allow the kernel patch to be encrypted to decrease attack surfaces and properly still apply as a kernel patch by making a secondary yml scaffold install along with a secondary shell script to install using a encrypted kernel install method utilizing the already existing install methods just restructuring them to properly do so
-
-
-# Needs to include a Ram Spike detection system
-Lets say utilizing a monitoring system to detect an abnormal RAM spike lets say a configurable max ram usage if it peaks pass the maxed allowed configured ram usage it should initiate the following command to drop caches in a class object which executes the command from a private field inside the class or function when the class object is spawned to wipe the ram securely and not allow the execution of this command 
-```shell
-echo 3 | sudo tee /proc/sys/vm/drop_caches
-```
-Or recreate however this is done in pure c++ code to do the exact thing in a secure manner that can work correctly with the configured max ram usage.
