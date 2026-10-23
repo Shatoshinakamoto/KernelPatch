@@ -1,0 +1,7 @@
+Properly Fully document in depth and explain how the binary vault works and how to use it along with the all the commands related to it
+Properly Fully document in depth all configuration settings and commands
+Need to include configurable size limit on timevault max allowed entries in the whitelist file
+Need to properly make sure the timevault is acting as a Hash based anti tamper process manager basically when process goes to execute it intercepts right before and validates it hash and then if its valid with whats in the whitelist file then it allows to run the process if not it gets stopped, compressed, and removed to be quarantined retaining it in a compressed form in quarantine folder space.
+Timevault needs to include a way to whitelist an entire directory with ease using the existing whitelist file but in the sense it just doesnt validate the hash at all in the sense it might be auto update process and need to properly have way to add entire folder space as a auto update process or a single file to the whitelist with the new addition to specify its auto update
+Timevault config option if auto update apps are disabled then it should run as if it disallows any processes in the whitelist file that are classified as auto update and that dont validate hashes before process execution.
+Timevault commands needs way to remove an entire directory by scanning for all executable binary files and executable script files from the whitelist file.
