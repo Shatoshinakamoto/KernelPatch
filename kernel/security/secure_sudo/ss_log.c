@@ -18,6 +18,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/kfifo.h>
+#include <linux/mm.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/poll.h>
@@ -46,7 +47,7 @@ void ss_event(const char *fmt, ...)
 	char line[SS_LINE_MAX];
 	struct timespec64 ts;
 	va_list args;
-	int n;
+	int n, i;
 	unsigned long flags;
 
 	if (!READ_ONCE(ss_ring_ready))
@@ -60,29 +61,41 @@ void ss_event(const char *fmt, ...)
 	n += vscnprintf(line + n, sizeof(line) - n - 1, fmt, args);
 	va_end(args);
 
+	/*
+	 * Neutralise control characters. Events embed attacker-chosen strings
+	 * (file names, exec paths), and a name containing "\n" would otherwise
+	 * forge whole event lines in the log - and the daemon acts on some of
+	 * them (CWE-117 log injection).
+	 */
+	for (i = 0; i < n; i++)
+		if ((unsigned char)line[i] < 0x20 || line[i] == 0x7f)
+			line[i] = '?';
 	line[n++] = '\n';
 
 	spin_lock_irqsave(&ss_ring_lock, flags);
 	/* Make room by discarding oldest bytes if necessary. */
-	if (kfifo_avail(&ss_ring) < n) {
-		char drop[SS_LINE_MAX];
-
-		while (kfifo_avail(&ss_ring) < n && !kfifo_is_empty(&ss_ring))
-			kfifo_out(&ss_ring, drop,
-				  min_t(unsigned int, n, sizeof(drop)));
-	}
+	while (kfifo_avail(&ss_ring) < n && !kfifo_is_empty(&ss_ring))
+		kfifo_skip(&ss_ring);
 	kfifo_in(&ss_ring, line, n);
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 
 	wake_up_interruptible(&ss_ring_wq);
 }
 
+/*
+ * The writer (ss_event) also removes bytes when the ring is full, so the ring
+ * has two consumers and must be drained under the same spinlock. We cannot
+ * copy_to_user() under a spinlock, so bounce through a kernel buffer.
+ */
 static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 			   loff_t *ppos)
 {
-	unsigned int copied = 0;
+	unsigned int n;
+	char *bounce;
 	int ret;
 
+	if (!count)
+		return 0;
 	if (kfifo_is_empty(&ss_ring)) {
 		if (file->f_flags & O_NONBLOCK)
 			return -EAGAIN;
@@ -92,10 +105,14 @@ static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 			return ret;
 	}
 
-	ret = kfifo_to_user(&ss_ring, ubuf, count, &copied);
-	if (ret)
-		return ret;
-	return copied;
+	count = min_t(size_t, count, SS_RING_BYTES);
+	bounce = kvmalloc(count, GFP_KERNEL);
+	if (!bounce)
+		return -ENOMEM;
+	n = kfifo_out_spinlocked(&ss_ring, bounce, count, &ss_ring_lock);
+	ret = copy_to_user(ubuf, bounce, n) ? -EFAULT : n;
+	kvfree(bounce);
+	return ret;
 }
 
 static __poll_t events_poll(struct file *file, poll_table *wait)

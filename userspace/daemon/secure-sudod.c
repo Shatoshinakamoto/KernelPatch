@@ -142,6 +142,8 @@ static void forward_remote(const struct cfg *c, const char *line, size_t len)
 
 	if (!c->remote_syslog[0])
 		return;
+	/* The event text is already control-char-scrubbed in the kernel, but be
+	 * defensive about the host:port we parse from config. */
 	snprintf(host, sizeof(host), "%s", c->remote_syslog);
 	colon = strrchr(host, ':');
 	if (colon) {
@@ -244,7 +246,7 @@ static void enforce_retention(const struct cfg *c)
 
 static int proc_ruid(const char *pid, uid_t *ruid)
 {
-	char path[256], line[256];
+	char path[320], line[256];
 	FILE *f;
 	int ok = 0;
 
@@ -267,7 +269,7 @@ static int proc_ruid(const char *pid, uid_t *ruid)
 
 static int proc_is_sudo(const char *pid)
 {
-	char path[256], comm[64] = "";
+	char path[320], comm[64] = "";
 	FILE *f;
 
 	snprintf(path, sizeof(path), "/proc/%s/comm", pid);
@@ -539,6 +541,7 @@ int main(void)
 	signal(SIGINT, on_term);
 	signal(SIGCHLD, SIG_DFL);
 
+	umask(077);		/* logs and quarantined files must not be world-readable */
 	mkdir(LOGDIR, 0700);
 	mkdir(STATEDIR, 0700);
 	mkdir(QUARANTINE, 0700);

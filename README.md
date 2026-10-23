@@ -22,6 +22,12 @@ userspace/
 scripts/
   timevault-whitelist.sh          bash TimeVault allowlist tool (scan/add/remove/list/wipe)
   detect-admin-gids.sh            finds every admin group GID (used by install.sh)
+docs/
+  COMMANDS.md                     every CLI command, explained
+  CONFIGURATION.md                every config file and option
+  SCRIPTS.md                      every script, with flags and usage
+  SECURITY_REVIEW.md              NIST-framed review: findings + fixes
+  FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
 install/
   install.sh                      per-distro build+install (Debian/Fedora/Arch/openSUSE)
   ansible/secure_sudo.yml         YAML scaffold wrapping the installer
@@ -33,7 +39,7 @@ install/
 
 | # | Protection |
 |---|------------|
-| 1 | Block non-sudo UID/GID switching (setuid/setgid/setgroups) + unprivileged userns |
+| 1 | Block non-sudo UID/GID switching (setuid/setgid/setgroups) + unprivileged userns; **1b** deny non-sudo exec of setuid/file-cap binaries unless allowlisted |
 | 2 | Command blacklist (matched by device+inode and path, not basename) |
 | 3 | Block non-sudo firmware/flash: /dev/mem, /dev/port, /dev/mtd*, /dev/mei*, /sys/firmware writes |
 | 4 | Confine non-sudo writes to home + scratch/device trees + allowlist (opt-in) |
@@ -46,7 +52,7 @@ install/
 | 11 | NodeJS child-process guard (LSM task blob + allowlist) |
 | 12 | Restrict exec/PROT_EXEC mmap from /tmp, /var/tmp, /dev/shm |
 | 13 | TimeVault exec allowlist + package-manager deny + quarantine |
-| 16 | One-way config lock until reboot (TimeVault latches it) |
+| 16 | One-way config lock until reboot (TimeVault latches it); blocks module loads / kexec / kernel-memory patching while locked |
 
 (#4 is implemented with `file_open` + the `path_*` hooks — both source versions
 had built it on a non-existent `path_permission` hook. It is opt-in because it
@@ -62,7 +68,12 @@ sudo ./install/install.sh          # builds kernel 6.12 + userspace, packages it
 # reboot into the new kernel, then:
 sudo secure-sudo status
 sudo secure-sudo load              # push /etc/secure_sudo/* into the kernel
+sudo secure-sudo settings          # list every configurable setting
 ```
+
+Full documentation is under [`docs/`](docs/): [commands](docs/COMMANDS.md),
+[configuration](docs/CONFIGURATION.md), [scripts](docs/SCRIPTS.md) and the
+[security review](docs/SECURITY_REVIEW.md).
 
 Admin groups are detected automatically at install: every GID of `sudo`,
 `wheel`, `admin` and any `%group` / `%#gid` rule in sudoers goes into
@@ -97,8 +108,10 @@ PAM wiring (cooldown + OTP) is deliberately left as a reviewed manual step —
 
 ## Status
 
-The kernel LSM and all userspace components are written. The CLI, daemon, both
-PAM modules and the OTP helper compile cleanly; the OTP TOTP is verified against
-the RFC 6238 test vectors. The kernel modules are **not yet compiled against a
-real 6.12 tree** (that happens inside `install.sh`); any residual header/symbol
-nits surface there.
+The kernel LSM and all userspace components are written and have been through a
+NIST-framed security review (see [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)).
+The CLI, daemon, both PAM modules and the OTP helper compile cleanly; the OTP
+TOTP is verified against the RFC 6238 test vectors. The LSM now compiles
+cleanly (`-Werror`) against real 6.11 and 6.14 kernel header trees; the final
+build against the 6.12 tree happens inside `install.sh`. It has not yet been
+boot-tested on real hardware — that is the last mile.

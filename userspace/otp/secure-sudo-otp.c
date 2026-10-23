@@ -561,9 +561,9 @@ static int cmd_disable(void)
 
 		if (fd >= 0) {
 			uint8_t z[512] = { 0 };
+			ssize_t w = write(fd, z, sizeof(z));
 
-			if (write(fd, z, sizeof(z)) < 0)
-				; /* best-effort shred; unlink follows regardless */
+			(void)w;	/* best-effort shred; unlink follows regardless */
 			close(fd);
 		}
 		unlink(files[i]);

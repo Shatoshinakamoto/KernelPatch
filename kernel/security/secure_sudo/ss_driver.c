@@ -13,6 +13,16 @@
  * match - a renamed copy is still caught) or its filename basename matches a
  * blacklisted name. Policy is fed through securityfs by the root-only CLI.
  *
+ * The hash is taken over the exact bytes the kernel is about to load, in the
+ * kernel_post_read_file (finit_module) and kernel_post_load_data
+ * (init_module) hooks. Hashing the file separately before the load would be a
+ * time-of-check/time-of-use gap (the file can change between our read and the
+ * loader's, e.g. on a network or FUSE filesystem), and init_module(2) - which
+ * passes a memory buffer and has no file at all - would bypass the list
+ * entirely. Name matching still happens at kernel_read_file, where the file
+ * is known. If the blacklist is non-empty and a check cannot be completed,
+ * the load is refused (fail closed).
+ *
  * (Making signature enforcement actually bite - the playbook's modprobe.d
  * option did nothing - is the installer's job: it sets module.sig_enforce=1 as
  * a kernel parameter. This file handles the "even a signed module can be bad"
@@ -35,7 +45,8 @@
 #include <linux/limits.h>
 #include <linux/security.h>
 #include <linux/lsm_hooks.h>
-#include <crypto/hash.h>
+#include <linux/kernel_read_file.h>
+#include <crypto/sha2.h>
 
 #include "secure_sudo.h"
 
@@ -64,69 +75,43 @@ static bool is_hex64(const char *s)
 }
 
 /* SHA-256 the whole file into @hex (caller provides >=65 bytes incl NUL).
- * Shared with ss_timevault.c. Returns 0 on success. */
+ * Shared with ss_timevault.c. Uses the crypto library directly: no tfm
+ * allocation (which could trigger a module autoload from inside an exec or
+ * module-load hook) and nothing that can fail except the reads. */
 int ss_sha256_file(struct file *file, char *hex)
 {
-	struct crypto_shash *tfm;
-	struct shash_desc *desc;
-	u8 digest[32];
-	void *buf;
+	struct sha256_state st;
+	u8 digest[SHA256_DIGEST_SIZE];
 	loff_t pos = 0, size;
-	int ret, i;
+	void *buf;
+	int ret = 0;
 
 	size = i_size_read(file_inode(file));
 	if (size <= 0)
 		return -EINVAL;
 
-	tfm = crypto_alloc_shash("sha256", 0, 0);
-	if (IS_ERR(tfm))
-		return PTR_ERR(tfm);
-
-	desc = kzalloc(sizeof(*desc) + crypto_shash_descsize(tfm), GFP_KERNEL);
-	if (!desc) {
-		ret = -ENOMEM;
-		goto out_tfm;
-	}
-	desc->tfm = tfm;
-
 	buf = kvmalloc(SZ_64K, GFP_KERNEL);
-	if (!buf) {
-		ret = -ENOMEM;
-		goto out_desc;
-	}
+	if (!buf)
+		return -ENOMEM;
 
-	ret = crypto_shash_init(desc);
-	if (ret)
-		goto out_buf;
-
+	sha256_init(&st);
 	while (pos < size) {
 		ssize_t n = kernel_read(file, buf, SZ_64K, &pos);
 
 		if (n < 0) {
 			ret = n;
-			goto out_buf;
+			goto out;
 		}
 		if (n == 0)
 			break;
-		ret = crypto_shash_update(desc, buf, n);
-		if (ret)
-			goto out_buf;
+		sha256_update(&st, buf, n);
 	}
-
-	ret = crypto_shash_final(desc, digest);
-	if (ret)
-		goto out_buf;
-
-	for (i = 0; i < 32; i++)
-		sprintf(hex + i * 2, "%02x", digest[i]);
+	sha256_final(&st, digest);
+	bin2hex(hex, digest, sizeof(digest));
 	hex[SHA256_HEX] = '\0';
-
-out_buf:
+out:
+	memzero_explicit(&st, sizeof(st));
 	kvfree(buf);
-out_desc:
-	kfree(desc);
-out_tfm:
-	crypto_free_shash(tfm);
 	return ret;
 }
 
@@ -163,47 +148,71 @@ static bool name_blacklisted(const char *name)
 static int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
 			       bool contents)
 {
-	char hex[SHA256_HEX + 1];
 	char *buf, *resolved;
-	const char *base;
 	int ret = 0;
 
 	if (id != READING_MODULE)
 		return 0;
-	if (!READ_ONCE(drv_nhash) && !READ_ONCE(drv_nname))
+	if (!READ_ONCE(drv_nname))
 		return 0;
 
-	/* Name match first (cheap). */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (buf) {
-		resolved = d_path(&file->f_path, buf, PATH_MAX);
-		if (!IS_ERR(resolved)) {
-			base = kbasename(resolved);
-			if (name_blacklisted(base)) {
-				pr_warn("driver-blacklist: blocked module by name %s\n",
-					base);
-				ss_event("driver-blacklist: blocked module name %s",
-					 base);
-				ret = -EPERM;
-			}
-		}
+	if (!buf)
+		return -ENOMEM;			/* fail closed */
+	resolved = ss_file_path(&file->f_path, buf, PATH_MAX);
+	if (IS_ERR(resolved)) {
+		ret = -EPERM;
+	} else if (name_blacklisted(kbasename(resolved))) {
+		pr_warn("driver-blacklist: blocked module by name %s\n",
+			kbasename(resolved));
+		ss_event("driver-blacklist: blocked module name %s",
+			 kbasename(resolved));
+		ret = -EPERM;
 	}
 	kfree(buf);
-	if (ret)
-		return ret;
+	return ret;
+}
 
-	/* Hash match. */
-	if (READ_ONCE(drv_nhash) && ss_sha256_file(file, hex) == 0 &&
-	    hash_blacklisted(hex)) {
-		pr_warn("driver-blacklist: blocked module by hash %s\n", hex);
-		ss_event("driver-blacklist: blocked module hash %s", hex);
+/* Hash the bytes actually being loaded. */
+static int check_module_buf(const char *buf, loff_t size, const char *how)
+{
+	char hex[SHA256_HEX + 1];
+
+	if (!READ_ONCE(drv_nhash))
+		return 0;
+	if (size <= 0)
+		return -EINVAL;
+	ss_sha256_buf(buf, size, hex);
+	if (hash_blacklisted(hex)) {
+		pr_warn("driver-blacklist: blocked module (%s) by hash %s\n",
+			how, hex);
+		ss_event("driver-blacklist: blocked module hash %s via %s",
+			 hex, how);
 		return -EPERM;
 	}
 	return 0;
 }
 
+static int ss_driver_post_read(struct file *file, char *buf, loff_t size,
+			       enum kernel_read_file_id id)
+{
+	if (id != READING_MODULE)
+		return 0;
+	return check_module_buf(buf, size, "finit_module");
+}
+
+static int ss_driver_post_load(char *buf, loff_t size,
+			       enum kernel_load_data_id id, char *description)
+{
+	if (id != LOADING_MODULE)
+		return 0;
+	return check_module_buf(buf, size, "init_module");
+}
+
 static struct security_hook_list ss_driver_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(kernel_read_file, ss_driver_read_file),
+	LSM_HOOK_INIT(kernel_read_file,      ss_driver_read_file),
+	LSM_HOOK_INIT(kernel_post_read_file, ss_driver_post_read),
+	LSM_HOOK_INIT(kernel_post_load_data, ss_driver_post_load),
 };
 
 void __init ss_driver_init(void)
@@ -285,7 +294,7 @@ static ssize_t drv_write(struct file *file, const char __user *ubuf,
 	char **nh_list, **nn_list, **oh, **on, *old_text;
 	int nh, nn, oh_c, on_c;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(file))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;

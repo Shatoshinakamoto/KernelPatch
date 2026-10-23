@@ -90,11 +90,16 @@ static int ss_file_open(struct file *file)
 
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return 0;	/* fail open rather than wedge every open on OOM */
+		return -ENOMEM;		/* fail closed on a sensitive open */
 
-	p = d_path(&file->f_path, buf, PATH_MAX);
-	if (IS_ERR(p))
+	p = ss_file_path(&file->f_path, buf, PATH_MAX);
+	if (IS_ERR(p)) {
+		/* A device node we could not name is still refused if it is one
+		 * of the fixed raw-memory nodes (handled above); otherwise a
+		 * non-resolvable firmware-sysfs write is denied, not waved. */
+		ret = fw_write ? -EPERM : 0;
 		goto out;
+	}
 
 	if (is_dev && is_blocked_dev_path(p)) {
 		pr_warn_ratelimited("non-sudo UID %u denied firmware/flash device %s\n",
@@ -139,7 +144,7 @@ static ssize_t block_flash_store(struct kobject *kobj,
 {
 	bool v;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(NULL))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -151,7 +156,7 @@ static ssize_t block_flash_store(struct kobject *kobj,
 }
 
 static struct kobj_attribute block_flash_attr =
-	__ATTR(block_flash, 0644, block_flash_show, block_flash_store);
+	__ATTR(block_flash, 0600, block_flash_show, block_flash_store);
 
 static struct attribute *ss_firmware_attrs[] = {
 	&block_flash_attr.attr,

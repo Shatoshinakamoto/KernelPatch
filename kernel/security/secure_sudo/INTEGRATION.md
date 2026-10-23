@@ -38,7 +38,7 @@ means its denials run after the stacked majors have had their say.
 |------|---------|
 | `secure_sudo.h` | shared config, `ss_cred_is_sudo()`, per-subsystem init decls |
 | `ss_core.c`     | LSM registration (`DEFINE_LSM`), defaults, sysfs root, helpers |
-| `ss_creds.c`    | Protection #1: non-sudo UID/GID switch block + userns gate |
+| `ss_creds.c`    | Protection #1: non-sudo UID/GID switch block + userns gate; #1b setid-exec gate + `setid_exec_allow` |
 | `ss_exec.c`     | Protection #2: command blacklist (securityfs, inode+path match) |
 | `ss_firmware.c` | Protection #3: firmware/flash + raw-memory access block |
 | `ss_tpm.c`      | Protection #5: block TPM clear (ppi/request) |
@@ -52,9 +52,11 @@ means its denials run after the stacked majors have had their say.
 | `ss_timevault.c`| Protection #13: TimeVault exec allowlist + pkg-mgr deny |
 | `ss_home.c`     | Protection #4: confine non-sudo writes to home (file_open + path_*) |
 
-All kernel-side protections from the feature map are now present. Userspace
-companions (PAM modules, the `secure-sudod` daemon, the `secure-sudo` CLI) and
-the installers are the next steps.
+All kernel-side protections from the feature map are present, plus the #1b
+privilege-gaining-exec gate added in the security review. The userspace
+companions (PAM modules, `secure-sudod`, the `secure-sudo` CLI) and the
+installers are complete; see `docs/` for the full command, configuration,
+script and security-review documentation.
 
 ## Runtime interface so far
 
@@ -63,22 +65,27 @@ the installers are the next steps.
 | `/sys/kernel/secure_sudo/admin_gid` | rw | comma list of up to 16 GIDs treated as sudo, e.g. `27,10` (`unset` = root only); auto-detected at install |
 | `/sys/kernel/secure_sudo/block_setid` | rw | enforce #1 UID/GID switch block |
 | `/sys/kernel/secure_sudo/block_userns` | rw | gate unprivileged user namespaces |
+| `/sys/kernel/secure_sudo/block_setid_exec` | rw | #1b deny non-sudo exec of setuid/setgid/file-cap binaries unless allowlisted |
 | `/sys/kernel/secure_sudo/block_flash` | rw | enforce #3 firmware/flash/raw-memory block |
-| `/sys/kernel/secure_sudo/lock` | rw | #16 one-way config lock (set-only until reboot) |
+| `/sys/kernel/secure_sudo/lock` | rw (0600) | #16 one-way config lock; writing 1 latches it, writes of 0 are refused, only a reboot clears it |
+| `/sys/kernel/secure_sudo/lock_modules` | rw | #16 while locked, also refuse ALL module loads (not just blacklisted) |
 | `/sys/kernel/secure_sudo/max_ram_percent` | rw | #7 drop-caches threshold (% used) |
 | `/sys/kernel/secure_sudo/check_interval_ms` | rw | #7 sampling interval |
 | `/sys/kernel/secure_sudo/drop_cooldown_ms` | rw | #7 minimum gap between drops |
 | `/sys/kernel/secure_sudo/ram_spike_enabled` | rw | #7 enable the worker (off by default) |
-| `/sys/kernel/secure_sudo/block_tmp_exec` | rw | #12 enforce scratch-tree exec/mmap block |
+| `/sys/kernel/secure_sudo/block_tmp_exec` | rw | #12 enforce scratch-tree exec/mmap/mprotect block |
+| `/sys/kernel/secure_sudo/block_tmpfs_exec` | rw | #12 extend the block to every tmpfs/ramfs mount and memfd |
 | `/sys/kernel/secure_sudo/net_mode` | rw | #10 monitor/host/lan-only/public-only |
 | `/sys/kernel/secure_sudo/sudo_max_fails` | rw | #8 failures before a UID is blocked |
 | `/sys/kernel/secure_sudo/sudo_window_sec` | rw | #8 sliding window |
 | `/sys/kernel/secure_sudo/sudo_block_time_sec` | rw | #8 block duration |
 | `/sys/kernel/secure_sudo/sudo_cooldown_enabled` | rw | #8 enable cooldown |
 | `/sys/kernel/secure_sudo/timevault` | rw | #13 engage/disengage vault (engage latches `lock`) |
+| `/sys/kernel/secure_sudo/timevault_strict_mmap` | rw | #13 also gate PROT_EXEC mmap (shared libraries) while engaged |
 | `/sys/kernel/secure_sudo/timevault_denied` | r | #13 count of denied exec attempts |
 | `/sys/kernel/security/secure_sudo/events` | r | #9 kernel event stream (blocking read + poll) |
-| `/sys/kernel/security/secure_sudo/blacklist` | rw (root) | #2 absolute paths non-sudo users may not exec |
+| `/sys/kernel/security/secure_sudo/blacklist` | rw (root) | #2 absolute paths non-sudo users may not exec (matched by device+inode+generation and path) |
+| `/sys/kernel/security/secure_sudo/setid_exec_allow` | rw (root) | #1b absolute paths of setuid/setgid/file-cap binaries non-sudo users may still run |
 | `/sys/kernel/security/secure_sudo/tmp_exec_allow` | rw (root) | #12 scratch-tree exec/mmap exemptions (prefix match) |
 | `/sys/kernel/security/secure_sudo/node_allowed_children` | rw (root) | #11 basenames node/SEA may spawn |
 | `/sys/kernel/security/secure_sudo/node_sea_binaries` | rw (root) | #11 registered SEA/pkg binary paths |
@@ -89,3 +96,5 @@ the installers are the next steps.
 | `/sys/kernel/security/secure_sudo/home_map` | rw (root) | #4 `<uid> <home-path>` per line |
 | `/sys/kernel/security/secure_sudo/home_write_allow` | rw (root) | #4 extra always-writable path prefixes |
 | boot param `secure_sudo.tpm_maint=1` | — | #5 permit TPM clear this boot |
+
+All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `timevault`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.

@@ -28,18 +28,18 @@ ZIP="${STAMP}.zip"
 {
   echo "original_path: $FILE"
   echo "quarantined_at: $(date -Is)"
-  echo "sha256: $(sha256sum "$FILE" 2>/dev/null | awk '{print $1}')"
-  ls -ln "$FILE" 2>/dev/null | awk '{print "stat: "$0}'
+  echo "sha256: $(sha256sum -- "$FILE" 2>/dev/null | awk '{print $1}')"
+  ls -ln -- "$FILE" 2>/dev/null | awk '{print "stat: "$0}'
 } > "$META"
 
 # Package the file + metadata, then remove the original (the "move").
 if command -v zip >/dev/null 2>&1; then
-  zip -j -q "$ZIP" "$FILE" "$META" && rm -f "$META"
+  zip -j -q "$ZIP" -- "$FILE" "$META" && rm -f -- "$META"
 else
   # Fallback if zip is not installed: keep a tar.gz instead of failing.
   tar -czf "${STAMP}.tar.gz" -C "$(dirname "$FILE")" "$BASE" \
-      -C "$QDIR" "$(basename "$META")" && rm -f "$META"
+      -C "$QDIR" "$(basename "$META")" && rm -f -- "$META"
 fi
 
-rm -f "$FILE"
+rm -f -- "$FILE"
 echo "quarantine.sh: quarantined $FILE -> $QDIR"

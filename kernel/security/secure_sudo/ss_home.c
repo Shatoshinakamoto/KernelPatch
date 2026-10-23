@@ -20,6 +20,10 @@
  * usual always-writable trees (/tmp, /var/tmp, /dev, /dev/shm, /run, /proc,
  * /sys) are permitted unconditionally so normal programs keep working - the
  * dangerous bits of /dev and /sys are already gated by #3. OFF by default.
+ *
+ * Every decision fails closed once the feature is on: an unresolvable or
+ * over-long target (a classic way to dodge path-based checks) is a deny.
+ * chmod/chown of files outside the allowed set are covered too.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -70,17 +74,6 @@ static int allow_count;
 static char *allow_text;
 static size_t allow_text_len;
 
-static bool has_prefix_dir(const char *path, const char *dir)
-{
-	size_t dl = strlen(dir);
-
-	/* Match "dir" itself or anything under "dir/". */
-	if (strncmp(path, dir, dl) != 0)
-		return false;
-	return path[dl] == '\0' || path[dl] == '/' ||
-	       (dl > 0 && dir[dl - 1] == '/');
-}
-
 /* Is a non-sudo write to @path by @uid permitted? */
 static bool write_allowed(const char *path, uid_t uid)
 {
@@ -94,13 +87,13 @@ static bool write_allowed(const char *path, uid_t uid)
 	mutex_lock(&hm_lock);
 	for (i = 0; i < (size_t)hm_count; i++) {
 		if (hm_list[i].uid == uid &&
-		    has_prefix_dir(path, hm_list[i].home)) {
+		    ss_path_under(path, hm_list[i].home)) {
 			ok = true;
 			goto out;
 		}
 	}
 	for (i = 0; i < (size_t)allow_count; i++) {
-		if (has_prefix_dir(path, allow_list[i])) {
+		if (ss_path_under(path, allow_list[i])) {
 			ok = true;
 			goto out;
 		}
@@ -146,9 +139,12 @@ static int ss_home_file_open(struct file *file)
 
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return 0;
-	p = d_path(&file->f_path, buf, PATH_MAX);
-	if (!IS_ERR(p))
+		return -ENOMEM;
+	p = ss_file_path(&file->f_path, buf, PATH_MAX);
+	/* Pseudo files (pipes, sockets, memfd) have no real path: not ours. */
+	if (IS_ERR(p))
+		ret = -EPERM;
+	else if (*p == '/')
 		ret = home_check(p, "write");
 	kfree(buf);
 	return ret;
@@ -161,11 +157,12 @@ static int ss_home_file_open(struct file *file)
 static const char *target_path(const struct path *dir, struct dentry *dentry,
 			       char *out, char *scratch)
 {
-	char *dp = d_path(dir, scratch, PATH_MAX);
+	char *dp = ss_file_path(dir, scratch, PATH_MAX);
 
 	if (IS_ERR(dp))
 		return NULL;
-	snprintf(out, PATH_MAX, "%s/%s", dp, dentry->d_name.name);
+	if (snprintf(out, PATH_MAX, "%s/%s", dp, dentry->d_name.name) >= PATH_MAX)
+		return NULL;			/* truncated: refuse */
 	return out;
 }
 
@@ -182,11 +179,12 @@ static int check_dir_dentry(const struct path *dir, struct dentry *dentry,
 
 	out = kmalloc(PATH_MAX, GFP_KERNEL);
 	scratch = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!out || !scratch)
+	if (!out || !scratch) {
+		ret = -ENOMEM;
 		goto out;
+	}
 	p = target_path(dir, dentry, out, scratch);
-	if (p)
-		ret = home_check(p, what);
+	ret = p ? home_check(p, what) : -EPERM;
 out:
 	kfree(out);
 	kfree(scratch);
@@ -228,21 +226,33 @@ static int ss_path_rename(const struct path *odir, struct dentry *od,
 
 	return ret ? ret : check_dir_dentry(ndir, nd, "rename-to");
 }
-static int ss_path_truncate(const struct path *path)
+static int check_path(const struct path *path, const char *what)
 {
 	char *buf, *p;
-	int ret = 0;
+	int ret;
 
 	if (!READ_ONCE(ss_cfg.block_home_write) || ss_is_sudo_user())
 		return 0;
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return 0;
-	p = d_path(path, buf, PATH_MAX);
-	if (!IS_ERR(p))
-		ret = home_check(p, "truncate");
+		return -ENOMEM;
+	p = ss_file_path(path, buf, PATH_MAX);
+	ret = IS_ERR(p) ? -EPERM : home_check(p, what);
 	kfree(buf);
 	return ret;
+}
+
+static int ss_path_truncate(const struct path *path)
+{
+	return check_path(path, "truncate");
+}
+static int ss_path_chmod(const struct path *path, umode_t mode)
+{
+	return check_path(path, "chmod");
+}
+static int ss_path_chown(const struct path *path, kuid_t uid, kgid_t gid)
+{
+	return check_path(path, "chown");
 }
 #endif /* CONFIG_SECURITY_PATH */
 
@@ -257,6 +267,8 @@ static struct security_hook_list ss_home_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(path_mknod,    ss_path_mknod),
 	LSM_HOOK_INIT(path_rename,   ss_path_rename),
 	LSM_HOOK_INIT(path_truncate, ss_path_truncate),
+	LSM_HOOK_INIT(path_chmod,    ss_path_chmod),
+	LSM_HOOK_INIT(path_chown,    ss_path_chown),
 #endif
 };
 
@@ -277,7 +289,7 @@ static ssize_t block_home_write_store(struct kobject *k, struct kobj_attribute *
 {
 	bool v;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(NULL))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -287,7 +299,7 @@ static ssize_t block_home_write_store(struct kobject *k, struct kobj_attribute *
 	return count;
 }
 static struct kobj_attribute block_home_write_attr =
-	__ATTR(block_home_write, 0644, block_home_write_show, block_home_write_store);
+	__ATTR(block_home_write, 0600, block_home_write_show, block_home_write_store);
 
 static struct attribute *ss_home_attrs[] = {
 	&block_home_write_attr.attr,
@@ -388,11 +400,12 @@ static char **allow_parse(char *text, int *out_count)
 }
 
 /* Slurp a whole-file write into a kmalloc'd NUL-terminated buffer. */
-static char *slurp_write(const char __user *ubuf, size_t count, loff_t *ppos)
+static char *slurp_write(struct file *file, const char __user *ubuf,
+			 size_t count, loff_t *ppos)
 {
 	char *text;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(file))
 		return ERR_PTR(-EPERM);
 	if (ss_locked())
 		return ERR_PTR(-EPERM);
@@ -431,7 +444,7 @@ static ssize_t home_map_write(struct file *f, const char __user *u, size_t c,
 	struct home_ent *new_list, *old_list;
 	int new_count, old_count;
 
-	text = slurp_write(u, c, p);
+	text = slurp_write(f, u, c, p);
 	if (IS_ERR(text))
 		return PTR_ERR(text);
 	scratch = kmemdup(text, c + 1, GFP_KERNEL);
@@ -473,7 +486,7 @@ static ssize_t allow_write(struct file *f, const char __user *u, size_t c,
 	char *text, *scratch, *old_text, **new_list, **old_list;
 	int new_count, old_count;
 
-	text = slurp_write(u, c, p);
+	text = slurp_write(f, u, c, p);
 	if (IS_ERR(text))
 		return PTR_ERR(text);
 	scratch = kmemdup(text, c + 1, GFP_KERNEL);

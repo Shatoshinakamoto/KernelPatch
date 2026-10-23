@@ -79,7 +79,7 @@ static ssize_t net_mode_store(struct kobject *k, struct kobj_attribute *a,
 {
 	unsigned int i;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(NULL))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -94,7 +94,7 @@ static ssize_t net_mode_store(struct kobject *k, struct kobj_attribute *a,
 }
 
 static struct kobj_attribute net_mode_attr =
-	__ATTR(net_mode, 0644, net_mode_show, net_mode_store);
+	__ATTR(net_mode, 0600, net_mode_show, net_mode_store);
 
 static struct attribute *ss_net_attrs[] = {
 	&net_mode_attr.attr,

@@ -45,6 +45,7 @@
 struct bl_entry {
 	dev_t		dev;	/* 0 if the path did not resolve at load time */
 	unsigned long	ino;	/* 0 if the path did not resolve at load time */
+	u32		gen;	/* i_generation: guards against inode reuse */
 	char		*path;	/* canonical path string as configured */
 };
 
@@ -108,6 +109,7 @@ static struct bl_entry *bl_parse(char *text, int *out_count)
 			if (inode) {
 				list[n].dev = inode->i_sb->s_dev;
 				list[n].ino = inode->i_ino;
+				list[n].gen = inode->i_generation;
 			}
 			path_put(&path);
 		}
@@ -125,6 +127,7 @@ static int ss_bprm_check_security(struct linux_binprm *bprm)
 	struct inode *inode;
 	dev_t dev;
 	unsigned long ino;
+	u32 gen;
 	char *buf, *exec_path;
 	int i, ret = 0;
 
@@ -140,19 +143,32 @@ static int ss_bprm_check_security(struct linux_binprm *bprm)
 	dev = inode->i_sb->s_dev;
 	ino = inode->i_ino;
 
+	/*
+	 * Fail closed: if the path cannot be built (OOM, or a deliberately
+	 * over-long path, which d_path rejects with -ENAMETOOLONG) a non-sudo
+	 * exec is refused rather than slipping past the path match.
+	 */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return 0;	/* fail open: do not wedge exec on OOM */
+		return -ENOMEM;
 
-	exec_path = d_path(&bprm->file->f_path, buf, PATH_MAX);
-	if (IS_ERR(exec_path))
+	exec_path = ss_file_path(&bprm->file->f_path, buf, PATH_MAX);
+	if (IS_ERR(exec_path)) {
+		kfree(buf);
+		pr_warn_ratelimited("non-sudo UID %u exec denied: path unresolvable\n",
+				    from_kuid(&init_user_ns, current_uid()));
+		return -EPERM;
+	}
+	/* An unlinked file has no path any more; only the inode match applies. */
+	if (d_unlinked(bprm->file->f_path.dentry))
 		exec_path = NULL;
 
 	mutex_lock(&bl_lock);
 	for (i = 0; i < bl_count; i++) {
 		bool inode_hit = bl_list[i].ino &&
 				 bl_list[i].dev == dev &&
-				 bl_list[i].ino == ino;
+				 bl_list[i].ino == ino &&
+				 bl_list[i].gen == gen;
 		bool path_hit = exec_path &&
 				!strcmp(exec_path, bl_list[i].path);
 
@@ -204,7 +220,7 @@ static ssize_t bl_file_write(struct file *file, const char __user *ubuf,
 	size_t old_text_len;
 	char *old_text;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(file))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -256,7 +272,7 @@ static ssize_t bl_file_write(struct file *file, const char __user *ubuf,
 	kfree(old_text);
 	(void)old_text_len;
 
-	pr_info("blacklist: loaded %d ent/ies\n", new_count);
+	pr_info("blacklist: loaded %d entries\n", new_count);
 	*ppos = count;
 	return count;
 }

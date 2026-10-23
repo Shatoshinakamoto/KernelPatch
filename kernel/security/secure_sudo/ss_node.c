@@ -18,6 +18,18 @@
  *   - at the child's exec, a marked task running a non-node program must find
  *     that program on node_allowed_children, or it is denied. An allowed child
  *     has the flag cleared so it (and its own subtree) runs normally.
+ *
+ * Hardening notes:
+ *   - Flag changes are only *staged* in bprm_check and applied in
+ *     bprm_committing_creds, after the exec's point of no return. Otherwise a
+ *     marked task could exec an allowed child that then fails to load, keep
+ *     running as node with the mark already cleared, and spawn anything.
+ *   - A marked task re-exec'ing "node" must hit a real runtime: one of the
+ *     standard install paths or a registered SEA path. A file that is merely
+ *     *named* node (e.g. /tmp/x/node) is treated as an ordinary child.
+ *   - node_allowed_children entries that start with '/' match the resolved
+ *     absolute path exactly; bare names match the basename. Prefer absolute
+ *     paths - a bare "git" also allows any file called git.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -127,13 +139,13 @@ static ssize_t sl_read(struct strlist *sl, char __user *ubuf, size_t count,
 	return ret;
 }
 
-static ssize_t sl_write(struct strlist *sl, const char __user *ubuf,
-			size_t count, loff_t *ppos)
+static ssize_t sl_write(struct file *file, struct strlist *sl,
+			const char __user *ubuf, size_t count, loff_t *ppos)
 {
 	char *text, *scratch, **new_items, **old_items, *old_text;
 	int new_count, old_count;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(file))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -189,57 +201,107 @@ static int ss_node_task_alloc(struct task_struct *task,
 {
 	/* Propagate the node mark from the forking parent to the child. */
 	ss_task(task)->flags = ss_task(current)->flags & SS_TASK_NODE;
+	ss_task(task)->pending = 0;
+	ss_task(task)->pending_valid = 0;
 	return 0;
+}
+
+static const char *const node_runtimes[] = {
+	"/usr/bin/node", "/usr/bin/nodejs", "/usr/local/bin/node",
+};
+
+static bool is_node_runtime(const char *resolved)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(node_runtimes); i++)
+		if (!strcmp(resolved, node_runtimes[i]))
+			return true;
+	return sl_has(&node_sea, resolved);
+}
+
+/* Child allowlist: '/'-entries are exact paths, others are basenames. */
+static bool child_allowed(const char *resolved, const char *base)
+{
+	struct strlist *sl = &node_children;
+	bool found = false;
+	int i;
+
+	mutex_lock(&sl->lock);
+	for (i = 0; i < sl->count; i++) {
+		const char *it = sl->items[i];
+
+		if (it[0] == '/' ? !strcmp(it, resolved) : !strcmp(it, base)) {
+			found = true;
+			break;
+		}
+	}
+	mutex_unlock(&sl->lock);
+	return found;
 }
 
 static int ss_node_bprm(struct linux_binprm *bprm)
 {
 	struct ss_task *cur = ss_task(current);
-	char *buf = NULL, *resolved;
+	bool marked = cur->flags & SS_TASK_NODE;
+	char *buf, *resolved;
 	const char *base;
-	bool target_is_node;
 	int ret = 0;
 
-	/* Resolve the program being executed. */
+	/* Default outcome of this exec: keep the current mark. */
+	cur->pending = cur->flags;
+	cur->pending_valid = 1;
+
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (buf) {
-		resolved = d_path(&bprm->file->f_path, buf, PATH_MAX);
-		if (IS_ERR(resolved))
-			resolved = NULL;
-	} else {
-		resolved = NULL;
+	if (!buf)
+		return marked ? -ENOMEM : 0;	/* fail closed for marked tasks */
+	resolved = ss_file_path(&bprm->file->f_path, buf, PATH_MAX);
+	if (IS_ERR(resolved)) {
+		kfree(buf);
+		return marked ? -EPERM : 0;
 	}
-	base = kbasename(resolved ? resolved : bprm->filename);
+	base = kbasename(resolved);
 
-	target_is_node = !strcmp(base, "node") || !strcmp(base, "nodejs") ||
-			 (resolved && sl_has(&node_sea, resolved));
-
-	if (target_is_node) {
-		cur->flags |= SS_TASK_NODE;	/* this image is a node runtime */
+	if (!marked) {
+		/* Any node-looking image gets marked; marking is never unsafe. */
+		if (!strcmp(base, "node") || !strcmp(base, "nodejs") ||
+		    is_node_runtime(resolved))
+			cur->pending |= SS_TASK_NODE;
 		goto out;
 	}
 
-	if (cur->flags & SS_TASK_NODE) {
-		if (sl_has(&node_children, base)) {
-			cur->flags &= ~SS_TASK_NODE;	/* allowed child: run free */
-			goto out;
-		}
-		pr_warn_ratelimited("node guard: UID %u blocked child exec %s\n",
-				    from_kuid(&init_user_ns, current_uid()),
-				    base);
-		ss_event("node-guard: UID %u blocked child exec %s",
-			 from_kuid(&init_user_ns, current_uid()), base);
-		ret = -EPERM;
+	if (is_node_runtime(resolved))
+		goto out;			/* node re-exec'ing node: stays marked */
+
+	if (child_allowed(resolved, base)) {
+		cur->pending &= ~SS_TASK_NODE;	/* allowed child: run free */
+		goto out;
 	}
 
+	pr_warn_ratelimited("node guard: UID %u blocked child exec %s\n",
+			    from_kuid(&init_user_ns, current_uid()), resolved);
+	ss_event("node-guard: UID %u blocked child exec %s",
+		 from_kuid(&init_user_ns, current_uid()), resolved);
+	ret = -EPERM;
 out:
 	kfree(buf);
 	return ret;
 }
 
+/* Past the point of no return: the exec will complete, apply the decision. */
+static void ss_node_committing(const struct linux_binprm *bprm)
+{
+	struct ss_task *cur = ss_task(current);
+
+	if (cur->pending_valid)
+		cur->flags = cur->pending;
+	cur->pending_valid = 0;
+}
+
 static struct security_hook_list ss_node_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(task_alloc,          ss_node_task_alloc),
 	LSM_HOOK_INIT(bprm_check_security, ss_node_bprm),
+	LSM_HOOK_INIT(bprm_committing_creds, ss_node_committing),
 };
 
 void __init ss_node_init(void)
@@ -258,7 +320,7 @@ static ssize_t children_read(struct file *f, char __user *u, size_t c, loff_t *p
 static ssize_t children_write(struct file *f, const char __user *u, size_t c,
 			      loff_t *p)
 {
-	return sl_write(&node_children, u, c, p);
+	return sl_write(f, &node_children, u, c, p);
 }
 static const struct file_operations children_fops = {
 	.read = children_read, .write = children_write, .llseek = default_llseek,
@@ -271,7 +333,7 @@ static ssize_t sea_read(struct file *f, char __user *u, size_t c, loff_t *p)
 static ssize_t sea_write(struct file *f, const char __user *u, size_t c,
 			 loff_t *p)
 {
-	return sl_write(&node_sea, u, c, p);
+	return sl_write(f, &node_sea, u, c, p);
 }
 static const struct file_operations sea_fops = {
 	.read = sea_read, .write = sea_write, .llseek = default_llseek,

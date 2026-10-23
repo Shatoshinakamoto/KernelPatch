@@ -250,9 +250,14 @@ build_install_userspace() {
 	fi
 
 	# Auto-detect every admin group so sudo-group users count as sudo.
-	local gids; gids="$(detect_admin_gids)"
+	local gids; gids="$(detect_admin_gids || true)"
 	if [ -n "$gids" ]; then
-		sed -i "s/^admin_gid = .*/admin_gid = $gids/" /etc/secure_sudo/secure-sudo.conf
+		if grep -qE '^[[:space:]]*admin_gid[[:space:]]*=' /etc/secure_sudo/secure-sudo.conf; then
+			sed -i -E "s|^[[:space:]]*admin_gid[[:space:]]*=.*|admin_gid = $gids|" \
+				/etc/secure_sudo/secure-sudo.conf
+		else
+			printf 'admin_gid = %s\n' "$gids" >> /etc/secure_sudo/secure-sudo.conf
+		fi
 		log "admin_gid auto-detected: $gids"
 	else
 		warn "no admin groups found; only root will count as sudo (edit admin_gid in secure-sudo.conf)"

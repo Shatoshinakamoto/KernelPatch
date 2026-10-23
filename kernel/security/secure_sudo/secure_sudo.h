@@ -15,6 +15,7 @@
 #define _SECURITY_SECURE_SUDO_H
 
 #include <linux/types.h>
+#include <linux/atomic.h>
 #include <linux/cred.h>
 #include <linux/mutex.h>
 #include <linux/kobject.h>
@@ -68,8 +69,11 @@ struct ss_cfg {
 	/* ---- #2 firmware/flash protection ---- */
 	bool block_flash;	/* deny non-sudo firmware/flash/raw-mem access */
 
-	/* ---- #16 config lock (one-way; set, never cleared, until reboot) ---- */
-	bool locked;
+	/* ---- #1b setuid/setgid/file-cap exec gate for non-sudo users ---- */
+	bool block_setid_exec;	/* deny privilege-gaining exec unless allowlisted */
+
+	/* ---- #16 config lock: state lives in ss_lock_state (ss_core.c) ---- */
+	bool lock_modules;	/* while locked, refuse ALL module loads */
 
 	/* ---- #7 RAM-spike detection ---- */
 	u32  max_ram_percent;	/* drop caches at/above this % used */
@@ -82,6 +86,7 @@ struct ss_cfg {
 
 	/* ---- #12 exec from tmp dirs ---- */
 	bool block_tmp_exec;
+	bool block_tmpfs_exec;	/* also any tmpfs/ramfs mount (/run/user, memfd) */
 
 	/* ---- #8 sudo brute-force cooldown ---- */
 	u32  sudo_max_fails;		/* failures in the window before a block */
@@ -91,6 +96,7 @@ struct ss_cfg {
 
 	/* ---- #13 TimeVault ---- */
 	bool timevault_enabled;		/* when on: exec allowlist + pkg-mgr deny */
+	bool timevault_strict_mmap;	/* also gate PROT_EXEC mmap (libraries) */
 
 	/* ---- #4 home write-restriction ---- */
 	bool block_home_write;		/* confine non-sudo writes to home + allow */
@@ -120,12 +126,50 @@ static inline bool ss_is_sudo_user(void)
 
 /*
  * #16: once config is locked, every knob refuses writes until the next reboot.
- * A sysfs/securityfs store calls this after its CAP_SYS_ADMIN check:
+ * The state is a one-way atomic latch: ss_lock_engage() is the only writer and
+ * nothing in the kernel ever clears it. A sysfs/securityfs store calls this
+ * after its privilege check:
  *	if (ss_locked()) return -EPERM;
  */
+extern atomic_t ss_lock_state;
 static inline bool ss_locked(void)
 {
-	return READ_ONCE(ss_cfg.locked);
+	return atomic_read(&ss_lock_state) != 0;
+}
+/* Latch the lock (idempotent). @why is logged once, on the first latch. */
+void ss_lock_engage(const char *why);
+
+/*
+ * Privilege check for policy writes. CAP_SYS_ADMIN in the initial namespace,
+ * checked against BOTH the writing task and, for securityfs files, the
+ * credentials the file was opened with - so a less-privileged opener cannot
+ * hand the fd to a privileged process and have it write for them (the classic
+ * "write via setuid stderr" confused-deputy pattern).
+ */
+bool ss_may_admin(const struct file *file);
+
+/*
+ * Resolve @path to a string for policy matching. Uses d_absolute_path() so the
+ * result is relative to the mount-namespace root, not the caller's chroot (a
+ * chrooted task must not be able to make /jail/usr/bin/x look like
+ * /usr/bin/x). Falls back to d_path() for pseudo files (memfd, pipes) that
+ * have no absolute path. Returns ERR_PTR on failure; callers MUST treat a
+ * failure as a deny where a deny is the safe answer (fail closed).
+ */
+struct path;
+char *ss_file_path(const struct path *path, char *buf, int buflen);
+
+/* "dir" matches "dir" and "dir/..." but never "dirx"; a prefix that already
+ * ends in '/' matches anything below it. */
+bool ss_path_under(const char *path, const char *prefix);
+
+/* SHA-256 of a memory buffer into @hex (>= 65 bytes). Never fails. */
+void ss_sha256_buf(const void *data, size_t len, char *hex);
+
+/* Clamp helper for numeric knobs: -ERANGE outside [lo, hi]. */
+static inline int ss_check_range(u32 v, u32 lo, u32 hi)
+{
+	return (v < lo || v > hi) ? -ERANGE : 0;
 }
 
 /*
@@ -146,6 +190,8 @@ int ss_sha256_file(struct file *file, char *hex_out);
  */
 struct ss_task {
 	u8 flags;
+	u8 pending;		/* flags to apply if the current exec commits */
+	u8 pending_valid;	/* pending was computed by this exec's checks */
 };
 #define SS_TASK_NODE	0x01	/* this task descends from a node/SEA exec */
 
@@ -166,6 +212,12 @@ static inline struct ss_task *ss_task(const struct task_struct *t)
  */
 void ss_creds_init(void);
 int  ss_creds_sysfs(struct kobject *kobj);
+
+/* #1b setid-exec allowlist (securityfs "setid_exec_allow"). */
+int  ss_creds_secfs(struct dentry *dir);
+
+/* #16 lock enforcement hooks (locked_down, module/kexec loads). */
+void ss_lock_init(void);
 
 /* #2 command blacklist: hooks early, securityfs "blacklist" file late. */
 void ss_exec_init(void);

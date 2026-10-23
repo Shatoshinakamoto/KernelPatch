@@ -41,18 +41,22 @@ static const struct knob knobs[] = {
 	{ "admin_gid",            "admin_gid" },
 	{ "block_setid",          "block_setid" },
 	{ "block_userns",         "block_userns" },
+	{ "block_setid_exec",     "block_setid_exec" },
 	{ "block_flash",          "block_flash" },
 	{ "ram_spike_enabled",    "ram_spike_enabled" },
 	{ "max_ram_percent",      "max_ram_percent" },
 	{ "check_interval_ms",    "check_interval_ms" },
 	{ "drop_cooldown_ms",     "drop_cooldown_ms" },
 	{ "block_tmp_exec",       "block_tmp_exec" },
+	{ "block_tmpfs_exec",     "block_tmpfs_exec" },
 	{ "net_mode",             "net_mode" },
 	{ "sudo_max_fails",       "sudo_max_fails" },
 	{ "sudo_window_sec",      "sudo_window_sec" },
 	{ "sudo_block_time_sec",  "sudo_block_time_sec" },
 	{ "sudo_cooldown_enabled","sudo_cooldown_enabled" },
 	{ "block_home_write",     "block_home_write" },
+	{ "timevault_strict_mmap","timevault_strict_mmap" },
+	{ "lock_modules",         "lock_modules" },
 };
 
 /* policy list  config file  ->  securityfs file */
@@ -63,6 +67,7 @@ struct listmap {
 
 static const struct listmap lists[] = {
 	{ "blacklist.conf",             "blacklist" },
+	{ "setid_exec_allow.conf",      "setid_exec_allow" },
 	{ "tmp_exec_allow.conf",        "tmp_exec_allow" },
 	{ "node_allowed_children.conf", "node_allowed_children" },
 	{ "node_sea_binaries.conf",     "node_sea_binaries" },
@@ -71,6 +76,17 @@ static const struct listmap lists[] = {
 	{ "home_map.conf",              "home_map" },
 	{ "home_write_allow.conf",      "home_write_allow" },
 };
+
+static const struct listmap *find_list(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(lists) / sizeof(lists[0]); i++)
+		if (!strcmp(lists[i].secfs, name) ||
+		    !strcmp(lists[i].cfg_file, name))
+			return &lists[i];
+	return NULL;
+}
 
 static int require_root(void)
 {
@@ -138,6 +154,105 @@ static int set_knob(const char *key, const char *val)
 	}
 	snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
 	return write_file(path, val, strlen(val));
+}
+
+/* Also persist a knob to secure-sudo.conf so it survives a reboot/reload. */
+static int persist_knob(const char *key, const char *val)
+{
+	const char *conf = CONFIG_DIR "/secure-sudo.conf";
+	char tmp[320], line[1024];
+	FILE *in, *out;
+	int fd, done = 0;
+
+	snprintf(tmp, sizeof(tmp), "%s/.secure-sudo.conf.XXXXXX", CONFIG_DIR);
+	fd = mkstemp(tmp);
+	if (fd < 0 || !(out = fdopen(fd, "w"))) {
+		if (fd >= 0)
+			close(fd);
+		return -1;
+	}
+	in = fopen(conf, "re");
+	while (in && fgets(line, sizeof(line), in)) {
+		char *p = line;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!done && !strncmp(p, key, strlen(key)) &&
+		    (p[strlen(key)] == ' ' || p[strlen(key)] == '=' ||
+		     p[strlen(key)] == '\t')) {
+			fprintf(out, "%s = %s\n", key, val);
+			done = 1;
+		} else {
+			fputs(line, out);
+		}
+	}
+	if (in)
+		fclose(in);
+	if (!done)
+		fprintf(out, "%s = %s\n", key, val);
+	fchmod(fileno(out), 0644);
+	if (fflush(out) || fsync(fileno(out)) || fclose(out) ||
+	    rename(tmp, conf)) {
+		unlink(tmp);
+		return -1;
+	}
+	return 0;
+}
+
+/* `get <knob>` or `get` (all): print the live kernel value(s). */
+static int cmd_get(const char *key)
+{
+	char path[256];
+	size_t i;
+
+	if (key) {
+		const struct knob *k = find_knob(key);
+
+		if (!k) {
+			fprintf(stderr, "secure-sudo: unknown setting '%s'\n", key);
+			return -1;
+		}
+		snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
+		return cat_file(path) == 0 ? 0 : -1;
+	}
+	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++) {
+		snprintf(path, sizeof(path), SYSFS "/%s", knobs[i].sysfs);
+		printf("%-22s ", knobs[i].cfg_key);
+		if (cat_file(path) != 0)
+			printf("(unavailable)\n");
+	}
+	return 0;
+}
+
+/* `settings`: list every configurable knob and policy list by name. */
+static int cmd_settings(void)
+{
+	size_t i;
+
+	printf("Scalar settings (get/set; set persists to secure-sudo.conf):\n");
+	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++)
+		printf("  %s\n", knobs[i].cfg_key);
+	printf("\nPolicy lists (list/load; edit the .conf then `load`):\n");
+	for (i = 0; i < sizeof(lists) / sizeof(lists[0]); i++)
+		printf("  %-22s (%s/%s)\n", lists[i].secfs, CONFIG_DIR,
+		       lists[i].cfg_file);
+	printf("\nTimeVault allowlist has its own command: vault-allow\n");
+	printf("Config lock: `secure-sudo lock` (one-way, until reboot)\n");
+	return 0;
+}
+
+/* `list <name>`: show a policy list's current kernel contents. */
+static int cmd_list_one(const char *name)
+{
+	const struct listmap *m = find_list(name);
+	char path[256];
+
+	if (!m) {
+		fprintf(stderr, "secure-sudo: unknown policy list '%s'\n", name);
+		return -1;
+	}
+	snprintf(path, sizeof(path), SECFS "/%s", m->secfs);
+	return cat_file(path) == 0 ? 0 : -1;
 }
 
 /* Push a config list file into its securityfs target. Missing file = clear. */
@@ -306,12 +421,17 @@ static void usage(void)
 "Usage: secure-sudo <command> [args]\n"
 "  load                 push /etc/secure_sudo/* into the kernel\n"
 "  status               show current kernel policy state\n"
-"  set <knob> <value>   set one scalar knob (see secure-sudo.conf keys)\n"
+"  settings             list every configurable knob and policy list\n"
+"  get [<knob>]         show one (or all) live scalar knob value(s)\n"
+"  set <knob> <value>   set a scalar knob and persist it to the config\n"
+"  list <name>          show a policy list's current kernel contents\n"
 "  net <mode>           monitor | host | lan-only | public-only\n"
 "  timevault <on|off>   engage/disengage TimeVault lockdown\n"
 "  lock                 lock the config until reboot (irreversible)\n"
 "  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
-"  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n");
+"  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n"
+"\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
+"All commands are root-only and refused once the config is locked.\n");
 	vault_allow_usage();
 }
 
@@ -333,22 +453,55 @@ int main(int argc, char **argv)
 		return cmd_load() == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
-	if (!strcmp(argv[1], "set") && argc == 4)
-		return set_knob(argv[2], argv[3]) == 0 ? 0 : 1;
-	if (!strcmp(argv[1], "net") && argc == 3)
-		return set_knob("net_mode", argv[2]) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "settings"))
+		return cmd_settings();
+	if (!strcmp(argv[1], "get") && argc <= 3)
+		return cmd_get(argc == 3 ? argv[2] : NULL) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "set") && argc == 4) {
+		/* Push to the kernel first; only persist if the kernel accepted
+		 * it, so the saved config can never diverge from live policy. */
+		if (set_knob(argv[2], argv[3]) != 0)
+			return 1;
+		if (persist_knob(argv[2], argv[3]) != 0)
+			fprintf(stderr, "secure-sudo: set live, but failed to persist "
+				"'%s' to the config\n", argv[2]);
+		return 0;
+	}
+	if (!strcmp(argv[1], "list") && argc == 3)
+		return cmd_list_one(argv[2]) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "net") && argc == 3) {
+		if (set_knob("net_mode", argv[2]) != 0)
+			return 1;
+		persist_knob("net_mode", argv[2]);
+		return 0;
+	}
 	if (!strcmp(argv[1], "timevault") && argc == 3) {
 		const char *v = !strcmp(argv[2], "on") ? "1" :
 				!strcmp(argv[2], "off") ? "0" : NULL;
 		if (!v) { usage(); return 2; }
-		return write_file(SYSFS "/timevault", v, 1) == 0 ? 0 : 1;
+		if (write_file(SYSFS "/timevault", v, 1) != 0)
+			return 1;
+		persist_knob("timevault_enabled", v);
+		return 0;
 	}
 	if (!strcmp(argv[1], "vault-allow"))
 		return cmd_vault_allow(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "detect-admins"))
 		return cmd_detect_admins(argc - 2, argv + 2);
-	if (!strcmp(argv[1], "lock"))
+	if (!strcmp(argv[1], "lock")) {
+		/* Confirm unless -y: this cannot be undone without a reboot. */
+		if (!(argc == 3 && !strcmp(argv[2], "-y"))) {
+			char ans[8] = "";
+
+			fprintf(stderr, "Lock the configuration until the next reboot? "
+				"No setting can change after this. Type 'yes': ");
+			if (!fgets(ans, sizeof(ans), stdin) || strcmp(ans, "yes\n")) {
+				fprintf(stderr, "aborted\n");
+				return 1;
+			}
+		}
 		return write_file(SYSFS "/lock", "1", 1) == 0 ? 0 : 1;
+	}
 
 	usage();
 	return 2;

@@ -68,7 +68,7 @@ static int ss_tpm_file_open(struct file *file)
 	if (!buf)
 		return 0;
 
-	p = d_path(&file->f_path, buf, PATH_MAX);
+	p = ss_file_path(&file->f_path, buf, PATH_MAX);
 	if (!IS_ERR(p) && is_tpm_ppi_request(p)) {
 		pr_warn_ratelimited("blocked TPM ppi/request write %s (boot with secure_sudo.tpm_maint=1 to allow)\n",
 				    p);

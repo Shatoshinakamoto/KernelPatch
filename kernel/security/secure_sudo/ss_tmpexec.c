@@ -10,10 +10,25 @@
  *   - execve of any file under those trees            (bprm_check_security)
  *   - PROT_EXEC mmap of any file under those trees     (mmap_file)
  *
- * mmap coverage matters: without it an interpreter could mmap+jump into a
- * payload it never execve'd. Specific paths can be exempted by writing them to
- * /sys/kernel/security/secure_sudo/tmp_exec_allow (prefix match, so a single
- * trusted directory or file is enough).
+ *   - mprotect(PROT_EXEC) of a file mapping under them (file_mprotect)
+ *
+ * mmap coverage matters: without it an interpreter (or "ld.so /tmp/x") could
+ * mmap+jump into a payload it never execve'd, and without the mprotect hook a
+ * PROT_READ mapping could simply be flipped to PROT_EXEC afterwards.
+ *
+ * With block_tmpfs_exec the same rule extends to every tmpfs/ramfs mount
+ * (/run/user/<uid>, ad-hoc tmpfs mounts) and to memfd files, which closes the
+ * "fileless" memfd_create()+fexecve() technique. PROT_EXEC *mmap* of a memfd
+ * stays allowed so JITs that double-map a memfd keep working; exec'ing one
+ * does not.
+ *
+ * Decisions fail closed: a path that cannot be resolved (for example one made
+ * longer than PATH_MAX on purpose) is denied, not waved through.
+ *
+ * Specific paths can be exempted via
+ * /sys/kernel/security/secure_sudo/tmp_exec_allow. Entries match on a path
+ * component boundary: "/tmp/build" covers /tmp/build and /tmp/build/..., but
+ * not /tmp/buildevil.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -33,6 +48,8 @@
 #include <linux/binfmts.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+#include <linux/magic.h>
+#include <linux/mm.h>
 #include <linux/lsm_hooks.h>
 
 #include "secure_sudo.h"
@@ -58,6 +75,22 @@ static bool under_tmp_tree(const char *p)
 	return false;
 }
 
+static bool on_tmpfs(const struct path *path)
+{
+	unsigned long m = path->dentry->d_sb->s_magic;
+
+	return m == TMPFS_MAGIC || m == RAMFS_MAGIC;
+}
+
+/* memfd_create() files: unlinked shmem/hugetlbfs dentries named "memfd:..." */
+static bool is_memfd(const struct path *path)
+{
+	unsigned long m = path->dentry->d_sb->s_magic;
+
+	return (m == TMPFS_MAGIC || m == HUGETLBFS_MAGIC) &&
+	       !strncmp(path->dentry->d_name.name, "memfd:", 6);
+}
+
 /* ---- allowlist (prefix match) ---- */
 static DEFINE_MUTEX(allow_lock);
 static char **allow_list;
@@ -72,7 +105,7 @@ static bool path_allowed(const char *p)
 
 	mutex_lock(&allow_lock);
 	for (i = 0; i < allow_count; i++) {
-		if (str_has_prefix(p, allow_list[i])) {
+		if (ss_path_under(p, allow_list[i])) {
 			ok = true;
 			break;
 		}
@@ -81,52 +114,43 @@ static bool path_allowed(const char *p)
 	return ok;
 }
 
-/* Resolve @path to a buffer the caller must kfree(); returns NULL on error. */
-static char *resolve(const struct path *path, char **out_free)
+/* Common decision for every hook. @is_mmap relaxes the memfd case only. */
+static int tmp_check(const struct path *path, const char *what, bool is_mmap)
 {
+	bool tmpfs_rule = READ_ONCE(ss_cfg.block_tmpfs_exec);
 	char *buf, *p;
-
-	buf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!buf)
-		return NULL;
-	p = d_path(path, buf, PATH_MAX);
-	if (IS_ERR(p)) {
-		kfree(buf);
-		return NULL;
-	}
-	*out_free = buf;
-	return p;
-}
-
-/* Common decision for both hooks. */
-static int tmp_check(const struct path *path, const char *what)
-{
-	char *buf = NULL, *p;
 	int ret = 0;
 
 	if (!READ_ONCE(ss_cfg.block_tmp_exec))
 		return 0;
 	if (ss_is_sudo_user())
 		return 0;
+	if (is_mmap && is_memfd(path))
+		return 0;
 
-	p = resolve(path, &buf);
-	if (!p)
-		return 0;		/* fail open on resolution failure */
-
-	if (under_tmp_tree(p) && !path_allowed(p)) {
-		pr_warn_ratelimited("non-sudo UID %u denied %s from scratch tree: %s\n",
-				    from_kuid(&init_user_ns, current_uid()),
-				    what, p);
+	buf = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;			/* fail closed */
+	p = ss_file_path(path, buf, PATH_MAX);
+	if (IS_ERR(p)) {
+		ret = -EPERM;			/* fail closed */
+		p = "(unresolvable path)";
+	} else if ((under_tmp_tree(p) || (tmpfs_rule && on_tmpfs(path))) &&
+		   !path_allowed(p)) {
 		ret = -EPERM;
 	}
 
+	if (ret)
+		pr_warn_ratelimited("non-sudo UID %u denied %s from scratch tree: %s\n",
+				    from_kuid(&init_user_ns, current_uid()),
+				    what, p);
 	kfree(buf);
 	return ret;
 }
 
 static int ss_tmp_bprm(struct linux_binprm *bprm)
 {
-	return tmp_check(&bprm->file->f_path, "exec");
+	return tmp_check(&bprm->file->f_path, "exec", false);
 }
 
 static int ss_tmp_mmap(struct file *file, unsigned long reqprot,
@@ -136,12 +160,21 @@ static int ss_tmp_mmap(struct file *file, unsigned long reqprot,
 		return 0;		/* anonymous mapping */
 	if (!(prot & PROT_EXEC))
 		return 0;
-	return tmp_check(&file->f_path, "PROT_EXEC mmap");
+	return tmp_check(&file->f_path, "PROT_EXEC mmap", true);
+}
+
+static int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+			   unsigned long prot)
+{
+	if (!vma->vm_file || !(prot & PROT_EXEC) || (vma->vm_flags & VM_EXEC))
+		return 0;
+	return tmp_check(&vma->vm_file->f_path, "mprotect(PROT_EXEC)", true);
 }
 
 static struct security_hook_list ss_tmp_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(bprm_check_security, ss_tmp_bprm),
 	LSM_HOOK_INIT(mmap_file,           ss_tmp_mmap),
+	LSM_HOOK_INIT(file_mprotect,       ss_tmp_mprotect),
 };
 
 void __init ss_tmpexec_init(void)
@@ -161,7 +194,7 @@ static ssize_t block_tmp_exec_store(struct kobject *k, struct kobj_attribute *a,
 {
 	bool v;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(NULL))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -171,10 +204,35 @@ static ssize_t block_tmp_exec_store(struct kobject *k, struct kobj_attribute *a,
 	return count;
 }
 static struct kobj_attribute block_tmp_exec_attr =
-	__ATTR(block_tmp_exec, 0644, block_tmp_exec_show, block_tmp_exec_store);
+	__ATTR(block_tmp_exec, 0600, block_tmp_exec_show, block_tmp_exec_store);
+
+static ssize_t block_tmpfs_exec_show(struct kobject *k, struct kobj_attribute *a,
+				     char *buf)
+{
+	return sysfs_emit(buf, "%d\n", READ_ONCE(ss_cfg.block_tmpfs_exec));
+}
+static ssize_t block_tmpfs_exec_store(struct kobject *k,
+				      struct kobj_attribute *a,
+				      const char *buf, size_t count)
+{
+	bool v;
+
+	if (!ss_may_admin(NULL))
+		return -EPERM;
+	if (ss_locked())
+		return -EPERM;
+	if (kstrtobool(buf, &v))
+		return -EINVAL;
+	WRITE_ONCE(ss_cfg.block_tmpfs_exec, v);
+	return count;
+}
+static struct kobj_attribute block_tmpfs_exec_attr =
+	__ATTR(block_tmpfs_exec, 0600, block_tmpfs_exec_show,
+	       block_tmpfs_exec_store);
 
 static struct attribute *ss_tmp_attrs[] = {
 	&block_tmp_exec_attr.attr,
+	&block_tmpfs_exec_attr.attr,
 	NULL,
 };
 static const struct attribute_group ss_tmp_group = {
@@ -243,7 +301,7 @@ static ssize_t allow_write(struct file *file, const char __user *ubuf,
 	char *text, *scratch, **new_list, **old_list, *old_text;
 	int new_count, old_count;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(file))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;

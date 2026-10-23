@@ -102,7 +102,7 @@ void __init ss_ram_start(void)
 
 /* ---------------------------- sysfs knobs -------------------------------- */
 
-#define RAM_U32_ATTR(field)						\
+#define RAM_U32_ATTR(field, lo, hi)					\
 static ssize_t field##_show(struct kobject *k, struct kobj_attribute *a,\
 			    char *buf)					\
 {									\
@@ -112,21 +112,24 @@ static ssize_t field##_store(struct kobject *k, struct kobj_attribute *a,\
 			     const char *buf, size_t count)		\
 {									\
 	u32 v;								\
-	if (!capable(CAP_SYS_ADMIN))					\
+	if (!ss_may_admin(NULL))					\
 		return -EPERM;						\
 	if (ss_locked())						\
 		return -EPERM;						\
 	if (kstrtou32(buf, 10, &v))					\
 		return -EINVAL;						\
+	if (ss_check_range(v, lo, hi))					\
+		return -ERANGE;						\
 	WRITE_ONCE(ss_cfg.field, v);					\
 	return count;							\
 }									\
 static struct kobj_attribute field##_attr =				\
-	__ATTR(field, 0644, field##_show, field##_store)
+	__ATTR(field, 0600, field##_show, field##_store)
 
-RAM_U32_ATTR(max_ram_percent);
-RAM_U32_ATTR(check_interval_ms);
-RAM_U32_ATTR(drop_cooldown_ms);
+/* Ranges keep a root typo from turning the worker into a cache-drop storm. */
+RAM_U32_ATTR(max_ram_percent, 1, 100);
+RAM_U32_ATTR(check_interval_ms, 100, 3600 * 1000);
+RAM_U32_ATTR(drop_cooldown_ms, 1000, 24 * 3600 * 1000);
 
 static ssize_t ram_spike_enabled_show(struct kobject *k,
 				      struct kobj_attribute *a, char *buf)
@@ -139,7 +142,7 @@ static ssize_t ram_spike_enabled_store(struct kobject *k,
 {
 	bool v;
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!ss_may_admin(NULL))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
@@ -149,7 +152,7 @@ static ssize_t ram_spike_enabled_store(struct kobject *k,
 	return count;
 }
 static struct kobj_attribute ram_spike_enabled_attr =
-	__ATTR(ram_spike_enabled, 0644,
+	__ATTR(ram_spike_enabled, 0600,
 	       ram_spike_enabled_show, ram_spike_enabled_store);
 
 static struct attribute *ss_ram_attrs[] = {
