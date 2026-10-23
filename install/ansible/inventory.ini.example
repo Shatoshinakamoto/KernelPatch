@@ -1,0 +1,15 @@
+# Example inventory for secure_sudo.yml. Copy to inventory.ini and edit.
+#
+# [secure_hosts]
+# server1 ansible_host=10.0.0.11
+# server2 ansible_host=10.0.0.12
+#
+# [secure_hosts:vars]
+# ansible_user=admin
+# secure_sudo_kver=6.12.48
+# secure_sudo_net_mode=host
+# secure_sudo_enable_pam_cooldown=true
+# secure_sudo_enable_pam_otp=false
+
+[local]
+localhost ansible_connection=local

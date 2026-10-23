@@ -1,0 +1,58 @@
+config SECURITY_SECURE_SUDO
+	bool "Secure Sudo privilege-escalation hardening"
+	depends on SECURITY
+	select SECURITY_NETWORK
+	select SECURITY_PATH
+	select CRYPTO
+	select CRYPTO_SHA256
+	default n
+	help
+	  secure_sudo is a built-in Linux Security Module that restricts
+	  privileged operations to sudo users and hardens the system against
+	  privilege escalation and firmware tampering.
+
+	  This option builds the following protection (more are added by later
+	  files in this directory):
+
+	    * Block non-sudo users from switching UID/GID (setuid, setgid,
+	      setgroups) and from creating unprivileged user namespaces.
+	    * A command blacklist: paths that non-sudo users may not execute,
+	      loaded by the root-only CLI through securityfs and matched by
+	      (device, inode) and canonical path.
+	    * Block non-sudo access to firmware/flash interfaces: /dev/mem,
+	      /dev/kmem, /dev/port, /dev/mtd*, /dev/mei*, and write opens under
+	      /sys/firmware/ (EFI vars / efivarfs).
+	    * Block clearing the TPM via the PPI request node (everyone, root
+	      included) unless booted with secure_sudo.tpm_maint=1.
+	    * RAM-spike detection that drops caches when real memory usage
+	      crosses a configurable threshold.
+	    * Restrict exec and PROT_EXEC mmap out of /tmp, /var/tmp and
+	      /dev/shm for non-sudo users (with a securityfs allowlist).
+	    * A network HOST mode that denies raw/AF_PACKET sockets so packet
+	      sniffing fails even with libpcap installed.
+	    * A one-way config lock: once set, all knobs refuse writes until
+	      the next reboot.
+	    * A security event log: the kernel emits events to an in-memory
+	      ring the userspace daemon drains, dates and rotates.
+	    * A NodeJS child-process guard: node/SEA processes may only spawn
+	      allowlisted children.
+	    * A sudo brute-force cooldown driven by a PAM feed: after N failed
+	      auths a UID is blocked from exec'ing sudo/su.
+	    * A driver blacklist (anti-BYOVD): modules matching a blacklisted
+	      SHA-256 or name are refused at load.
+	    * TimeVault lockdown: an exec allowlist (path + optional hash) with
+	      package managers always denied and denied attempts counted.
+	    * Confine non-sudo users' writes to their home directory plus the
+	      normal scratch/device trees and a configured allowlist (opt-in).
+
+	  A "sudo user" is root, or a member of the admin GID configured at
+	  runtime via /sys/kernel/secure_sudo/admin_gid (the installer sets this
+	  to the distro's sudo/wheel GID).
+
+	  Because it registers LSM credential hooks, secure_sudo must be built
+	  into the kernel (it cannot be a loadable module) and must be listed in
+	  the active LSM set. Add it to CONFIG_LSM, e.g.
+
+	      CONFIG_LSM="landlock,lockdown,yama,...,secure_sudo,bpf"
+
+	  or append secure_sudo to the lsm= kernel command line. If unsure, N.

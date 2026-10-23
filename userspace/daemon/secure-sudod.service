@@ -1,0 +1,24 @@
+[Unit]
+Description=secure_sudo userspace companion (event log, cooldown, network, TimeVault)
+Documentation=file:/usr/share/doc/secure-sudo/INTEGRATION.md
+After=local-fs.target network.target
+# Only meaningful when the LSM is active.
+ConditionPathExists=/sys/kernel/security/secure_sudo/events
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/secure-sudod
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+# The daemon needs root for securityfs, /proc signalling, nft and quarantine,
+# but nothing beyond that - keep the rest of the sandbox tight.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

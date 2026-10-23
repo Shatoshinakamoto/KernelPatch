@@ -1,0 +1,98 @@
+---
+# secure_sudo.yml - deploy the secure_sudo patched kernel + userspace.
+#
+# This is the YAML scaffold the TODO asks for. The kernel build itself is done
+# by install.sh (too much to express well as discrete Ansible tasks); this
+# playbook ships the sources, runs the installer, then manages config and the
+# service with proper modules. Note it uses ansible.builtin.copy / lineinfile
+# for sysfs-style writes where needed instead of the old playbook's
+# `command: echo 1 > /sys/...` (which never redirected, because `command`
+# runs no shell).
+#
+# Usage:
+#   ansible-playbook -i inventory.ini secure_sudo.yml
+#
+# Variables you will likely set (host_vars/group_vars or --extra-vars):
+#   secure_sudo_kver: "6.12.48"
+#   secure_sudo_net_mode: "monitor"      # monitor|host|lan-only|public-only
+#   secure_sudo_enable_pam_cooldown: false
+#   secure_sudo_enable_pam_otp: false
+- name: Install and configure secure_sudo
+  hosts: all
+  become: true
+  vars:
+    secure_sudo_src_local: "{{ playbook_dir }}/../.."     # the KernelPatch-merged tree
+    secure_sudo_src_remote: /opt/secure_sudo-src
+    secure_sudo_kver: "6.12.48"
+    secure_sudo_net_mode: "monitor"
+    secure_sudo_enable_pam_cooldown: false
+    secure_sudo_enable_pam_otp: false
+
+  tasks:
+    - name: Ship the secure_sudo source tree to the target
+      ansible.builtin.copy:
+        src: "{{ secure_sudo_src_local }}/"
+        dest: "{{ secure_sudo_src_remote }}/"
+        mode: "0755"
+
+    - name: Build and install kernel + userspace
+      ansible.builtin.command:
+        cmd: ./install/install.sh
+        chdir: "{{ secure_sudo_src_remote }}"
+      environment:
+        KVER: "{{ secure_sudo_kver }}"
+      register: ss_install
+      changed_when: "'DONE' in ss_install.stdout"
+
+    - name: Ensure config directory
+      ansible.builtin.file:
+        path: /etc/secure_sudo
+        state: directory
+        mode: "0755"
+
+    - name: Set the network mode in config
+      ansible.builtin.lineinfile:
+        path: /etc/secure_sudo/secure-sudo.conf
+        regexp: '^net_mode\s*='
+        line: "net_mode = {{ secure_sudo_net_mode }}"
+
+    - name: Load policy into the kernel (no-op until booted into the new kernel)
+      ansible.builtin.command: secure-sudo load
+      register: ss_load
+      changed_when: "'loaded' in ss_load.stdout"
+      failed_when: false
+
+    - name: Enable the secure-sudod service
+      ansible.builtin.systemd:
+        name: secure-sudod
+        enabled: true
+        state: started
+      failed_when: false
+
+    # --- Optional PAM wiring (OFF by default; test with a root shell open) ---
+    - name: Wire cooldown reporting into sudo PAM (failure path)
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sudo
+        line: "auth  required  pam_secure_sudo.so authfail"
+        insertafter: '^auth'
+      when: secure_sudo_enable_pam_cooldown | bool
+
+    - name: Wire cooldown reporting into sudo PAM (success path)
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sudo
+        line: "auth  required  pam_secure_sudo.so authsucc"
+        insertafter: '^auth'
+      when: secure_sudo_enable_pam_cooldown | bool
+
+    - name: Wire OTP into sudo PAM
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/sudo
+        line: "auth  required  pam_secure_otp.so"
+        insertafter: '^#%PAM'
+      when: secure_sudo_enable_pam_otp | bool
+
+    - name: Reboot reminder
+      ansible.builtin.debug:
+        msg: >-
+          secure_sudo installed. Reboot into the new {{ secure_sudo_kver }}
+          kernel to activate the LSM, then verify with `secure-sudo status`.

@@ -1,0 +1,66 @@
+---
+# deploy-encrypted.yml - push the encrypted source bundle + keys and run the
+# encrypted/Secure-Boot installer. Keep the age identity in ansible-vault.
+#
+# Prepare the bundle on your workstation once:
+#   tar -C /path/to -c KernelPatch-merged | age -r <age-recipient> > secure_sudo-src.tar.age
+#
+# Usage:
+#   ansible-playbook -i inventory.ini deploy-encrypted.yml \
+#       --extra-vars "src_age=./secure_sudo-src.tar.age age_identity=./age.key"
+- name: Install secure_sudo from an encrypted source bundle (Secure Boot)
+  hosts: all
+  become: true
+  vars:
+    src_age: ./secure_sudo-src.tar.age
+    age_identity: ./age.key           # keep under ansible-vault
+    remote_dir: /run/secure_sudo-enc-in
+    secure_sudo_kver: "6.12.48"
+    make_uki: 0
+
+  tasks:
+    - name: Ensure a RAM-backed staging dir for the inputs
+      ansible.builtin.file:
+        path: "{{ remote_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Copy the encrypted source bundle
+      ansible.builtin.copy:
+        src: "{{ src_age }}"
+        dest: "{{ remote_dir }}/src.tar.age"
+        mode: "0600"
+
+    - name: Copy the age identity (from vault)
+      ansible.builtin.copy:
+        src: "{{ age_identity }}"
+        dest: "{{ remote_dir }}/age.key"
+        mode: "0600"
+
+    - name: Copy the encrypted installer
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/install-encrypted.sh"
+        dest: "{{ remote_dir }}/install-encrypted.sh"
+        mode: "0700"
+
+    - name: Run the encrypted/Secure-Boot installer
+      ansible.builtin.command:
+        cmd: "{{ remote_dir }}/install-encrypted.sh"
+      environment:
+        SRC_AGE: "{{ remote_dir }}/src.tar.age"
+        AGE_IDENTITY: "{{ remote_dir }}/age.key"
+        KVER: "{{ secure_sudo_kver }}"
+        MAKE_UKI: "{{ make_uki }}"
+      register: enc_install
+      changed_when: "'DONE' in enc_install.stdout"
+
+    - name: Remove the staged inputs (plaintext key + bundle)
+      ansible.builtin.file:
+        path: "{{ remote_dir }}"
+        state: absent
+
+    - name: Reboot reminder
+      ansible.builtin.debug:
+        msg: >-
+          Reboot and confirm the MOK enrollment in the MOK Manager screen,
+          then boot the signed {{ secure_sudo_kver }} kernel.
