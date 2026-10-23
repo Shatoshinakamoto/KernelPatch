@@ -9,7 +9,9 @@
  * This tool is the single supported way to drive them. It reads the config in
  * /etc/secure_sudo/ and pushes it into those kernel files ("load"), flips
  * individual knobs ("set", "net", "timevault", "lock"), prints current state
- * ("status"), and hands OTP subcommands to the otp helper.
+ * ("status"), manages the TimeVault allowlist ("vault-allow", vault_allow.c),
+ * re-detects admin groups ("detect-admins", detect_admins.c), and hands OTP
+ * subcommands to the otp helper.
  *
  * Only root may run it: the TODO requires that only sudo users administer the
  * patch, and the kernel files are root-only anyway. We fail early with a clear
@@ -25,9 +27,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#define SYSFS  "/sys/kernel/secure_sudo"
-#define SECFS  "/sys/kernel/security/secure_sudo"
-#define CONFIG_DIR "/etc/secure_sudo"
+#include "cli.h"
+
 #define OTP_HELPER "/usr/bin/secure-sudo-otp"
 
 /* scalar knob  <- config key  (sysfs file under SYSFS) */
@@ -81,7 +82,7 @@ static int require_root(void)
 }
 
 /* Write a NUL-terminated string to a kernel file; returns 0 on success. */
-static int write_file(const char *path, const char *data, size_t len)
+int write_file(const char *path, const char *data, size_t len)
 {
 	int fd = open(path, O_WRONLY | O_TRUNC);
 	ssize_t n;
@@ -309,7 +310,9 @@ static void usage(void)
 "  net <mode>           monitor | host | lan-only | public-only\n"
 "  timevault <on|off>   engage/disengage TimeVault lockdown\n"
 "  lock                 lock the config until reboot (irreversible)\n"
+"  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n");
+	vault_allow_usage();
 }
 
 int main(int argc, char **argv)
@@ -340,6 +343,10 @@ int main(int argc, char **argv)
 		if (!v) { usage(); return 2; }
 		return write_file(SYSFS "/timevault", v, 1) == 0 ? 0 : 1;
 	}
+	if (!strcmp(argv[1], "vault-allow"))
+		return cmd_vault_allow(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "detect-admins"))
+		return cmd_detect_admins(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "lock"))
 		return write_file(SYSFS "/lock", "1", 1) == 0 ? 0 : 1;
 

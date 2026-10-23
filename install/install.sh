@@ -36,7 +36,7 @@ die()  { printf '\033[1;31m[secure_sudo]\033[0m %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 # Distro detection
 # ---------------------------------------------------------------------------
-FAMILY="" ; SECDIR="" ; ADMIN_GROUP="sudo" ; PKG_TARGET=""
+FAMILY="" ; SECDIR="" ; PKG_TARGET=""
 detect_distro() {
 	. /etc/os-release
 	local ids="${ID:-} ${ID_LIKE:-}"
@@ -50,12 +50,27 @@ detect_distro() {
 	case "$FAMILY" in
 		debian) SECDIR="/lib/$(uname -m)-linux-gnu/security"
 			[ -d "$SECDIR" ] || SECDIR="/lib/security"
-			ADMIN_GROUP="sudo"; PKG_TARGET="bindeb-pkg" ;;
-		fedora) SECDIR="/usr/lib64/security"; ADMIN_GROUP="wheel"; PKG_TARGET="binrpm-pkg" ;;
-		suse)   SECDIR="/usr/lib64/security"; ADMIN_GROUP="wheel"; PKG_TARGET="binrpm-pkg" ;;
-		arch)   SECDIR="/usr/lib/security";   ADMIN_GROUP="wheel"; PKG_TARGET="" ;;
+			PKG_TARGET="bindeb-pkg" ;;
+		fedora) SECDIR="/usr/lib64/security"; PKG_TARGET="binrpm-pkg" ;;
+		suse)   SECDIR="/usr/lib64/security"; PKG_TARGET="binrpm-pkg" ;;
+		arch)   SECDIR="/usr/lib/security";   PKG_TARGET="" ;;
 	esac
-	log "distro family: $FAMILY (PAM dir $SECDIR, admin group $ADMIN_GROUP)"
+	log "distro family: $FAMILY (PAM dir $SECDIR)"
+}
+
+# ---------------------------------------------------------------------------
+# Admin-group auto-detection
+#
+# Every group whose members can already become root through sudo should count
+# as "sudo" for the LSM, otherwise those users would be treated as non-sudo.
+# We collect: the well-known admin groups that exist on this box (sudo, wheel,
+# admin), plus every %group (or %#gid) granted rights in /etc/sudoers and
+# /etc/sudoers.d/*. Result is a comma-separated GID list, e.g. "27,10".
+# ---------------------------------------------------------------------------
+# Every admin group on the box (sudo/wheel/admin + sudoers %groups) as "27,10".
+# Logic lives in scripts/ so it is shared with the installed tooling.
+detect_admin_gids() {
+	bash "$ROOT/scripts/detect-admin-gids.sh"
 }
 
 install_deps() {
@@ -234,12 +249,22 @@ build_install_userspace() {
 		log "generated home_map.conf for $(grep -cvE '^\s*(#|$)' /etc/secure_sudo/home_map.conf) user(s)"
 	fi
 
-	# Point admin_gid at this distro's admin group.
-	local gid; gid="$(getent group "$ADMIN_GROUP" | cut -d: -f3 || true)"
-	if [ -n "$gid" ]; then
-		sed -i "s/^admin_gid = .*/admin_gid = $gid/" /etc/secure_sudo/secure-sudo.conf
-		log "admin_gid set to $gid ($ADMIN_GROUP)"
+	# Auto-detect every admin group so sudo-group users count as sudo.
+	local gids; gids="$(detect_admin_gids)"
+	if [ -n "$gids" ]; then
+		sed -i "s/^admin_gid = .*/admin_gid = $gids/" /etc/secure_sudo/secure-sudo.conf
+		log "admin_gid auto-detected: $gids"
+	else
+		warn "no admin groups found; only root will count as sudo (edit admin_gid in secure-sudo.conf)"
 	fi
+
+	# scripts/: standalone TimeVault allowlist tool + admin detector. The CLI
+	# has both built in (secure-sudo vault-allow / detect-admins); these are
+	# the dependency-free bash equivalents.
+	install -D -m0755 "$ROOT/scripts/timevault-whitelist.sh" \
+		/usr/libexec/secure-sudo/timevault-whitelist.sh
+	install -D -m0755 "$ROOT/scripts/detect-admin-gids.sh" \
+		/usr/libexec/secure-sudo/detect-admin-gids.sh
 
 	mkdir -p /usr/share/doc/secure-sudo
 	install -m0644 "$ROOT/kernel/security/secure_sudo/INTEGRATION.md" \

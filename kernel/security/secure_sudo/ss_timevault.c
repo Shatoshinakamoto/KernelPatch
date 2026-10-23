@@ -31,6 +31,7 @@
 #include <linux/path.h>
 #include <linux/dcache.h>
 #include <linux/slab.h>
+#include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/mutex.h>
 #include <linux/atomic.h>
@@ -45,8 +46,10 @@
 
 #include "secure_sudo.h"
 
-#define TV_MAX_ITEMS	4096
-#define TV_MAX_TEXT	(1024 * 1024)
+/* Sized for whole-directory scans (e.g. /usr/bin + /usr/sbin + /usr/lib*):
+ * ~100 bytes a line, so 16k entries fit comfortably in 4 MiB. */
+#define TV_MAX_ITEMS	16384
+#define TV_MAX_TEXT	(4 * 1024 * 1024)
 #define SHA256_HEX	64
 
 /* Package managers denied unconditionally while the vault is engaged. */
@@ -236,7 +239,7 @@ static void tv_free(struct tv_entry *list, int count)
 		return;
 	for (i = 0; i < count; i++)
 		kfree(list[i].path);
-	kfree(list);
+	kvfree(list);
 }
 
 static struct tv_entry *tv_parse(char *text, int *out_count)
@@ -245,7 +248,7 @@ static struct tv_entry *tv_parse(char *text, int *out_count)
 	char *p = text, *line;
 	int n = 0;
 
-	list = kcalloc(TV_MAX_ITEMS, sizeof(*list), GFP_KERNEL);
+	list = kvcalloc(TV_MAX_ITEMS, sizeof(*list), GFP_KERNEL);
 	if (!list)
 		return NULL;
 
@@ -313,24 +316,24 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 	if (count > TV_MAX_TEXT)
 		return -EFBIG;
 
-	text = kmalloc(count + 1, GFP_KERNEL);
+	text = kvmalloc(count + 1, GFP_KERNEL);
 	if (!text)
 		return -ENOMEM;
 	if (copy_from_user(text, ubuf, count)) {
-		kfree(text);
+		kvfree(text);
 		return -EFAULT;
 	}
 	text[count] = '\0';
 
-	scratch = kmemdup(text, count + 1, GFP_KERNEL);
+	scratch = kvmemdup(text, count + 1, GFP_KERNEL);
 	if (!scratch) {
-		kfree(text);
+		kvfree(text);
 		return -ENOMEM;
 	}
 	new_list = tv_parse(scratch, &new_count);
-	kfree(scratch);
+	kvfree(scratch);
 	if (!new_list) {
-		kfree(text);
+		kvfree(text);
 		return -ENOMEM;
 	}
 
@@ -345,7 +348,7 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 	mutex_unlock(&tv_lock);
 
 	tv_free(old_list, old_count);
-	kfree(old_text);
+	kvfree(old_text);
 
 	*ppos = count;
 	return count;

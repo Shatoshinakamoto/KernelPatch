@@ -35,8 +35,13 @@
 #define LSM_ID_SECURE_SUDO 0x80535544ULL /* high bit set + "SSUD" */
 #endif
 
-/* Sentinel meaning "no admin GID configured" (only root counts as sudo). */
-#define SS_GID_UNSET ((u32)-1)
+/*
+ * Admin groups: members of ANY of these GIDs count as sudo users (in addition
+ * to root). The installer auto-detects every admin group on the box (sudo,
+ * wheel, admin, plus any %group granted ALL in sudoers) and loads them at boot.
+ * An empty list means root-only.
+ */
+#define SS_MAX_ADMIN_GIDS 16
 
 /* #10 network mode. The kernel only enforces the raw/packet-socket block in
  * HOST mode; the nft rules for the LAN/public modes are a userspace job. */
@@ -54,8 +59,7 @@ enum ss_net_mode {
  * added in later steps extend this struct.
  */
 struct ss_cfg {
-	/* ---- privilege model (shared by every protection) ---- */
-	u32  admin_gid;		/* members of this GID also count as sudo users */
+	/* (the admin-GID list lives behind RCU in ss_core.c, not here) */
 
 	/* ---- #1 non-sudo UID/GID switch block ---- */
 	bool block_setid;	/* deny setuid/setgid/setgroups for non-sudo */
@@ -102,6 +106,11 @@ extern const struct lsm_id ss_lsmid;
  * checked against the real, effective, fs and supplementary groups.
  */
 bool ss_cred_is_sudo(const struct cred *cred);
+
+/* Replace the admin-GID list (n may be 0 = root-only). Caller checks perms. */
+int ss_set_admin_gids(const u32 *gids, unsigned int n);
+/* Print the current list as "27,10\n" (or "unset\n") into a sysfs buffer. */
+ssize_t ss_show_admin_gids(char *buf);
 
 /* Convenience wrapper: evaluate the current task's credentials. */
 static inline bool ss_is_sudo_user(void)

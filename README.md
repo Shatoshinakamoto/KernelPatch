@@ -19,6 +19,9 @@ userspace/
   daemon/     secure-sudod        logs, cooldown kill, nft, TimeVault
   otp/        secure-sudo-otp     TOTP setup/verify, local QR, sealed secret
   config/     templates for /etc/secure_sudo/
+scripts/
+  timevault-whitelist.sh          bash TimeVault allowlist tool (scan/add/remove/list/wipe)
+  detect-admin-gids.sh            finds every admin group GID (used by install.sh)
 install/
   install.sh                      per-distro build+install (Debian/Fedora/Arch/openSUSE)
   ansible/secure_sudo.yml         YAML scaffold wrapping the installer
@@ -60,6 +63,34 @@ sudo ./install/install.sh          # builds kernel 6.12 + userspace, packages it
 sudo secure-sudo status
 sudo secure-sudo load              # push /etc/secure_sudo/* into the kernel
 ```
+
+Admin groups are detected automatically at install: every GID of `sudo`,
+`wheel`, `admin` and any `%group` / `%#gid` rule in sudoers goes into
+`admin_gid` (up to 16), so all sudo-group users count as sudo from the first
+boot. After creating a new admin group, run `sudo secure-sudo detect-admins`
+(`-n` previews without saving).
+
+## TimeVault allowlist
+
+Built into the CLI (root only), and mirrored by `scripts/timevault-whitelist.sh`
+for systems without the CLI:
+
+```sh
+sudo secure-sudo vault-allow scan /usr/bin /usr/sbin /opt/app   # every ELF / #! script, hashed
+sudo secure-sudo vault-allow scan -n /usr/local/bin              # dry run
+sudo secure-sudo vault-allow add /usr/local/bin/mytool           # single file
+sudo secure-sudo vault-allow remove /usr/local/bin/mytool
+sudo secure-sudo vault-allow list
+sudo secure-sudo vault-allow wipe                                # asks; -y to skip
+```
+
+Entries are stored as `<resolved path> <sha256>` in
+`/etc/secure_sudo/timevault_allow.conf` and pushed to the kernel immediately.
+Paths are canonicalised (symlinks become their targets, since that is what the
+kernel matches); paths containing whitespace can't be represented and are
+skipped. Re-running a scan re-hashes changed files. Limits: 16384 entries /
+4 MiB. `wipe` refuses while TimeVault is engaged unless `--force`, and nothing
+can change once the config is locked (reboot to edit).
 
 PAM wiring (cooldown + OTP) is deliberately left as a reviewed manual step —
 `install.sh` prints the exact lines — so a typo can't lock you out.

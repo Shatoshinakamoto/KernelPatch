@@ -18,6 +18,10 @@
 #include <linux/security.h>
 #include <linux/dcache.h>
 #include <linux/err.h>
+#include <linux/rcupdate.h>
+#include <linux/slab.h>
+#include <linux/sysfs.h>
+#include <linux/capability.h>
 #include <linux/lsm_hooks.h>
 
 #include "secure_sudo.h"
@@ -35,17 +39,33 @@ static struct kobject *ss_kobj;
 /* /sys/kernel/security/secure_sudo - root of the securityfs policy files. */
 static struct dentry *ss_secfs_dir;
 
-/* Does @g (a kernel gid) map to the configured admin GID number? */
-static bool kgid_is_admin(kgid_t g, u32 admin)
+struct ss_admin_gids {
+	struct rcu_head rcu;
+	unsigned int n;
+	u32 gid[SS_MAX_ADMIN_GIDS];
+};
+
+/* Admin-GID list. NULL = none configured (root-only). Readers use RCU so the
+ * credential hooks never see a half-updated list; writers hold ss_cfg_lock. */
+static struct ss_admin_gids __rcu *ss_admin;
+
+static bool kgid_in_list(kgid_t g, const struct ss_admin_gids *a)
 {
-	return from_kgid(&init_user_ns, g) == admin;
+	u32 v = from_kgid(&init_user_ns, g);
+	unsigned int i;
+
+	for (i = 0; i < a->n; i++)
+		if (a->gid[i] == v)
+			return true;
+	return false;
 }
 
 bool ss_cred_is_sudo(const struct cred *cred)
 {
-	u32 admin = READ_ONCE(ss_cfg.admin_gid);
+	const struct ss_admin_gids *a;
 	const struct group_info *gi;
 	unsigned int i;
+	bool ok = false;
 
 	if (!cred)
 		return false;
@@ -55,24 +75,75 @@ bool ss_cred_is_sudo(const struct cred *cred)
 	    uid_eq(cred->euid, GLOBAL_ROOT_UID))
 		return true;
 
-	if (admin == SS_GID_UNSET)
-		return false;
+	rcu_read_lock();
+	a = rcu_dereference(ss_admin);
+	if (!a || !a->n)
+		goto out;
 
-	/* Real, effective or fs GID equal to the admin GID. */
-	if (kgid_is_admin(cred->gid, admin) ||
-	    kgid_is_admin(cred->egid, admin) ||
-	    kgid_is_admin(cred->fsgid, admin))
-		return true;
+	/* Real, effective or fs GID in the admin list. */
+	if (kgid_in_list(cred->gid, a) || kgid_in_list(cred->egid, a) ||
+	    kgid_in_list(cred->fsgid, a)) {
+		ok = true;
+		goto out;
+	}
 
 	/* Supplementary groups. */
 	gi = cred->group_info;
 	if (gi) {
-		for (i = 0; i < gi->ngroups; i++)
-			if (kgid_is_admin(gi->gid[i], admin))
-				return true;
+		for (i = 0; i < gi->ngroups; i++) {
+			if (kgid_in_list(gi->gid[i], a)) {
+				ok = true;
+				break;
+			}
+		}
+	}
+out:
+	rcu_read_unlock();
+	return ok;
+}
+
+int ss_set_admin_gids(const u32 *gids, unsigned int n)
+{
+	struct ss_admin_gids *new = NULL, *old;
+
+	if (n > SS_MAX_ADMIN_GIDS)
+		return -E2BIG;
+	if (n) {
+		new = kzalloc(sizeof(*new), GFP_KERNEL);
+		if (!new)
+			return -ENOMEM;
+		new->n = n;
+		memcpy(new->gid, gids, n * sizeof(u32));
 	}
 
-	return false;
+	mutex_lock(&ss_cfg_lock);
+	old = rcu_dereference_protected(ss_admin, lockdep_is_held(&ss_cfg_lock));
+	rcu_assign_pointer(ss_admin, new);
+	mutex_unlock(&ss_cfg_lock);
+
+	if (old)
+		kfree_rcu(old, rcu);
+	return 0;
+}
+
+ssize_t ss_show_admin_gids(char *buf)
+{
+	const struct ss_admin_gids *a;
+	ssize_t len = 0;
+	unsigned int i;
+
+	rcu_read_lock();
+	a = rcu_dereference(ss_admin);
+	if (!a || !a->n) {
+		len = sysfs_emit(buf, "unset\n");
+	} else {
+		for (i = 0; i < a->n; i++)
+			len += sysfs_emit_at(buf, len, "%s%u", i ? "," : "",
+					     a->gid[i]);
+		len += sysfs_emit_at(buf, len, "\n");
+	}
+	rcu_read_unlock();
+	return len;
 }
 
 /* --------------------------- #16 config lock ----------------------------- */
@@ -117,9 +188,8 @@ static const struct attribute_group ss_core_group = {
 
 static int __init ss_lsm_init(void)
 {
-	/* Safe defaults: admin GID unset (root-only) until the installer sets
-	 * it; the two #1 enforcement toggles on. */
-	ss_cfg.admin_gid   = SS_GID_UNSET;
+	/* Safe defaults: no admin GIDs (root-only) until `secure-sudo load` at
+	 * boot pushes the installer-detected list; #1 enforcement toggles on. */
 	ss_cfg.block_setid  = true;
 	ss_cfg.block_userns = true;
 	ss_cfg.block_flash  = true;

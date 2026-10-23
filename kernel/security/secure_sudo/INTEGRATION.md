@@ -60,7 +60,7 @@ the installers are the next steps.
 
 | Node | Mode | Meaning |
 |------|------|---------|
-| `/sys/kernel/secure_sudo/admin_gid` | rw | GID treated as sudo (`unset` = root only) |
+| `/sys/kernel/secure_sudo/admin_gid` | rw | comma list of up to 16 GIDs treated as sudo, e.g. `27,10` (`unset` = root only); auto-detected at install |
 | `/sys/kernel/secure_sudo/block_setid` | rw | enforce #1 UID/GID switch block |
 | `/sys/kernel/secure_sudo/block_userns` | rw | gate unprivileged user namespaces |
 | `/sys/kernel/secure_sudo/block_flash` | rw | enforce #3 firmware/flash/raw-memory block |
@@ -84,7 +84,7 @@ the installers are the next steps.
 | `/sys/kernel/security/secure_sudo/node_sea_binaries` | rw (root) | #11 registered SEA/pkg binary paths |
 | `/sys/kernel/security/secure_sudo/sudo_auth` | w (root) | #8 PAM feed: `fail <uid>` / `ok <uid>` |
 | `/sys/kernel/security/secure_sudo/driver_blacklist` | rw (root) | #6 blacklisted module SHA-256 hashes and/or names |
-| `/sys/kernel/security/secure_sudo/timevault_allow` | rw (root) | #13 allowlist: `path` or `path <sha256>` |
+| `/sys/kernel/security/secure_sudo/timevault_allow` | rw (root) | #13 allowlist: `path` or `path <sha256>`, max 16384 entries / 4 MiB, whole list per single write; manage with `secure-sudo vault-allow` |
 | `/sys/kernel/secure_sudo/block_home_write` | rw | #4 confine non-sudo writes to home (opt-in) |
 | `/sys/kernel/security/secure_sudo/home_map` | rw (root) | #4 `<uid> <home-path>` per line |
 | `/sys/kernel/security/secure_sudo/home_write_allow` | rw (root) | #4 extra always-writable path prefixes |

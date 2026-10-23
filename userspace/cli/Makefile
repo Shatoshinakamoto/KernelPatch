@@ -6,8 +6,11 @@ BINDIR  ?= $(PREFIX)/bin
 
 all: secure-sudo
 
-secure-sudo: secure-sudo.c
-	$(CC) $(CFLAGS) -o $@ $<
+SRCS    = secure-sudo.c vault_allow.c detect_admins.c
+LDLIBS  += -lcrypto
+
+secure-sudo: $(SRCS) cli.h
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS) $(LDLIBS)
 
 install: secure-sudo
 	install -D -m0755 secure-sudo $(DESTDIR)$(BINDIR)/secure-sudo

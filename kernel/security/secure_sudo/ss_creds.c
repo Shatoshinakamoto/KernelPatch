@@ -26,6 +26,8 @@
 #include <linux/capability.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/lsm_hooks.h>
 
 #include "secure_sudo.h"
@@ -126,33 +128,49 @@ void __init ss_creds_init(void)
 static ssize_t admin_gid_show(struct kobject *kobj,
 			      struct kobj_attribute *attr, char *buf)
 {
-	u32 v = READ_ONCE(ss_cfg.admin_gid);
-
-	if (v == SS_GID_UNSET)
-		return sysfs_emit(buf, "unset\n");
-	return sysfs_emit(buf, "%u\n", v);
+	return ss_show_admin_gids(buf);
 }
 
+/*
+ * Accepts "unset" (root-only) or a list of numeric GIDs separated by commas
+ * and/or spaces, e.g. "27,10". The whole list is replaced atomically.
+ */
 static ssize_t admin_gid_store(struct kobject *kobj,
 			       struct kobj_attribute *attr,
 			       const char *buf, size_t count)
 {
-	u32 v;
+	u32 gids[SS_MAX_ADMIN_GIDS];
+	unsigned int n = 0;
+	char *copy, *p, *tok;
+	int ret;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	if (ss_locked())
 		return -EPERM;
 
-	/* Accept "unset" to return to root-only, or a numeric GID. */
-	if (sysfs_streq(buf, "unset")) {
-		v = SS_GID_UNSET;
-	} else if (kstrtou32(buf, 10, &v)) {
-		return -EINVAL;
-	}
+	if (sysfs_streq(buf, "unset"))
+		return ss_set_admin_gids(NULL, 0) ?: count;
 
-	WRITE_ONCE(ss_cfg.admin_gid, v);
-	return count;
+	copy = kstrndup(buf, count, GFP_KERNEL);
+	if (!copy)
+		return -ENOMEM;
+	p = strim(copy);
+	while ((tok = strsep(&p, ", \t\n"))) {
+		u32 v;
+
+		if (!*tok)
+			continue;
+		if (n >= SS_MAX_ADMIN_GIDS || kstrtou32(tok, 10, &v)) {
+			kfree(copy);
+			return n >= SS_MAX_ADMIN_GIDS ? -E2BIG : -EINVAL;
+		}
+		gids[n++] = v;
+	}
+	kfree(copy);
+
+	ret = ss_set_admin_gids(gids, n);
+	return ret ? ret : count;
 }
 
 static ssize_t block_setid_show(struct kobject *kobj,

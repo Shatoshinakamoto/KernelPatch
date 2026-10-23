@@ -7,6 +7,10 @@ ConditionPathExists=/sys/kernel/security/secure_sudo/events
 
 [Service]
 Type=simple
+# Push /etc/secure_sudo/* (admin GIDs, allowlists, knobs) into the kernel at
+# every boot; the kernel starts root-only until this runs. '-' = don't block
+# the daemon if one knob is rejected.
+ExecStartPre=-/usr/bin/secure-sudo load
 ExecStart=/usr/sbin/secure-sudod
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
