@@ -20,4 +20,6 @@ secure_sudo-y := ss_core.o \
 		 ss_cooldown.o \
 		 ss_driver.o \
 		 ss_timevault.o \
-		 ss_home.o
+		 ss_home.o \
+		 ss_binvault.o \
+		 ss_radio.o

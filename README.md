@@ -53,6 +53,8 @@ install/
 | 12 | Restrict exec/PROT_EXEC mmap from /tmp, /var/tmp, /dev/shm |
 | 13 | TimeVault exec allowlist + package-manager deny + quarantine |
 | 16 | One-way config lock until reboot (TimeVault latches it); blocks module loads / kexec / kernel-memory patching while locked |
+| 17 | **BinaryVault**: freeze every executable + shared library against write/truncate/unlink/rename/hardlink/chmod/xattr — for all UIDs incl. root (anti-tamper/anti-persistence). Effective at boot; updates via a `secure_sudo.binvault_maint=1` maintenance reboot |
+| 19 | **RadioGuard**: Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch. Refuses the wireless/BT core modules at load, denies AF_BLUETOOTH sockets, and denies `/dev/rfkill` writes. Drive with `secure-sudo radio …` |
 
 (#4 is implemented with `file_open` + the `path_*` hooks — both source versions
 had built it on a non-existent `path_permission` hook. It is opt-in because it
@@ -71,9 +73,14 @@ sudo secure-sudo load              # push /etc/secure_sudo/* into the kernel
 sudo secure-sudo settings          # list every configurable setting
 ```
 
+Plus DISA **STIG** tooling (#18): `scripts/stig-harden.sh` scans and optionally
+remediates to the STIG baseline, and the installer honours `STIG=scan` /
+`STIG=remediate`. The kernel→STIG control mapping and real before/after scan
+results are in [docs/STIG.md](docs/STIG.md).
+
 Full documentation is under [`docs/`](docs/): [commands](docs/COMMANDS.md),
-[configuration](docs/CONFIGURATION.md), [scripts](docs/SCRIPTS.md) and the
-[security review](docs/SECURITY_REVIEW.md).
+[configuration](docs/CONFIGURATION.md), [scripts](docs/SCRIPTS.md), the
+[security review](docs/SECURITY_REVIEW.md) and the [STIG mapping](docs/STIG.md).
 
 Admin groups are detected automatically at install: every GID of `sudo`,
 `wheel`, `admin` and any `%group` / `%#gid` rule in sudoers goes into

@@ -252,6 +252,9 @@ static int ss_node_bprm(struct linux_binprm *bprm)
 	cur->pending = cur->flags;
 	cur->pending_valid = 1;
 
+	/* Step 1: resolve the image being exec'd. For a task NOT yet marked as a
+	 * node descendant an error is harmless (allow); for a marked one it is a
+	 * deny, since a child we cannot name is a child we cannot vet. */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
 		return marked ? -ENOMEM : 0;	/* fail closed for marked tasks */
@@ -262,6 +265,9 @@ static int ss_node_bprm(struct linux_binprm *bprm)
 	}
 	base = kbasename(resolved);
 
+	/* Step 2: an unmarked task - decide only whether THIS exec makes it a node
+	 * runtime, and if so set the pending mark. Marking is never a denial, so
+	 * there is nothing to block here. */
 	if (!marked) {
 		/* Any node-looking image gets marked; marking is never unsafe. */
 		if (!strcmp(base, "node") || !strcmp(base, "nodejs") ||
@@ -270,13 +276,20 @@ static int ss_node_bprm(struct linux_binprm *bprm)
 		goto out;
 	}
 
+	/* Step 3: a marked task (a node process) is spawning a child. node
+	 * re-executing node (workers, --inspect restarts) stays marked and is
+	 * allowed. */
 	if (is_node_runtime(resolved))
 		goto out;			/* node re-exec'ing node: stays marked */
 
+	/* Step 4: a child explicitly allowlisted (node_allowed_children) runs, and
+	 * sheds the mark so its own descendants are unconstrained. */
 	if (child_allowed(resolved, base)) {
 		cur->pending &= ~SS_TASK_NODE;	/* allowed child: run free */
 		goto out;
 	}
+	/* Step 5: otherwise a node process is trying to exec an un-allowlisted
+	 * program (the RCE-to-shell pivot this guard exists to stop) -> deny. */
 
 	pr_warn_ratelimited("node guard: UID %u blocked child exec %s\n",
 			    from_kuid(&init_user_ns, current_uid()), resolved);

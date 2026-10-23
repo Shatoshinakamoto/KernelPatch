@@ -151,11 +151,17 @@ static int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
 	char *buf, *resolved;
 	int ret = 0;
 
+	/* Step 1: this hook fires for several kinds of kernel read; only module
+	 * loads (finit_module) concern the driver blacklist. */
 	if (id != READING_MODULE)
 		return 0;
+	/* Step 2: fast path - no name-based entries configured. (Hash-based
+	 * entries are matched later, on the bytes actually loaded.) */
 	if (!READ_ONCE(drv_nname))
 		return 0;
 
+	/* Step 3: resolve the .ko path and match its basename against the name
+	 * blacklist. Unresolvable -> deny (fail closed). */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;			/* fail closed */

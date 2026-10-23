@@ -11,9 +11,10 @@ apply to an LSM that parses untrusted input and makes exec/privilege
 decisions.
 
 Every issue below was **fixed in this tree**, and each fix was then re-reviewed
-for issues of its own (second column). The LSM compiles cleanly with `-Werror`
-against real 6.11 and 6.14 kernel header trees; the CLI, daemon and PAM modules
-compile cleanly with `-Wall -Wextra`.
+for issues of its own. Findings #15 and #16 are the second-pass reviews of the new
+BinaryVault (#17) and RadioGuard (#19) features. The full LSM (16 `.c` files, including BinaryVault and RadioGuard) compiles
+cleanly with `-Werror` against real 6.11 kernel header trees; the CLI, daemon
+and PAM modules compile cleanly with `-Wall -Wextra`.
 
 Scope note: this review hardens the implementation. It does not change the
 project's threat model — several protections (home-write, TimeVault strict
@@ -229,6 +230,96 @@ reuse.
   **stdin**, never argv, so it cannot leak through `ps`/`/proc` (CWE-214); the
   OTP helper compares with constant-time `CRYPTO_memcmp` (CWE-208) and wipes
   the seed from an `mlock`'d buffer after use.
+
+### 15. BinaryVault second-pass review (#17) — SI-7 / CM-5
+
+**New feature.** BinaryVault (`ss_binvault.c`) freezes every executable and
+shared library against modification, for all UIDs including root, so on-disk
+code cannot be tampered with to gain persistence. It was reviewed the same way
+as the rest of the tree:
+
+* **Hard-link alias to a no-exec-bit library (CWE-367 / CWE-706).** A library
+  is classified as protected partly by *location* (a `.so` under a library
+  tree). A privileged attacker could hardlink such a library into a writable
+  directory — where the location test no longer matches — and write through
+  the alias to mutate the real inode. **Fixed** by a `path_link` hook that
+  refuses to create any new hard link whose source is a protected binary, so no
+  second, unprotected name to a frozen inode can be made while engaged.
+  Executables are caught through any name regardless, because the execute bit
+  is an inode property.
+* **chmod downgrade (CWE-693).** Stripping a binary's execute bit could slip a
+  later rewrite past the classifier. **Covered** by the `path_chmod` hook,
+  which gates on the *current* mode: a file that is a binary now cannot be
+  chmod'd at all while engaged.
+* **xattr / capability re-labelling (CWE-732).** File capabilities and IMA/EVM
+  labels live in extended attributes, so writing them changes what a binary
+  *is* without changing its bytes (e.g. `setcap cap_setuid+ep`). **Covered** by
+  `inode_setxattr`/`inode_removexattr` hooks.
+* **Atomic replace via rename (CWE-367).** The standard dpkg/rpm "write new
+  file, rename into place" swap. **Covered**: `path_rename` gates both the
+  source and the destination, so renaming *over* an existing binary is refused.
+* **Fail-closed.** Every hook denies on an unresolvable or truncated path, out
+  of memory, or any state it cannot classify — consistent with finding #3.
+* **Update path is not forgeable.** The only way to open the vault is the
+  read-only boot parameter `secure_sudo.binvault_maint=1` (0444, settable only
+  on the kernel command line), not a package-manager heuristic that a process
+  could spoof. The toggle knob is `0600` and frozen by the #16 lock.
+
+Residual (documented, in scope by design): a hard link that *predates* boot,
+and mounting a filesystem *over* a system directory, are left to #13 TimeVault,
+which pins each allowed file by SHA-256 and so detects changed bytes or an
+overlay regardless of path. BinaryVault freezes existing files; deciding
+whether a *new* program may execute is #2/#1b/#12/#13's job.
+
+
+### 16. RadioGuard second-pass review (#19) — AC-18 / SC-40 / CM-7
+
+**New feature.** RadioGuard (`ss_radio.c`) disables Wi-Fi/Bluetooth and offers
+an `ethernet_only` master switch. It was reviewed for the ways a wireless
+lockdown is usually defeated:
+
+* **Config flag ≠ enforcement.** A knob that only userspace honours is bypassed
+  by not asking userspace. RadioGuard enforces in the kernel across three
+  independent layers so no single trick re-enables a radio: the driver stack's
+  **core module is refused at load** (`kernel_read_file`/READING_MODULE — a
+  driver cannot run without `cfg80211`/`bluetooth`), **AF_BLUETOOTH sockets are
+  denied** (`socket_create`), and **`/dev/rfkill` writes are denied**
+  (`file_open` FMODE_WRITE) so a soft-blocked radio cannot be un-blocked.
+* **Module-name evasion (CWE-41).** The load check resolves the module's path
+  with the chroot-safe `ss_file_path()` and matches the basename with the
+  `.ko`/`.ko.zst` suffix stripped and `-`→`_` normalised, so `cfg-80211.ko`,
+  `cfg80211.ko.zst` and a path-games copy all match the same core name.
+* **rfkill match precision.** The `/dev/rfkill` deny matches the fully resolved
+  absolute path exactly (not a substring), so an attacker cannot dodge it with
+  a look-alike name, and cannot satisfy it with a chrooted `/dev/rfkill` (the
+  path is resolved against the real mount namespace root).
+* **Honest scope (documented, not papered over).** If the wireless drivers are
+  built *into* the kernel there is no module load to intercept (layer 1 is
+  moot) — the real control there is rfkill (layer 3) plus not compiling those
+  drivers; and enabling a knob does not tear down an already-resident driver
+  this boot. On a configured box `secure-sudo load` runs at early boot so the
+  module is denied before it can load; a running box needs `rfkill block` or a
+  reboot. `init_module(2)` with a raw buffer carries no name, so the backstop
+  for a locked appliance is #16's `lock_modules` (refuses all module loads).
+* **Same gate discipline as the rest of the tree.** All three knobs are
+  `0600`, go through `ss_may_admin()`, and are refused once the config lock
+  latches (CM-5), so the lockdown itself cannot be toggled off on a locked box.
+
+
+### 17. Command blacklist used an uninitialised generation (CWE-457/CWE-908) — CM-5
+
+**Found during the v5 full-source comment pass.** `ss_bprm_check_security()`
+compared the exec'd inode's generation (`bl_list[i].gen == gen`) but never
+assigned `gen` from `inode->i_generation`, so the comparison used an
+uninitialised stack value. Effect: the robust device+inode+**generation** match
+(the half of #2 that catches a *renamed* blacklisted binary) almost never fired
+- it matched only when the garbage stack value happened to equal the stored
+generation. Path matching still worked, but the inode match was effectively
+dead. **Fixed** by reading `gen = inode->i_generation;` alongside `dev`/`ino`
+before the match. (It slipped past `-Werror` because the value is read across a
+`kmalloc`/`mutex_lock`, which defeats the compiler's uninitialised-use
+analysis.)
+
 
 ---
 

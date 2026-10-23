@@ -73,16 +73,26 @@ static bool gid_changed(const struct cred *new, const struct cred *old)
 static int ss_task_fix_setuid(struct cred *new, const struct cred *old,
 			      int flags)
 {
+	/* This hook fires on the credential-changing path of setuid()/setreuid()/
+	 * setresuid() etc., giving us the proposed (new) and current (old) creds
+	 * before the change commits. Decision, cheapest test first:
+	 * Step 1: feature off -> allow (one lockless read on the hot path). */
 	if (!READ_ONCE(ss_cfg.block_setid))
 		return 0;
+	/* Step 2: sudo users (root or an admin GID) are never restricted. We test
+	 * the OLD creds: the question is whether the actor was privileged, not
+	 * what they are trying to become. */
 	if (ss_cred_is_sudo(old))
 		return 0;
+	/* Step 3: allow a no-op that changes none of the four UIDs (programs call
+	 * setuid() to their current uid routinely). Only a real UID transition by
+	 * a non-sudo user is the attack we block. */
 	if (!uid_changed(new, old))
 		return 0;
 
 	pr_warn_ratelimited("non-sudo UID %u denied setuid change\n",
 			    from_kuid(&init_user_ns, old->uid));
-	return -EPERM;
+	return -EPERM;				/* deny the identity switch */
 }
 
 static int ss_task_fix_setgid(struct cred *new, const struct cred *old,
@@ -177,21 +187,31 @@ static int ss_bprm_creds_from_file(struct linux_binprm *bprm,
 				   const struct file *file)
 {
 	char *buf, *p;
-	int ret = -EPERM;
+	int ret = -EPERM;			/* default answer is DENY */
 
+	/* Step 1: feature off -> allow. */
 	if (!READ_ONCE(ss_cfg.block_setid_exec))
 		return 0;
+	/* Step 2: sudo users are unrestricted. */
 	if (ss_cred_is_sudo(current_cred()))
 		return 0;
+	/* Step 3: only care about execs that would RAISE privilege (euid/egid up
+	 * or a capability superset) - running an ordinary binary is fine. */
 	if (!exec_gains_privilege(bprm))
 		return 0;
 
+	/* Step 4: a privilege-gaining exec by a non-sudo user is allowed only if
+	 * this exact binary is on the setid_exec_allow list. Resolve the path
+	 * (chroot-safe) and look it up. */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return -ENOMEM;			/* fail closed */
+		return -ENOMEM;			/* fail closed: no memory -> deny */
 	p = ss_file_path(&file->f_path, buf, PATH_MAX);
+	/* d_unlinked() guard: refuse a path that has been unlinked, so an
+	 * allowlisted name cannot be deleted-and-recreated to point the match at
+	 * a different inode between resolution and use. */
 	if (!IS_ERR(p) && !d_unlinked(file->f_path.dentry) && sx_allowed(p))
-		ret = 0;
+		ret = 0;			/* on the allowlist -> permit */
 	if (ret) {
 		pr_warn_ratelimited("non-sudo UID %u denied privilege-gaining exec %s\n",
 				    from_kuid(&init_user_ns, current_uid()),

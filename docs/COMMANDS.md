@@ -81,6 +81,7 @@ survives a reboot. Refused while locked, or if the kernel rejects the value
 sudo secure-sudo set block_userns 1
 sudo secure-sudo set max_ram_percent 85
 sudo secure-sudo set block_setid_exec 1
+sudo secure-sudo set binaryvault 1       # freeze all binaries (see CONFIGURATION.md #17)
 ```
 
 Knob names are exactly the keys listed by `settings` (and documented in
@@ -95,6 +96,7 @@ Show a policy list's **current kernel contents** (not the on-disk file).
 ```sh
 sudo secure-sudo list blacklist
 sudo secure-sudo list setid_exec_allow
+sudo secure-sudo list binvault_allow
 ```
 
 To change a policy list, edit its file under `/etc/secure_sudo/` and run
@@ -111,6 +113,26 @@ raw/packet-socket block is in the kernel.
 ```sh
 sudo secure-sudo net host
 ```
+
+## `secure-sudo radio <wifi|bluetooth|ethernet-only> <on|off>`
+
+RadioGuard (#19): toggle the wireless radios. The sense is **radio off = radio
+disabled**: `radio wifi off` turns Wi-Fi off (sets `block_wifi=1`), `radio wifi
+on` re-allows it. `ethernet-only` is the master switch that turns both off at
+once. Each change is written to the kernel and persisted, and is refused once
+the config is locked. `radio status` prints the three live values. `bt` is an
+alias for `bluetooth`.
+
+```sh
+sudo secure-sudo radio wifi off            # disable Wi-Fi
+sudo secure-sudo radio bluetooth off       # disable Bluetooth
+sudo secure-sudo radio ethernet-only on    # disable BOTH (wired only)
+sudo secure-sudo radio status              # show current state
+```
+
+Equivalent generic form: `sudo secure-sudo set block_wifi 1`,
+`set block_bluetooth 1`, `set ethernet_only 1`. What each knob enforces in the
+kernel is in [CONFIGURATION.md](CONFIGURATION.md#radioguard--wi-fi--bluetooth--ethernet-only-19).
 
 ## `secure-sudo timevault <on|off>`
 
@@ -210,4 +232,18 @@ sudo secure-sudo set block_setid_exec 1
 sudo secure-sudo vault-allow scan /usr/bin /usr/sbin /usr/lib /usr/lib64
 sudo secure-sudo timevault on      # engages + latches the lock
 # (equivalently: sudo secure-sudo lock)
+
+# Freeze every binary against tampering (anti-persistence); update via a
+# maintenance reboot with secure_sudo.binvault_maint=1 (see CONFIGURATION.md #17)
+sudo secure-sudo set binaryvault 1
+
+# Lock the box to wired Ethernet only (disables Wi-Fi + Bluetooth)
+sudo secure-sudo radio ethernet-only on
+
+# Scan / harden to the DISA STIG baseline (reports in /var/log/secure_sudo/stig)
+sudo /usr/libexec/secure-sudo/stig-harden.sh --scan
 ```
+
+STIG scanning and remediation are driven by `stig-harden.sh`, documented in
+[SCRIPTS.md](SCRIPTS.md#stig-harden) with the control mapping and real results
+in [STIG.md](STIG.md).

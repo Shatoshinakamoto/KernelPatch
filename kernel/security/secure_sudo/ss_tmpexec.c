@@ -121,23 +121,31 @@ static int tmp_check(const struct path *path, const char *what, bool is_mmap)
 	char *buf, *p;
 	int ret = 0;
 
+	/* Step 1: feature off -> allow. */
 	if (!READ_ONCE(ss_cfg.block_tmp_exec))
 		return 0;
+	/* Step 2: sudo users are unrestricted. */
 	if (ss_is_sudo_user())
 		return 0;
+	/* Step 3: a PROT_EXEC *mapping* of a memfd is how legitimate JITs run
+	 * generated code, so exempt it - but only for mmap/mprotect, never for an
+	 * actual exec() of a memfd (is_mmap is false there, so a fileless
+	 * memfd-exec still falls through to the checks below and is blocked). */
 	if (is_mmap && is_memfd(path))
 		return 0;
 
+	/* Step 4: resolve the target path (chroot-safe). */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
-		return -ENOMEM;			/* fail closed */
+		return -ENOMEM;			/* fail closed: no memory -> deny */
 	p = ss_file_path(path, buf, PATH_MAX);
 	if (IS_ERR(p)) {
-		ret = -EPERM;			/* fail closed */
+		ret = -EPERM;			/* fail closed: unresolvable -> deny */
 		p = "(unresolvable path)";
-	} else if ((under_tmp_tree(p) || (tmpfs_rule && on_tmpfs(path))) &&
-		   !path_allowed(p)) {
-		ret = -EPERM;
+	} else if ((under_tmp_tree(p) ||		/* in /tmp,/var/tmp,/dev/shm */
+		    (tmpfs_rule && on_tmpfs(path))) &&	/* or any tmpfs, if strict */
+		   !path_allowed(p)) {			/* and not on the allowlist */
+		ret = -EPERM;			/* deny exec from a scratch tree */
 	}
 
 	if (ret)

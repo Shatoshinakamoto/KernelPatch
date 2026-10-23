@@ -108,11 +108,17 @@ static int home_check(const char *path, const char *what)
 {
 	uid_t uid;
 
+	/* Step 1: feature off -> allow. */
 	if (!READ_ONCE(ss_cfg.block_home_write))
 		return 0;
+	/* Step 2: sudo users write anywhere. */
 	if (ss_is_sudo_user())
 		return 0;
 
+	/* Step 3: permit only if the target is inside this uid's own home, one of
+	 * the always-writable scratch/device trees, or the admin allowlist
+	 * (write_allowed covers all three). Any other write by a non-sudo user is
+	 * denied - this is the confinement. */
 	uid = from_kuid(&init_user_ns, current_uid());
 	if (write_allowed(path, uid))
 		return 0;

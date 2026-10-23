@@ -85,6 +85,45 @@ sudo /usr/libexec/secure-sudo/detect-admin-gids.sh --apply
 
 Caps at 16 GIDs (the kernel limit); extras are reported and ignored.
 
+## `scripts/stig-harden.sh` {#stig-harden}
+
+Run a DISA STIG (or the closest hardening baseline the distro actually ships)
+OpenSCAP evaluation on the host, and optionally apply the generated
+remediation. Installed to `/usr/libexec/secure-sudo/stig-harden.sh`. Auto-
+detects the distro, installs `oscap` + SCAP Security Guide content if missing,
+picks the right datastream + profile, and writes timestamped HTML + XML reports
+to `/var/log/secure_sudo/stig/`. Full context, the kernel→STIG control mapping,
+and the real before/after results are in [STIG.md](STIG.md).
+
+```
+stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
+               [--list-profiles] [--outdir <dir>] [--yes]
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--scan` *(default)* | Scan only; produce reports. Read-only, safe anytime. |
+| `--remediate` | Scan, apply the generated bash fixes, then re-scan. Asks for confirmation unless `--yes`. Rewrites PAM/password/banner/audit/permission policy — do it in a maintenance window with a root shell open. |
+| `--profile <id>` | Force a specific XCCDF profile (see `--list-profiles`). |
+| `--datastream <f>` | Force a specific SSG datastream file. |
+| `--list-profiles` | List the profiles in the chosen datastream and exit. |
+| `--outdir <dir>` | Report directory (default `/var/log/secure_sudo/stig`). |
+| `--yes`, `-y` | Do not prompt before remediating. |
+
+Profile selection prefers the DISA STIG profile and falls back, in order, to
+CIS Level 2 → ANSSI high → the standard profile, announcing which it chose.
+STIG profiles exist (SSG 0.1.78) for RHEL 8/9/10, Oracle Linux 9, SLE 15 and
+Ubuntu 20.04/22.04/24.04; other distros use the fallback.
+
+```sh
+sudo /usr/libexec/secure-sudo/stig-harden.sh --scan          # read-only scan
+sudo /usr/libexec/secure-sudo/stig-harden.sh --list-profiles # what's available
+sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate     # scan+fix+rescan
+```
+
+The installer can run it automatically: `sudo STIG=scan ./install/install.sh`
+or `STIG=remediate` (opt-in; off by default).
+
 ---
 
 ## `install/install.sh`
@@ -105,6 +144,7 @@ It takes no positional arguments; a few environment variables tune it:
 | `KVER` | `6.12.48` | Kernel.org 6.12 LTS point release to fetch and build. |
 | `JOBS` | `nproc` | Parallel build jobs. |
 | `BUILD_ROOT` | `/usr/src/secure_sudo-build` | Where the kernel is fetched and built (root-owned, never world-writable `/tmp`). |
+| `STIG` | *(unset)* | `scan` runs a STIG scan after install; `remediate` scans, applies fixes and re-scans. Unset = skip. Reports land in `/var/log/secure_sudo/stig/`. See [STIG.md](STIG.md). |
 
 What it does, in order: detect distro → install build deps → fetch kernel
 `$KVER` → graft the LSM into `security/secure_sudo/` and register it in Kconfig

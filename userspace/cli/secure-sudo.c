@@ -57,6 +57,10 @@ static const struct knob knobs[] = {
 	{ "block_home_write",     "block_home_write" },
 	{ "timevault_strict_mmap","timevault_strict_mmap" },
 	{ "lock_modules",         "lock_modules" },
+	{ "binaryvault",          "binaryvault" },
+	{ "block_wifi",           "block_wifi" },
+	{ "block_bluetooth",      "block_bluetooth" },
+	{ "ethernet_only",        "ethernet_only" },
 };
 
 /* policy list  config file  ->  securityfs file */
@@ -75,6 +79,7 @@ static const struct listmap lists[] = {
 	{ "timevault_allow.conf",       "timevault_allow" },
 	{ "home_map.conf",              "home_map" },
 	{ "home_write_allow.conf",      "home_write_allow" },
+	{ "binvault_allow.conf",        "binvault_allow" },
 };
 
 static const struct listmap *find_list(const char *name)
@@ -393,6 +398,66 @@ static int cmd_status(void)
 	snprintf(path, sizeof(path), SYSFS "/lock");
 	printf("%-24s ", "lock");
 	if (cat_file(path) != 0) printf("(unavailable)\n");
+	/* #17: whether THIS boot has BinaryVault open for maintenance. */
+	snprintf(path, sizeof(path), SYSFS "/binvault_maint");
+	printf("%-24s ", "binvault_maint");
+	if (cat_file(path) != 0) printf("(unavailable)\n");
+	return 0;
+}
+
+/*
+ * `secure-sudo radio <wifi|bluetooth|ethernet-only|status> [on|off]`
+ *
+ * Friendly wrapper over the block_wifi / block_bluetooth / ethernet_only
+ * knobs. Note the sense: "radio wifi off" means turn the RADIO off, i.e. set
+ * block_wifi=1; "radio wifi on" re-enables it (block_wifi=0). ethernet-only is
+ * the master switch (ethernet_only knob). Each change goes to the kernel first
+ * and is persisted only if the kernel accepts it, exactly like `set`.
+ */
+static int cmd_radio(int argc, char **argv)
+{
+	const char *knob;
+	const char *val;
+
+	if (argc == 1 && !strcmp(argv[0], "status")) {
+		/* Show the three live values. */
+		char path[256];
+		const char *names[] = { "block_wifi", "block_bluetooth",
+					"ethernet_only" };
+		size_t i;
+		for (i = 0; i < 3; i++) {
+			snprintf(path, sizeof(path), SYSFS "/%s", names[i]);
+			printf("%-18s ", names[i]);
+			if (cat_file(path) != 0)
+				printf("(unavailable)\n");
+		}
+		return 0;
+	}
+	if (argc != 2) {
+		fprintf(stderr,
+			"usage: secure-sudo radio <wifi|bluetooth|ethernet-only> <on|off>\n"
+			"       secure-sudo radio status\n"
+			"  (\"off\" turns the radio OFF; \"on\" allows it)\n");
+		return 2;
+	}
+
+	if      (!strcmp(argv[0], "wifi"))          knob = "block_wifi";
+	else if (!strcmp(argv[0], "bluetooth"))     knob = "block_bluetooth";
+	else if (!strcmp(argv[0], "bt"))            knob = "block_bluetooth";
+	else if (!strcmp(argv[0], "ethernet-only")) knob = "ethernet_only";
+	else if (!strcmp(argv[0], "ethernet_only")) knob = "ethernet_only";
+	else { fprintf(stderr, "secure-sudo: unknown radio '%s'\n", argv[0]); return 2; }
+
+	/* radio off => block = 1; radio on => block = 0. */
+	if      (!strcmp(argv[1], "off")) val = "1";
+	else if (!strcmp(argv[1], "on"))  val = "0";
+	else { fprintf(stderr, "secure-sudo: radio value must be on|off\n"); return 2; }
+
+	if (set_knob(knob, val) != 0)
+		return 1;
+	if (persist_knob(knob, val) != 0)
+		fprintf(stderr, "secure-sudo: set live, but failed to persist '%s'\n", knob);
+	printf("secure-sudo: %s %s (%s=%s)\n", argv[0], argv[1], knob, val);
 	return 0;
 }
 
@@ -426,6 +491,7 @@ static void usage(void)
 "  set <knob> <value>   set a scalar knob and persist it to the config\n"
 "  list <name>          show a policy list's current kernel contents\n"
 "  net <mode>           monitor | host | lan-only | public-only\n"
+"  radio <w|bt|ethernet-only> <on|off>   toggle Wi-Fi/Bluetooth (off = radio off)\n"
 "  timevault <on|off>   engage/disengage TimeVault lockdown\n"
 "  lock                 lock the config until reboot (irreversible)\n"
 "  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
@@ -484,6 +550,8 @@ int main(int argc, char **argv)
 		persist_knob("timevault_enabled", v);
 		return 0;
 	}
+	if (!strcmp(argv[1], "radio"))
+		return cmd_radio(argc - 2, argv + 2) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "vault-allow"))
 		return cmd_vault_allow(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "detect-admins"))

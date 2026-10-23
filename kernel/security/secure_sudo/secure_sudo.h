@@ -100,6 +100,14 @@ struct ss_cfg {
 
 	/* ---- #4 home write-restriction ---- */
 	bool block_home_write;		/* confine non-sudo writes to home + allow */
+
+	/* ---- #17 BinaryVault: freeze executables & libraries (all UIDs) ---- */
+	bool binaryvault;
+
+	/* ---- #19 RadioGuard: wireless lockdown (Ethernet-only) ---- */
+	bool block_wifi;	/* keep Wi-Fi off */
+	bool block_bluetooth;	/* keep Bluetooth off */
+	bool ethernet_only;	/* master switch: keep BOTH off */
 };
 
 extern struct ss_cfg ss_cfg;
@@ -268,5 +276,14 @@ int  ss_timevault_secfs(struct dentry *dir);
 void ss_home_init(void);
 int  ss_home_sysfs(struct kobject *kobj);
 int  ss_home_secfs(struct dentry *dir);
+
+/* #17 BinaryVault: file/path/xattr hooks early; knob + allowlist late. */
+void ss_binvault_init(void);
+int  ss_binvault_sysfs(struct kobject *kobj);
+int  ss_binvault_secfs(struct dentry *dir);
+
+/* #19 RadioGuard: module-load/socket/file hooks early; knobs late. */
+void ss_radio_init(void);
+int  ss_radio_sysfs(struct kobject *kobj);
 
 #endif /* _SECURITY_SECURE_SUDO_H */

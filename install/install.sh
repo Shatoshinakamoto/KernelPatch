@@ -270,6 +270,8 @@ build_install_userspace() {
 		/usr/libexec/secure-sudo/timevault-whitelist.sh
 	install -D -m0755 "$ROOT/scripts/detect-admin-gids.sh" \
 		/usr/libexec/secure-sudo/detect-admin-gids.sh
+	install -D -m0755 "$ROOT/scripts/stig-harden.sh" \
+		/usr/libexec/secure-sudo/stig-harden.sh
 
 	mkdir -p /usr/share/doc/secure-sudo
 	install -m0644 "$ROOT/kernel/security/secure_sudo/INTEGRATION.md" \
@@ -301,6 +303,26 @@ PAM modules are installed in: $SECDIR
 EOF
 }
 
+# Optional DISA STIG hardening. OFF unless the operator opts in, because it
+# rewrites PAM/password/banner/audit policy and must be done deliberately.
+#   STIG=scan       -> scan only, write reports (recommended first pass)
+#   STIG=remediate  -> scan, apply the generated fixes, re-scan
+# Either way reports land in /var/log/secure_sudo/stig/. See docs/STIG.md.
+run_stig_hardening() {
+	case "${STIG:-}" in
+	scan)
+		log "running STIG scan (STIG=scan); reports -> /var/log/secure_sudo/stig"
+		bash "$ROOT/scripts/stig-harden.sh" --scan || 			warn "STIG scan returned non-zero" ;;
+	remediate)
+		log "running STIG scan+remediate (STIG=remediate)"
+		bash "$ROOT/scripts/stig-harden.sh" --remediate --yes || 			warn "STIG remediation returned non-zero" ;;
+	""|no|off|0)
+		log "skipping STIG hardening (set STIG=scan or STIG=remediate to enable)" ;;
+	*)
+		warn "unknown STIG='$STIG' (use scan|remediate); skipping" ;;
+	esac
+}
+
 main() {
 	detect_distro
 	install_deps
@@ -311,6 +333,7 @@ main() {
 	set_sig_enforce_cmdline
 	build_install_userspace
 	secure-sudo load || warn "could not load policy yet (reboot into the new kernel first)"
+	run_stig_hardening
 	print_pam_guidance
 	log "DONE. Reboot into the new kernel to activate the secure_sudo LSM."
 }

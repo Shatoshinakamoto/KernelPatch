@@ -180,8 +180,9 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 	const char *base;
 	struct tv_entry *e;
 	char *buf, *resolved;
-	int ret = -EPERM;
+	int ret = -EPERM;		/* default DENY: the vault is deny-by-default */
 
+	/* Step 0: vault not engaged -> no restriction. */
 	if (!READ_ONCE(ss_cfg.timevault_enabled))
 		return 0;
 
@@ -189,6 +190,7 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 	if (!buf)
 		return -EPERM;		/* fail CLOSED: vault is a deny-all state */
 
+	/* Step 1: resolve the binary's path; an unresolvable one is denied. */
 	resolved = ss_file_path(&file->f_path, buf, PATH_MAX);
 	if (IS_ERR(resolved)) {
 		tv_deny("(unresolvable path)", "no path");
@@ -196,6 +198,9 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 	}
 	base = kbasename(resolved);
 
+	/* Step 2: hard denials that apply no matter what the allowlist says -
+	 * package managers (they would install new code) and running the dynamic
+	 * loader directly (ld.so /path/to/x sidesteps a per-binary check). */
 	if (is_pkg_manager(base)) {
 		tv_deny(resolved, "package manager");
 		goto out;
@@ -204,11 +209,14 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 		tv_deny(resolved, "direct dynamic-loader exec");
 		goto out;
 	}
+	/* Step 3: refuse an unlinked file - its name no longer pins its inode. */
 	if (d_unlinked(file->f_path.dentry)) {
 		tv_deny(resolved, "file unlinked");
 		goto out;
 	}
 
+	/* Step 4: the binary must be on the allowlist. Copy its pinned hash out
+	 * under the lock so we can release it before the expensive hashing. */
 	mutex_lock(&tv_lock);
 	e = tv_find_locked(resolved);
 	if (e)
@@ -219,6 +227,10 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 		goto out;
 	}
 
+	/* Step 5: integrity preconditions before we even hash - the file must be
+	 * root-owned and not group/world-writable (else a non-root user could
+	 * have altered it), and not currently open for writing (a writer could
+	 * change the bytes after we hash them: a TOCTOU guard). */
 	if (!uid_eq(inode->i_uid, GLOBAL_ROOT_UID) || (inode->i_mode & 0022)) {
 		tv_deny(resolved, "not root-owned or group/world-writable");
 		goto out;
@@ -227,11 +239,13 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 		tv_deny(resolved, "open for writing");
 		goto out;
 	}
+	/* Step 6: the decisive check - the file's actual SHA-256 must equal the
+	 * hash pinned in the allowlist. Only then permit the exec. */
 	if (ss_sha256_file(file, got) != 0 || strcasecmp(got, want_hash) != 0) {
 		tv_deny(resolved, "hash mismatch");
 		goto out;
 	}
-	ret = 0;
+	ret = 0;			/* all checks passed -> permit */
 out:
 	kfree(buf);
 	return ret;

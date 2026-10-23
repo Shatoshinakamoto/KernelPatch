@@ -99,6 +99,53 @@ TimeVault keys:
 | `vault_action` | `quarantine` | `quarantine` (zip aside, keep evidence) or `wipe` (delete) a new/changed file found while engaged. |
 | `vault_watch` | `/etc,/usr/local/bin,/opt,/usr/local/sbin` | Comma list of trees the daemon scans while engaged. |
 
+### BinaryVault (#17)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `binaryvault` | `0` | Freeze **every executable and shared library** on the machine. While on, no write, truncate, delete, rename-over, hardlink, chmod or xattr change to a binary is allowed for **anyone, root included** — the anti-tamper / anti-persistence control. `secure-sudo load` makes it effective at every boot, so a configured box comes up with binaries already frozen. Off by default; review the update procedure before enabling. |
+
+Because the vault applies to root too, you cannot write a system binary at
+runtime once it is on. To apply package upgrades you reboot into a maintenance
+window: add the read-only boot parameter
+
+```
+secure_sudo.binvault_maint=1
+```
+
+to the kernel command line (a GRUB one-shot is ideal), run your package
+upgrade, then reboot normally. There is deliberately no runtime way to open the
+vault — that is what makes it tamper-proof. `secure-sudo status` shows
+`binvault_maint` = 1 during such a boot. Genuinely self-updating software goes
+in `binvault_allow.conf` instead. Full rationale and the second-pass review are
+in [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#15) and the file header of
+`ss_binvault.c`.
+
+### RadioGuard — Wi-Fi / Bluetooth / Ethernet-only (#19)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `block_wifi` | `0` | `1` keeps Wi-Fi off. |
+| `block_bluetooth` | `0` | `1` keeps Bluetooth off. |
+| `ethernet_only` | `0` | Master switch: `1` keeps **both** radios off regardless of the two keys above — the one-line "wired only" setting. |
+
+Effective state is the OR of the specific key and `ethernet_only`, so
+`ethernet_only=1` alone locks the box to Ethernet. Enforcement is in-kernel and
+layered: (1) the Wi-Fi/Bluetooth **core modules are refused at load**
+(`cfg80211`/`mac80211`, `bluetooth` + transports) so no dependent driver can
+start; (2) **AF_BLUETOOTH sockets are denied**; (3) **writes to `/dev/rfkill`
+are denied** so a blocked radio cannot be un-blocked. All three knobs are
+root-only (`0600`) and frozen once the config is locked. Drive them with the
+friendly `secure-sudo radio` command (see [COMMANDS.md](COMMANDS.md)) or the
+generic `set`.
+
+Limitation: if the wireless drivers are built *into* the kernel (not modules),
+layer 1 has nothing to intercept — an Ethernet-only appliance should build
+without those drivers and use RadioGuard as reinforcement; and a radio already
+live this boot should be `rfkill block`ed or the box rebooted after enabling
+(on a configured box `secure-sudo load` denies the module at early boot). Full
+detail is in the `ss_radio.c` header and [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#16).
+
 ### Config lock (#16)
 
 | Key | Default | Meaning |
@@ -135,6 +182,7 @@ file, then `secure-sudo load` (the TimeVault allowlist has its own command).
 | `timevault_allow.conf` → `timevault_allow` | #13 | `<path> <sha256>` per line. Every entry must pin a hash. Managed by `vault-allow`. |
 | `home_map.conf` → `home_map` | #4 | `<uid> <home-path>` per line. Generated from `/etc/passwd` by the installer. |
 | `home_write_allow.conf` → `home_write_allow` | #4 | Extra always-writable path prefix for non-sudo users. |
+| `binvault_allow.conf` → `binvault_allow` | #17 | Absolute directory prefix EXEMPT from BinaryVault (self-updating software). Keep minimal — each entry is a hole in the freeze. |
 
 ---
 

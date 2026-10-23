@@ -196,19 +196,28 @@ static int ss_cooldown_bprm(struct linux_binprm *bprm)
 	uid_t uid;
 	int ret = 0;
 
+	/* Step 1: feature off -> allow. */
 	if (!READ_ONCE(ss_cfg.sudo_cooldown_enabled))
 		return 0;
 
+	/* Step 2: is THIS uid currently in a brute-force cooldown? This is the
+	 * cheap common case (almost no one is blocked), so test it before any
+	 * allocation or path work. The block list is fed by pam_secure_sudo. */
 	uid = from_kuid(&init_user_ns, current_uid());
 	if (!is_blocked(uid))
-		return 0;			/* cheap common case first */
+		return 0;
 
+	/* Step 3: a blocked uid may still run ordinary programs - we only stop it
+	 * from re-trying a privilege tool (sudo/su/doas/pkexec/... or any setuid-
+	 * root binary). Resolve the exec path to classify it. */
 	buf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;			/* blocked UID: fail closed */
 	p = ss_file_path(&bprm->file->f_path, buf, PATH_MAX);
 	base = IS_ERR(p) ? kbasename(bprm->filename) : kbasename(p);
 
+	/* Step 4: deny if the path was unresolvable (fail closed) or it is a
+	 * privilege tool; otherwise let the non-privileged exec proceed. */
 	if (IS_ERR(p) || is_priv_tool(bprm, base)) {
 		pr_warn_ratelimited("cooldown: UID %u denied %s (in cooldown)\n",
 				    uid, base);

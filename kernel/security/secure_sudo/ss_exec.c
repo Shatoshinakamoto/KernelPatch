@@ -131,17 +131,26 @@ static int ss_bprm_check_security(struct linux_binprm *bprm)
 	char *buf, *exec_path;
 	int i, ret = 0;
 
-	/* Sudo users may run anything. */
+	/* Step 1: sudo users may run anything - the blacklist targets non-sudo. */
 	if (ss_is_sudo_user())
 		return 0;
 
-	/* Fast path: nothing configured. */
+	/* Step 2: fast path - an empty blacklist means nothing to check. */
 	if (!READ_ONCE(bl_count))
 		return 0;
+
+	/* Step 3: gather the identity of the image being exec'd - device + inode
+	 * (+ generation, below) for the robust match that survives a rename, and
+	 * the resolved path for the match that survives an inode swap. */
 
 	inode = file_inode(bprm->file);
 	dev = inode->i_sb->s_dev;
 	ino = inode->i_ino;
+	/* i_generation disambiguates a recycled inode number: if the blacklisted
+	 * file is deleted and its inode slot reused by an unrelated file, the
+	 * generation differs and the inode match correctly fails. Must be read
+	 * here - comparing an uninitialised value would break every inode match. */
+	gen = inode->i_generation;
 
 	/*
 	 * Fail closed: if the path cannot be built (OOM, or a deliberately

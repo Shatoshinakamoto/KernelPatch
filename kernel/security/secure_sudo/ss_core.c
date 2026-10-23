@@ -116,8 +116,12 @@ int ss_set_admin_gids(const u32 *gids, unsigned int n)
 {
 	struct ss_admin_gids *new = NULL, *old;
 
+	/* Step 1: bound the list to the fixed-size array; refuse an oversize set
+	 * rather than truncating silently. */
 	if (n > SS_MAX_ADMIN_GIDS)
 		return -E2BIG;
+	/* Step 2: build the replacement list off to the side. n == 0 is valid and
+	 * means "root only" - we install a NULL pointer for that. */
 	if (n) {
 		new = kzalloc(sizeof(*new), GFP_KERNEL);
 		if (!new)
@@ -126,11 +130,17 @@ int ss_set_admin_gids(const u32 *gids, unsigned int n)
 		memcpy(new->gid, gids, n * sizeof(u32));
 	}
 
+	/* Step 3: swap it in under the config mutex. rcu_assign_pointer() publishes
+	 * the fully-built list with the right barrier, so a concurrent lockless
+	 * reader in ss_cred_is_sudo() sees either the whole old or the whole new
+	 * list, never a half-written one. */
 	mutex_lock(&ss_cfg_lock);
 	old = rcu_dereference_protected(ss_admin, lockdep_is_held(&ss_cfg_lock));
 	rcu_assign_pointer(ss_admin, new);
 	mutex_unlock(&ss_cfg_lock);
 
+	/* Step 4: free the old list only after a grace period, once no reader can
+	 * still hold a reference to it. */
 	if (old)
 		kfree_rcu(old, rcu);
 	return 0;
@@ -160,15 +170,29 @@ ssize_t ss_show_admin_gids(char *buf)
 
 bool ss_may_admin(const struct file *file)
 {
+	/* Step 1: the *acting* task must hold CAP_SYS_ADMIN in the initial user
+	 * namespace. capable() checks the current task against init_user_ns, so
+	 * a token forged inside an unprivileged user namespace does not count. */
 	if (!capable(CAP_SYS_ADMIN))
 		return false;
+	/* Step 2: for a securityfs/sysfs write, also require that the credentials
+	 * the *file was opened with* hold the capability. This defeats the
+	 * confused-deputy where a low-priv process opens the control file and
+	 * hands the fd to a privileged one (or the reverse). A NULL file means a
+	 * direct sysfs store with no separate opener to check. */
 	return !file || file_ns_capable(file, &init_user_ns, CAP_SYS_ADMIN);
 }
 
 char *ss_file_path(const struct path *path, char *buf, int buflen)
 {
+	/* Step 1: prefer d_absolute_path() - it renders the path relative to the
+	 * mount-namespace root, so a chrooted task cannot make /jail/usr/bin/x
+	 * read as /usr/bin/x and slip past a path check. */
 	char *p = d_absolute_path(path, buf, buflen);
 
+	/* Step 2: pseudo files (memfd, pipes, anon inodes) have no absolute path;
+	 * fall back to d_path() so callers at least get a stable "anon_inode:..."
+	 * style string rather than an error they would have to special-case. */
 	if (IS_ERR(p))
 		p = d_path(path, buf, buflen);
 	return p;
@@ -178,8 +202,13 @@ bool ss_path_under(const char *path, const char *prefix)
 {
 	size_t pl = strlen(prefix);
 
+	/* Step 1: the prefix must be a leading substring of the path at all. */
 	if (!pl || strncmp(path, prefix, pl) != 0)
 		return false;
+	/* Step 2: guard against a partial component match: "/tmp/build" must
+	 * cover "/tmp/build" and "/tmp/build/x" but NOT "/tmp/buildx". The byte
+	 * just past the prefix therefore has to be end-of-string or '/', unless
+	 * the prefix itself already ended in '/' (then any child matches). */
 	return path[pl] == '\0' || path[pl] == '/' || prefix[pl - 1] == '/';
 }
 
@@ -384,6 +413,10 @@ static int __init ss_lsm_init(void)
 	ss_cfg.timevault_enabled = false;
 
 	ss_cfg.block_home_write = false;	/* #4 is aggressive: opt-in */
+	ss_cfg.binaryvault = false;	/* #17: conf turns it on at boot via load */
+	ss_cfg.block_wifi = false;	/* #19 RadioGuard: opt-in */
+	ss_cfg.block_bluetooth = false;
+	ss_cfg.ethernet_only = false;
 
 	/* Register each protection's hooks. */
 	ss_lock_init();
@@ -398,6 +431,8 @@ static int __init ss_lsm_init(void)
 	ss_driver_init();
 	ss_timevault_init();
 	ss_home_init();
+	ss_binvault_init();
+	ss_radio_init();
 
 	pr_info("LSM initialised (id=0x%llx)\n", (unsigned long long)ss_lsmid.id);
 	return 0;
@@ -438,6 +473,10 @@ static int __init ss_sysfs_init(void)
 		ret = ss_timevault_sysfs(ss_kobj);
 	if (!ret)
 		ret = ss_home_sysfs(ss_kobj);
+	if (!ret)
+		ret = ss_binvault_sysfs(ss_kobj);
+	if (!ret)
+		ret = ss_radio_sysfs(ss_kobj);
 	if (ret) {
 		pr_err("failed to create sysfs knobs (%d)\n", ret);
 		kobject_put(ss_kobj);
@@ -467,6 +506,8 @@ static int __init ss_sysfs_init(void)
 			ret = ss_timevault_secfs(ss_secfs_dir);
 		if (!ret)
 			ret = ss_home_secfs(ss_secfs_dir);
+		if (!ret)
+			ret = ss_binvault_secfs(ss_secfs_dir);
 		if (ret)
 			pr_err("failed to create securityfs policy files (%d)\n",
 			       ret);

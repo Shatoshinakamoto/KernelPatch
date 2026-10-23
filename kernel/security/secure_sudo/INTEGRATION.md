@@ -95,6 +95,13 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/block_home_write` | rw | #4 confine non-sudo writes to home (opt-in) |
 | `/sys/kernel/security/secure_sudo/home_map` | rw (root) | #4 `<uid> <home-path>` per line |
 | `/sys/kernel/security/secure_sudo/home_write_allow` | rw (root) | #4 extra always-writable path prefixes |
+| `/sys/kernel/secure_sudo/binaryvault` | rw (0600) | #17 freeze all executables + libraries (all UIDs); effective at boot via `load` |
+| `/sys/kernel/secure_sudo/binvault_maint` | r (0400) | #17 read-only: 1 if THIS boot opened the vault for maintenance |
+| `/sys/kernel/security/secure_sudo/binvault_allow` | rw (root) | #17 directory prefixes exempt from BinaryVault; whole list per write |
+| `/sys/kernel/secure_sudo/block_wifi` | rw (0600) | #19 RadioGuard: 1 = keep Wi-Fi off |
+| `/sys/kernel/secure_sudo/block_bluetooth` | rw (0600) | #19 RadioGuard: 1 = keep Bluetooth off |
+| `/sys/kernel/secure_sudo/ethernet_only` | rw (0600) | #19 RadioGuard master switch: 1 = keep both radios off |
 | boot param `secure_sudo.tpm_maint=1` | — | #5 permit TPM clear this boot |
+| boot param `secure_sudo.binvault_maint=1` | — | #17 open BinaryVault this boot so binaries can be updated |
 
-All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `timevault`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.
+All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.
