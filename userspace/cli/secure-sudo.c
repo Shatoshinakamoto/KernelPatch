@@ -30,6 +30,7 @@
 #include "cli.h"
 
 #define OTP_HELPER "/usr/bin/secure-sudo-otp"
+#define PHEONIXBOX_HELPER "/usr/bin/secure-sudo-pheonixbox"
 
 /* scalar knob  <- config key  (sysfs file under SYSFS) */
 struct knob {
@@ -620,6 +621,27 @@ static int cmd_otp(int argc, char **argv)
 	return -1;
 }
 
+static int cmd_pheonixbox(int argc, char **argv)
+{
+	/* Hand off to the PheonixBox helper, preserving argv (so
+	 * `secure-sudo pheonixbox enable` becomes `secure-sudo-pheonixbox
+	 * enable`). The helper does its own root check. */
+	char **nargv = calloc(argc, sizeof(char *));
+	int i;
+
+	if (!nargv)
+		return -1;
+	nargv[0] = (char *)PHEONIXBOX_HELPER;
+	for (i = 2; i < argc; i++)		/* skip argv[1] == "pheonixbox" */
+		nargv[i - 1] = argv[i];
+	nargv[argc - 1] = NULL;
+	execv(PHEONIXBOX_HELPER, nargv);
+	fprintf(stderr, "secure-sudo: cannot exec %s: %s\n", PHEONIXBOX_HELPER,
+		strerror(errno));
+	free(nargv);
+	return -1;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -637,6 +659,7 @@ static void usage(void)
 "  lock                 lock the config until reboot (irreversible)\n"
 "  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n"
+"  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list snapshot tamper protection\n"
 "\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
 "All commands are root-only and refused once the config is locked.\n");
 	vault_allow_usage();
@@ -649,9 +672,11 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/* otp is delegated; it does its own privilege checks per subcommand. */
+	/* otp and pheonixbox are delegated; they do their own privilege checks. */
 	if (!strcmp(argv[1], "otp"))
 		return cmd_otp(argc, argv) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "pheonixbox"))
+		return cmd_pheonixbox(argc, argv) == 0 ? 0 : 1;
 
 	if (require_root() != 0)
 		return 1;

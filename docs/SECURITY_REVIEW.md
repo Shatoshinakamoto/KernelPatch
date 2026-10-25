@@ -384,6 +384,57 @@ Residual (documented): a process already being traced when the guard is enabled
 is not retro-actively detached; the guard prevents *new* attaches. Enable it
 early (at boot via `load`) on an appliance that wants the full guarantee.
 
+### 20. PheonixBox second-pass review (#21) — SI-7 / SC-28 / CM-5
+
+New userspace feature (`userspace/pheonixbox/pheonixbox.c` + a daemon timer).
+Reviewed for the ways a snapshot/repair tool is usually broken, and for the
+central honesty issue:
+
+* **No "reversible hash" — stated, not faked.** The request asked to "compress
+  the contents into a reversible hash". SHA-256 is one-way; it cannot be
+  reversed with or without a password. Building a tool that pretended to would
+  be a lie that fails the first time it is relied on. PheonixBox instead uses
+  the hash only to *detect* (manifest) and a zlib-compressed copy of the real
+  bytes to *restore* (snapshot store). The design header, the docs, and the CLI
+  help all say this plainly. (This is a correctness/trust finding, not a CWE.)
+* **The store is the trust root, and it is root-only.** `/var/lib/secure_sudo/
+  pheonixbox` is created `0700`, every blob/acl/manifest is `chmod 0600`, and
+  the program refuses to run as non-root. So no unprivileged user can read the
+  originals, forge a blob, or tamper the manifest to make a malicious file
+  "known good" (CWE-276/SC-28). A reviewer confirmed no path writes the store
+  world- or group-readable.
+* **Repair never leaves a file writable.** `blob_restore` makes the target
+  writable only for the in-place overwrite, `fsync`s, then immediately re-applies
+  the read-only mode (`mode & ~(S_IWUSR|S_IWGRP|S_IWOTH)`) on every exit path.
+  The scan also re-locks a file whose write bits merely re-appeared, so the
+  read-only invariant is self-healing (SI-7).
+* **Symlink / traversal safety.** The recursive walk uses `lstat` and only
+  descends real directories and snapshots real regular files — symlinks, device
+  nodes, FIFOs and sockets are skipped, so a planted symlink under a protected
+  tree cannot redirect a restore to overwrite an arbitrary file (CWE-59). Depth
+  is capped at 24 to bound a crafted-tree recursion, and oversized files
+  (>256 MB) are skipped rather than read into RAM (CWE-400).
+* **Manifest parsing is robust.** The path is taken as the entire remainder of
+  the line (not a fixed token), so paths with internal spaces are not silently
+  truncated; paths containing whitespace are refused at snapshot time with a
+  warning, because the line format cannot round-trip them unambiguously. Mode is
+  parsed as octal, uid/gid as unsigned; a malformed line is skipped, not acted
+  on.
+* **Atomic writes.** The manifest and the conf file are written to a `mkstemp`
+  temp and `rename`d into place, so an interrupted snapshot or edit never leaves
+  a half-written, trusted file (CWE-367).
+* **Shell use in ACL capture.** `getfacl`/`setfacl` are invoked via `system()`
+  with the path single-quoted. Because the program is root-only and the paths
+  come from a root-written conf (and whitespace paths are already refused), this
+  is not an injection vector a non-root user can reach; noted so a future change
+  that lets non-root influence the path list would need to revisit it.
+
+Residual (documented): PheonixBox is periodic (daemon runs `scan` ~every 30 s),
+so repair happens within one interval, not inline — it is a *healing* layer, not
+an inline *blocking* one; pair it with BinaryVault (#17) / TimeVault (#13) for
+inline immutability of executables. If the store itself is deleted there is
+nothing to restore from, so keep `/var/lib/secure_sudo` on protected storage.
+
 
 ---
 

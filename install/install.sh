@@ -225,11 +225,12 @@ set_sig_enforce_cmdline() {
 # Userspace
 # ---------------------------------------------------------------------------
 build_install_userspace() {
-	log "building userspace (cli, pam, daemon, otp)"
+	log "building userspace (cli, pam, daemon, otp, pheonixbox)"
 	make -C "$US_SRC/cli" install
 	make -C "$US_SRC/pam" SECDIR="$SECDIR" install
 	make -C "$US_SRC/daemon" install
 	make -C "$US_SRC/otp" install
+	make -C "$US_SRC/pheonixbox" install
 
 	log "installing config to /etc/secure_sudo"
 	mkdir -p /etc/secure_sudo

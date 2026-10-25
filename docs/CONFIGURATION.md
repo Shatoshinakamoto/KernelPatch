@@ -226,6 +226,26 @@ Both the toggle and the list are root-only (`0600`) and frozen once the config
 is locked, so the guard cannot be weakened on a locked box. Second-pass review:
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#19).
 
+### PheonixBox (#21) — userspace, not a kernel knob
+
+PheonixBox is a userspace feature (the `secure-sudo-pheonixbox` helper + a
+daemon timer), so it has **no `/sys/kernel/secure_sudo/` knob**. Its state is a
+marker file, and it is configured by one plain config file:
+
+| File | Meaning |
+|------|---------|
+| `/etc/secure_sudo/pheonixbox.conf` | the protected set — one absolute path per line (file, or directory protected recursively); `#` comments, blanks and relative paths ignored; whitespace paths skipped. Managed by `secure-sudo pheonixbox add/remove`. |
+| `/var/lib/secure_sudo/pheonixbox/` | the store (mode `0700`, root-only): `enabled` marker, `manifest` (`<sha> <mode> <uid> <gid> <path>`), `blobs/*.z` (compressed originals), `acls/*.acl`, `lastscan`. |
+
+Enabling (`secure-sudo pheonixbox on`) snapshots every protected file (SHA-256
+manifest for **detection** + a root-only zlib-compressed copy of the originals
+for **restoration**), captures each file's owner/mode/ACLs (the
+PermissionsSnapshot), locks the files read-only, and starts the daemon's timer
+scan (~30 s), which restores any tampered or deleted file from the snapshot
+store. Disabling restores the original permissions. A SHA-256 hash is one-way
+and is **not** what restores — the compressed snapshot store is. Full detail in
+[PHEONIXBOX.md](PHEONIXBOX.md).
+
 ### Config lock (#16)
 
 | Key | Default | Meaning |

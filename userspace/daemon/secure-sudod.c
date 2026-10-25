@@ -52,6 +52,7 @@
 #define QUARANTINE STATEDIR "/quarantine"
 #define HELPER_NET  "/usr/libexec/secure-sudo/apply-net.sh"
 #define HELPER_QUAR "/usr/libexec/secure-sudo/quarantine.sh"
+#define HELPER_PBOX "/usr/bin/secure-sudo-pheonixbox"	/* #21 PheonixBox */
 
 /* ---- configuration (daemon-relevant keys) ---- */
 struct cfg {
@@ -424,6 +425,25 @@ static void run_helper(const char *helper, const char *arg)
 	}
 }
 
+/* ---- #21 PheonixBox periodic scan+repair ----
+ * Run `secure-sudo-pheonixbox scan --quiet` on a timer. The helper is a no-op
+ * when PheonixBox is disabled (it checks its own `enabled` marker), so this is
+ * cheap to call unconditionally; it restores any tampered protected file from
+ * the compressed snapshot store. */
+static void pheonixbox_scan(void)
+{
+	pid_t pid = fork();
+
+	if (pid == 0) {
+		execl(HELPER_PBOX, HELPER_PBOX, "scan", "--quiet", (char *)NULL);
+		_exit(127);
+	} else if (pid > 0) {
+		int st;
+
+		waitpid(pid, &st, 0);
+	}
+}
+
 static void apply_net_mode(void)
 {
 	static char last[32] = "";
@@ -581,6 +601,7 @@ int main(void)
 	struct cfg cfg;
 	struct pollfd pfd;
 	time_t last_periodic = 0;
+	time_t last_pbox = 0;
 
 	signal(SIGHUP, on_hup);
 	signal(SIGTERM, on_term);
@@ -639,6 +660,13 @@ int main(void)
 			apply_net_mode();
 			enforce_retention(&cfg);
 			vault_scan(&cfg);
+		}
+
+		/* PheonixBox scan+repair on a slower (30s) cadence: content
+		 * hashing is heavier than the TimeVault directory walk. */
+		if (now - last_pbox >= 30) {
+			last_pbox = now;
+			pheonixbox_scan();
 		}
 	}
 

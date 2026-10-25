@@ -56,6 +56,7 @@ install/
 | 17 | **BinaryVault**: freeze every executable + shared library against write/truncate/unlink/rename/hardlink/chmod/xattr — for all UIDs incl. root (anti-tamper/anti-persistence). Effective at boot; updates via a `secure_sudo.binvault_maint=1` maintenance reboot |
 | 19 | **RadioGuard**: Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch. Refuses the wireless/BT core modules at load, denies AF_BLUETOOTH sockets, and denies `/dev/rfkill` writes. Drive with `secure-sudo radio …` |
 | 20 | **Process Runtime Guard**: protects running-process memory — denies cross-process ptrace/`process_vm_writev`/`/proc/pid/mem` tampering and W^X (writable+executable) mappings, for all processes except a CLI-managed exemption list. Drive with `secure-sudo prguard …` |
+| 21 | **PheonixBox**: snapshot-based tamper protection + auto-repair for chosen files/dirs. On enable: SHA-256 manifest + root-only zlib-compressed snapshot of the originals, captures owner/mode/ACLs (PermissionsSnapshot), locks files read-only, scans on a timer and restores any tampered/deleted file; on disable restores the original permissions. Userspace (`secure-sudo pheonixbox …`). A SHA-256 hash is one-way — the compressed snapshot store, not the hash, is what restores. See [docs/PHEONIXBOX.md](docs/PHEONIXBOX.md) |
 
 (#4 is implemented with `file_open` + the `path_*` hooks — both source versions
 had built it on a non-existent `path_permission` hook. It is opt-in because it
