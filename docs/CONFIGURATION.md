@@ -86,9 +86,19 @@ setuid-root binary) and the daemon freezes+kills the offending processes.
 
 ### TimeVault (#13)
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `timevault_strict_mmap` | `0` | While the vault is engaged, also require every `PROT_EXEC` file mapping (shared libraries) to be on the allowlist by path. Off by default — enabling it without allowlisting `/usr/lib*` stops every dynamic program. |
+TimeVault is a **hash-based anti-tamper exec gate**. While engaged, the kernel
+intercepts every exec and, right before the program runs, re-hashes the file
+and compares it to the SHA-256 pinned in the allowlist. A match runs; a
+mismatch (or an unlisted binary) is **blocked at exec**, and the daemon then
+**compresses the offending file into the quarantine folder and removes the
+original** (or deletes it, if `vault_action=wipe`). See "The exec decision" and
+"Anti-tamper quarantine flow" below.
+
+| Key | Default | Range | Meaning |
+|-----|---------|-------|---------|
+| `timevault_strict_mmap` | `0` | 0/1 | While engaged, also require every `PROT_EXEC` file mapping (shared libraries) to be on the allowlist by path. Off by default — enabling it without allowlisting `/usr/lib*` stops every dynamic program. |
+| `timevault_allow_autoupdate` | `1` | 0/1 | Honour auto-update allowlist entries (the `auto` / `autodir` kind, which skip hash validation). Set `0` to **disable auto-update apps**: every auto-update entry is then refused at exec (there is no hash to fall back to), while normal hash-checked entries keep working. |
+| `timevault_max_entries` | `16384` | 1–131072 | Configurable cap on how many entries the allowlist may hold. Takes effect on the next allowlist write; lower it to bound memory on small systems. |
 
 The engage flag itself is set with `secure-sudo timevault on` (it latches the
 lock); the allowlist is managed with `secure-sudo vault-allow`. Daemon-only
@@ -96,8 +106,51 @@ TimeVault keys:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `vault_action` | `quarantine` | `quarantine` (zip aside, keep evidence) or `wipe` (delete) a new/changed file found while engaged. |
+| `vault_action` | `quarantine` | `quarantine` (zip aside, keep evidence) or `wipe` (delete). Applies both to a new/changed file the daemon finds while scanning **and** to a binary the kernel blocked at exec for a hash mismatch or for not being listed. |
 | `vault_watch` | `/etc,/usr/local/bin,/opt,/usr/local/sbin` | Comma list of trees the daemon scans while engaged. |
+
+#### The allowlist file format
+
+`timevault_allow.conf` (managed by `secure-sudo vault-allow`) holds one entry
+per line. There are three kinds:
+
+| Line form | Kind | Behaviour at exec |
+|-----------|------|-------------------|
+| `/path/to/binary <64-hex-sha256>` | hash entry | runs only if the file still hashes to that SHA-256 (the normal anti-tamper entry) |
+| `/path/to/binary auto` | auto-update **file** | runs without a hash check — for a single binary that rewrites itself |
+| `/path/to/dir autodir` | auto-update **directory** | any binary under this directory runs without a hash check — for a self-updating app tree |
+
+Auto-update entries exist because some software legitimately replaces its own
+binaries at runtime (so a pinned hash would break it the moment it updates).
+They are only honoured while `timevault_allow_autoupdate = 1`; with it `0` they
+are refused, so you can disable self-updating software in one switch without
+editing the list. Auto-update files are **not** write-protected (unlike hash
+entries, whose inodes are frozen against writes while engaged), precisely
+because they are meant to change.
+
+#### The exec decision (in order)
+
+1. Package managers and the dynamic loader (`ld-linux*`, `ld.so`, `ld-musl*`)
+   are **always** denied — installing software, or `ld.so /any/binary`, would
+   defeat the vault.
+2. An unlinked file is denied (its name no longer pins its inode).
+3. If the path is under an `autodir`, or matches an `auto` entry: it runs
+   **iff** `timevault_allow_autoupdate = 1`, otherwise it is denied.
+4. Otherwise the path must be a hash entry; the file must be root-owned, not
+   group/world-writable, and not open for writing; and its SHA-256 must equal
+   the pinned hash. Only then does it run.
+5. Anything else is denied (and quarantined — see below).
+
+#### Anti-tamper quarantine flow
+
+When the kernel blocks an exec for **hash mismatch** (a listed binary whose
+bytes changed) or **not on allowlist** (an unknown binary), it emits an event.
+`secure-sudod` reads that event and moves the offending file aside: with
+`vault_action=quarantine` (default) the file is compressed with its origin
+metadata into `/var/lib/secure_sudo/quarantine/` and the original removed; with
+`vault_action=wipe` it is deleted. So a tampered or unapproved binary is
+stopped **before it runs** and then retained in compressed form for
+investigation.
 
 ### BinaryVault (#17)
 
@@ -146,6 +199,33 @@ live this boot should be `rfkill block`ed or the box rebooted after enabling
 (on a configured box `secure-sudo load` denies the module at early boot). Full
 detail is in the `ss_radio.c` header and [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#16).
 
+### Process Runtime Guard (#20)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `prguard_enabled` | `0` | Guard the **runtime memory** of every process (except whitelisted ones). When on, the kernel denies cross-process memory tampering and writable-and-executable memory. Opt-in. |
+
+With the guard on, for every process whose executable is **not** listed in
+`prguard_allow.conf` the kernel denies:
+
+* `ptrace(PTRACE_ATTACH)` — the debugger-style attach that can read/write
+  another process's registers and memory;
+* `process_vm_writev()` and writes to `/proc/<pid>/mem` — other routes into
+  another process's memory (both gated by the same ptrace-attach check);
+* **W^X** mappings — any `mmap`/`mprotect` that requests `PROT_WRITE` and
+  `PROT_EXEC` at the same time (the classic shellcode / JIT-spray primitive).
+
+Non-invasive, read-only ptrace (used by e.g. `gdb`'s info commands without
+attach) is left alone; only the attach mode that permits *writing* another
+process is denied. The exemption list (`prguard_allow.conf`, securityfs
+`prguard_allow`) holds the absolute executable paths of the few programs that
+legitimately need these powers — debuggers, profilers, some JIT runtimes. A
+process is matched by the path of its main executable. Manage it with
+`secure-sudo prguard add|remove|list|on|off` (see [COMMANDS.md](COMMANDS.md)).
+Both the toggle and the list are root-only (`0600`) and frozen once the config
+is locked, so the guard cannot be weakened on a locked box. Second-pass review:
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#19).
+
 ### Config lock (#16)
 
 | Key | Default | Meaning |
@@ -179,10 +259,11 @@ file, then `secure-sudo load` (the TimeVault allowlist has its own command).
 | `node_allowed_children.conf` → `node_allowed_children` | #11 | A child a node/SEA process may exec. `/`-prefixed = exact path; a bare word = basename. |
 | `node_sea_binaries.conf` → `node_sea_binaries` | #11 | Absolute path of a single-executable-application / pkg binary to treat as a node runtime. |
 | `driver_blacklist.conf` → `driver_blacklist` | #6 | A 64-hex SHA-256 (matches the loaded module's bytes) or a module basename. |
-| `timevault_allow.conf` → `timevault_allow` | #13 | `<path> <sha256>` per line. Every entry must pin a hash. Managed by `vault-allow`. |
+| `timevault_allow.conf` → `timevault_allow` | #13 | `<path> <sha256>` (hash entry), `<path> auto` (auto-update file), or `<dir> autodir` (auto-update directory). Managed by `vault-allow`. |
 | `home_map.conf` → `home_map` | #4 | `<uid> <home-path>` per line. Generated from `/etc/passwd` by the installer. |
 | `home_write_allow.conf` → `home_write_allow` | #4 | Extra always-writable path prefix for non-sudo users. |
 | `binvault_allow.conf` → `binvault_allow` | #17 | Absolute directory prefix EXEMPT from BinaryVault (self-updating software). Keep minimal — each entry is a hole in the freeze. |
+| `prguard_allow.conf` → `prguard_allow` | #20 | Absolute executable path EXEMPT from the Process Runtime Guard (debuggers, profilers, JITs). Managed by `secure-sudo prguard`. |
 
 ---
 

@@ -71,11 +71,19 @@
 
 #include "secure_sudo.h"
 
-/* Sized for whole-directory scans (e.g. /usr/bin + /usr/sbin + /usr/lib*):
- * ~100 bytes a line, so 16k entries fit comfortably in 4 MiB. */
-#define TV_MAX_ITEMS	16384
-#define TV_MAX_TEXT	(4 * 1024 * 1024)
+/* Hard ceilings. TV_MAX_ITEMS is the absolute cap the allocator will ever
+ * honour (a safety bound); the *effective* cap is the configurable knob
+ * timevault_max_entries (default TV_DEF_ENTRIES), which an admin can lower or
+ * raise up to TV_MAX_ITEMS. ~100 bytes a line, so the text cap holds them. */
+#define TV_MAX_ITEMS	131072
+#define TV_DEF_ENTRIES	16384
+#define TV_MAX_TEXT	(16 * 1024 * 1024)
+#define TV_MAX_AUTODIRS	4096
 #define SHA256_HEX	64
+
+/* Entry kind (tv_entry.flags). */
+#define TV_F_HASH	0	/* normal: validate SHA-256 before exec */
+#define TV_F_AUTOFILE	1	/* auto-update file: exec without hash check */
 
 /* Package managers denied unconditionally while the vault is engaged. */
 static const char *const pkg_managers[] = {
@@ -87,7 +95,8 @@ static const char *const pkg_managers[] = {
 
 struct tv_entry {
 	char *path;
-	char hash[SHA256_HEX + 1];
+	char hash[SHA256_HEX + 1];	/* valid only when flags == TV_F_HASH */
+	u8   flags;			/* TV_F_HASH or TV_F_AUTOFILE */
 };
 
 /* (dev, ino) of each entry that resolved at load time, for the write guard. */
@@ -99,11 +108,24 @@ struct tv_ino {
 static DEFINE_MUTEX(tv_lock);
 static struct tv_entry *tv_list;	/* sorted by path */
 static int tv_count;
-static struct tv_ino *tv_inos;		/* sorted by (dev, ino) */
+static struct tv_ino *tv_inos;		/* sorted by (dev, ino) - HASH entries only */
 static int tv_ninos;
+static char **tv_autodirs;		/* auto-update directory prefixes */
+static int tv_nautodirs;
 static char *tv_text;
 static size_t tv_text_len;
 static atomic_long_t tv_denied = ATOMIC_LONG_INIT(0);
+
+/* Is @path inside an auto-update directory prefix? Caller holds tv_lock. */
+static bool tv_under_autodir_locked(const char *path)
+{
+	int i;
+
+	for (i = 0; i < tv_nautodirs; i++)
+		if (ss_path_under(path, tv_autodirs[i]))
+			return true;
+	return false;
+}
 
 static bool is_pkg_manager(const char *base)
 {
@@ -215,16 +237,45 @@ static int ss_timevault_bprm(struct linux_binprm *bprm)
 		goto out;
 	}
 
-	/* Step 4: the binary must be on the allowlist. Copy its pinned hash out
-	 * under the lock so we can release it before the expensive hashing. */
-	mutex_lock(&tv_lock);
-	e = tv_find_locked(resolved);
-	if (e)
-		memcpy(want_hash, e->hash, sizeof(want_hash));
-	mutex_unlock(&tv_lock);
-	if (!e) {
-		tv_deny(resolved, "not on allowlist");
-		goto out;
+	/* Step 4: the binary must be on the allowlist. Under the lock, work out
+	 * which of three cases applies and copy out what we need:
+	 *   - auto-update DIRECTORY: path sits under an autodir prefix;
+	 *   - a matching list entry (which is either a hash entry or an
+	 *     auto-update FILE, per its flags);
+	 *   - no match at all.
+	 * Auto-update entries (dir or file) skip the hash check, but ONLY while
+	 * timevault_allow_autoupdate is on; with it off they are refused (they
+	 * carry no hash to fall back to), which is the "disable auto-update apps"
+	 * switch. */
+	{
+		bool autodir, autook = READ_ONCE(ss_cfg.timevault_allow_autoupdate);
+		u8 flags = TV_F_HASH;
+
+		mutex_lock(&tv_lock);
+		autodir = tv_under_autodir_locked(resolved);
+		e = autodir ? NULL : tv_find_locked(resolved);
+		if (e) {
+			flags = e->flags;
+			if (flags == TV_F_HASH)
+				memcpy(want_hash, e->hash, sizeof(want_hash));
+		}
+		mutex_unlock(&tv_lock);
+
+		if (!autodir && !e) {
+			tv_deny(resolved, "not on allowlist");
+			goto out;
+		}
+		if (autodir || flags == TV_F_AUTOFILE) {
+			/* auto-update entry: no hash to check. */
+			if (!autook) {
+				tv_deny(resolved, "auto-update disabled");
+				goto out;
+			}
+			ret = 0;		/* trusted directory/file: permit */
+			goto out;
+		}
+		/* else: a normal hash entry - fall through to the integrity +
+		 * hash checks below. */
 	}
 
 	/* Step 5: integrity preconditions before we even hash - the file must be
@@ -363,7 +414,9 @@ static ssize_t timevault_store(struct kobject *k, struct kobj_attribute *a,
 		return -EINVAL;
 
 	if (v) {
-		if (!READ_ONCE(tv_count)) {
+		/* Refuse to engage an empty policy (nothing would be runnable). An
+		 * auto-update-directory-only policy is fine, so count those too. */
+		if (!READ_ONCE(tv_count) && !READ_ONCE(tv_nautodirs)) {
 			pr_warn("timevault: refusing to engage with an empty allowlist\n");
 			return -ENOENT;
 		}
@@ -410,6 +463,60 @@ static struct kobj_attribute timevault_strict_mmap_attr =
 	__ATTR(timevault_strict_mmap, 0600, timevault_strict_mmap_show,
 	       timevault_strict_mmap_store);
 
+/* Honour auto-update (no-hash) entries. Off = those entries are refused. */
+static ssize_t timevault_allow_autoupdate_show(struct kobject *k,
+					       struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "%d\n",
+			  READ_ONCE(ss_cfg.timevault_allow_autoupdate));
+}
+static ssize_t timevault_allow_autoupdate_store(struct kobject *k,
+						struct kobj_attribute *a,
+						const char *buf, size_t count)
+{
+	bool v;
+
+	if (!ss_may_admin(NULL))
+		return -EPERM;
+	if (ss_locked())
+		return -EPERM;
+	if (kstrtobool(buf, &v))
+		return -EINVAL;
+	WRITE_ONCE(ss_cfg.timevault_allow_autoupdate, v);
+	return count;
+}
+static struct kobj_attribute timevault_allow_autoupdate_attr =
+	__ATTR(timevault_allow_autoupdate, 0600,
+	       timevault_allow_autoupdate_show, timevault_allow_autoupdate_store);
+
+/* Configurable cap on allowlist entries (1 .. TV_MAX_ITEMS). Takes effect on
+ * the next allowlist write. */
+static ssize_t timevault_max_entries_show(struct kobject *k,
+					  struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", READ_ONCE(ss_cfg.timevault_max_entries));
+}
+static ssize_t timevault_max_entries_store(struct kobject *k,
+					   struct kobj_attribute *a,
+					   const char *buf, size_t count)
+{
+	u32 v;
+
+	if (!ss_may_admin(NULL))
+		return -EPERM;
+	if (ss_locked())
+		return -EPERM;
+	if (kstrtou32(buf, 0, &v))
+		return -EINVAL;
+	if (ss_check_range(v, 1, TV_MAX_ITEMS))
+		return -ERANGE;
+	WRITE_ONCE(ss_cfg.timevault_max_entries, v);
+	return count;
+}
+static struct kobj_attribute timevault_max_entries_attr =
+	__ATTR(timevault_max_entries, 0600, timevault_max_entries_show,
+	       timevault_max_entries_store);
+
 static ssize_t timevault_denied_show(struct kobject *k,
 				     struct kobj_attribute *a, char *buf)
 {
@@ -421,6 +528,8 @@ static struct kobj_attribute timevault_denied_attr =
 static struct attribute *ss_tv_attrs[] = {
 	&timevault_attr.attr,
 	&timevault_strict_mmap_attr.attr,
+	&timevault_allow_autoupdate_attr.attr,
+	&timevault_max_entries_attr.attr,
 	&timevault_denied_attr.attr,
 	NULL,
 };
@@ -458,18 +567,48 @@ static bool is_sha256_hex(const char *s)
 	return true;
 }
 
-/* Parse into a sorted list + inode index. Returns 0 or -errno. */
-static int tv_parse(char *text, struct tv_entry **out_list, int *out_count,
-		    struct tv_ino **out_inos, int *out_ninos)
+static void tv_free_autodirs(char **list, int count)
+{
+	int i;
+
+	if (!list)
+		return;
+	for (i = 0; i < count; i++)
+		kfree(list[i]);
+	kvfree(list);
+}
+
+/*
+ * Parse the allowlist text into a sorted entry list, an inode index (for the
+ * write guard) and an auto-update directory list. Line grammar (one per line,
+ * '#' comments and blanks ignored):
+ *
+ *   /path/to/binary <64-hex-sha256>     normal hash-checked entry
+ *   /path/to/binary auto                auto-update FILE  (no hash check)
+ *   /path/to/dir    autodir             auto-update DIRECTORY (prefix, no hash)
+ *
+ * @max is the configurable cap (timevault_max_entries). A malformed line fails
+ * the whole write, so a typo can never silently shrink the list. Returns 0 or
+ * -errno.
+ */
+static int tv_parse(char *text, int max, struct tv_entry **out_list,
+		    int *out_count, struct tv_ino **out_inos, int *out_ninos,
+		    char ***out_autodirs, int *out_nautodirs)
 {
 	struct tv_entry *list;
 	struct tv_ino *inos;
+	char **autodirs;
 	char *p = text, *line;
-	int n = 0, ni = 0, i, ret = -EINVAL;
+	int n = 0, ni = 0, nad = 0, i, ret = -EINVAL;
 
-	list = kvcalloc(TV_MAX_ITEMS, sizeof(*list), GFP_KERNEL);
-	inos = kvcalloc(TV_MAX_ITEMS, sizeof(*inos), GFP_KERNEL);
-	if (!list || !inos) {
+	if (max < 1 || max > TV_MAX_ITEMS)
+		max = TV_DEF_ENTRIES;
+	/* Allocate to the effective cap, not the hard ceiling, so a small limit
+	 * really does bound memory use. */
+	list = kvcalloc(max, sizeof(*list), GFP_KERNEL);
+	inos = kvcalloc(max, sizeof(*inos), GFP_KERNEL);
+	autodirs = kvcalloc(TV_MAX_AUTODIRS, sizeof(*autodirs), GFP_KERNEL);
+	if (!list || !inos || !autodirs) {
 		ret = -ENOMEM;
 		goto err;
 	}
@@ -480,26 +619,50 @@ static int tv_parse(char *text, struct tv_entry **out_list, int *out_count,
 		line = strim(line);
 		if (*line == '\0' || *line == '#')
 			continue;
-		if (n >= TV_MAX_ITEMS) {
-			ret = -E2BIG;
-			goto err;
-		}
+		/* Split "<path> <token>"; path must be absolute. */
 		sp = strchr(line, ' ');
 		if (*line != '/' || !sp)
-			goto err;		/* -EINVAL: path + hash required */
+			goto err;		/* -EINVAL: path + token required */
 		*sp = '\0';
 		sp = strim(sp + 1);
-		if (!is_sha256_hex(sp))
-			goto err;
 
+		/* "autodir": whole-directory auto-update entry. */
+		if (!strcmp(sp, "autodir")) {
+			if (nad >= TV_MAX_AUTODIRS) {
+				ret = -E2BIG;
+				goto err;
+			}
+			autodirs[nad] = kstrdup(line, GFP_KERNEL);
+			if (!autodirs[nad]) {
+				ret = -ENOMEM;
+				goto err;
+			}
+			nad++;
+			continue;
+		}
+
+		if (n >= max) {
+			ret = -E2BIG;		/* over the configurable cap */
+			goto err;
+		}
 		list[n].path = kstrdup(line, GFP_KERNEL);
 		if (!list[n].path) {
 			ret = -ENOMEM;
 			goto err;
 		}
-		for (i = 0; i < SHA256_HEX; i++)
-			list[n].hash[i] = tolower(sp[i]);
-		list[n].hash[SHA256_HEX] = '\0';
+		if (!strcmp(sp, "auto")) {
+			/* auto-update FILE: no hash, exec allowed as-is. */
+			list[n].flags = TV_F_AUTOFILE;
+			list[n].hash[0] = '\0';
+		} else if (is_sha256_hex(sp)) {
+			list[n].flags = TV_F_HASH;
+			for (i = 0; i < SHA256_HEX; i++)
+				list[n].hash[i] = tolower(sp[i]);
+			list[n].hash[SHA256_HEX] = '\0';
+		} else {
+			kfree(list[n].path);
+			goto err;		/* neither a hash nor "auto" */
+		}
 		n++;
 	}
 
@@ -508,9 +671,13 @@ static int tv_parse(char *text, struct tv_entry **out_list, int *out_count,
 		if (!strcmp(list[i - 1].path, list[i].path))
 			goto err;		/* duplicate path: ambiguous */
 
+	/* Build the inode write-guard index from HASH entries only - auto-update
+	 * files are meant to change, so they must not be write-protected. */
 	for (i = 0; i < n; i++) {
 		struct path path;
 
+		if (list[i].flags != TV_F_HASH)
+			continue;
 		if (kern_path(list[i].path, LOOKUP_FOLLOW, &path) == 0) {
 			struct inode *inode = d_backing_inode(path.dentry);
 
@@ -528,10 +695,13 @@ static int tv_parse(char *text, struct tv_entry **out_list, int *out_count,
 	*out_count = n;
 	*out_inos = inos;
 	*out_ninos = ni;
+	*out_autodirs = autodirs;
+	*out_nautodirs = nad;
 	return 0;
 err:
 	tv_free(list, n);
 	kvfree(inos);
+	tv_free_autodirs(autodirs, nad);
 	return ret;
 }
 
@@ -552,7 +722,8 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 {
 	struct tv_entry *new_list, *old_list;
 	struct tv_ino *new_inos, *old_inos;
-	int new_count, old_count, new_ninos, ret;
+	char **new_autodirs, **old_autodirs;
+	int new_count, old_count, new_ninos, new_nad, old_nad, ret;
 	char *text, *scratch, *old_text;
 
 	if (!ss_may_admin(file))
@@ -581,7 +752,9 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 		kvfree(text);
 		return -ENOMEM;
 	}
-	ret = tv_parse(scratch, &new_list, &new_count, &new_inos, &new_ninos);
+	ret = tv_parse(scratch, READ_ONCE(ss_cfg.timevault_max_entries),
+		       &new_list, &new_count, &new_inos, &new_ninos,
+		       &new_autodirs, &new_nad);
 	kvfree(scratch);
 	if (ret) {
 		kvfree(text);
@@ -592,17 +765,22 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 	old_list = tv_list;
 	old_count = tv_count;
 	old_inos = tv_inos;
+	old_autodirs = tv_autodirs;
+	old_nad = tv_nautodirs;
 	old_text = tv_text;
 	tv_list = new_list;
 	WRITE_ONCE(tv_count, new_count);
 	tv_inos = new_inos;
 	tv_ninos = new_ninos;
+	tv_autodirs = new_autodirs;
+	tv_nautodirs = new_nad;
 	tv_text = text;
 	tv_text_len = count;
 	mutex_unlock(&tv_lock);
 
 	tv_free(old_list, old_count);
 	kvfree(old_inos);
+	tv_free_autodirs(old_autodirs, old_nad);
 	kvfree(old_text);
 
 	*ppos = count;

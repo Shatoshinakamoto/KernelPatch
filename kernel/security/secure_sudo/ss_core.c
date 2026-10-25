@@ -411,6 +411,10 @@ static int __init ss_lsm_init(void)
 	ss_cfg.sudo_cooldown_enabled = true;
 
 	ss_cfg.timevault_enabled = false;
+	ss_cfg.timevault_allow_autoupdate = true;  /* honour auto entries by default */
+	ss_cfg.timevault_max_entries = 16384;	/* TV_DEF_ENTRIES; cap on list */
+
+	ss_cfg.prguard_enabled = false;		/* #20: opt-in */
 
 	ss_cfg.block_home_write = false;	/* #4 is aggressive: opt-in */
 	ss_cfg.binaryvault = false;	/* #17: conf turns it on at boot via load */
@@ -433,6 +437,7 @@ static int __init ss_lsm_init(void)
 	ss_home_init();
 	ss_binvault_init();
 	ss_radio_init();
+	ss_prguard_init();
 
 	pr_info("LSM initialised (id=0x%llx)\n", (unsigned long long)ss_lsmid.id);
 	return 0;
@@ -477,6 +482,8 @@ static int __init ss_sysfs_init(void)
 		ret = ss_binvault_sysfs(ss_kobj);
 	if (!ret)
 		ret = ss_radio_sysfs(ss_kobj);
+	if (!ret)
+		ret = ss_prguard_sysfs(ss_kobj);
 	if (ret) {
 		pr_err("failed to create sysfs knobs (%d)\n", ret);
 		kobject_put(ss_kobj);
@@ -508,6 +515,8 @@ static int __init ss_sysfs_init(void)
 			ret = ss_home_secfs(ss_secfs_dir);
 		if (!ret)
 			ret = ss_binvault_secfs(ss_secfs_dir);
+		if (!ret)
+			ret = ss_prguard_secfs(ss_secfs_dir);
 		if (ret)
 			pr_err("failed to create securityfs policy files (%d)\n",
 			       ret);

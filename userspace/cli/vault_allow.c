@@ -42,9 +42,10 @@
 #define VA_SECFS     SECFS "/timevault_allow"
 #define VA_LOCKFILE  "/run/secure_sudo-vault-allow.lock"
 
-/* Must match TV_MAX_ITEMS / TV_MAX_TEXT in kernel ss_timevault.c. */
-#define VA_MAX_ITEMS 16384
-#define VA_MAX_TEXT  (4 * 1024 * 1024)
+/* Must match TV_MAX_ITEMS / TV_MAX_TEXT in kernel ss_timevault.c. (The
+ * effective per-list cap is the configurable timevault_max_entries knob.) */
+#define VA_MAX_ITEMS 131072
+#define VA_MAX_TEXT  (16 * 1024 * 1024)
 
 /* One line of the conf file. Comment/blank lines keep path == NULL so the
  * file's header and any notes the admin wrote survive a rewrite. */
@@ -125,8 +126,13 @@ static int va_load(void)
 				*sp++ = '\0';
 				while (*sp == ' ')
 					sp++;
-				if (strlen(sp) == 64)
-					memcpy(l.hash, sp, 65);
+				/* Second token is a 64-hex SHA-256, or the keyword
+				 * "auto" (auto-update file) / "autodir" (auto-update
+				 * directory) - both stored verbatim in .hash and
+				 * rendered back out unchanged. */
+				if (strlen(sp) == 64 || !strcmp(sp, "auto") ||
+				    !strcmp(sp, "autodir"))
+					snprintf(l.hash, sizeof(l.hash), "%s", sp);
 			}
 			l.path = strdup(p);
 		}
@@ -534,13 +540,183 @@ static int cmd_wipe(int argc, char **argv)
 	return va_save_and_push() == 0 ? 0 : 1;
 }
 
+/* Upsert @path with a fixed token ("auto" or "autodir") instead of a hash. */
+static int va_set_token(const char *path, const char *token)
+{
+	ssize_t at = va_find(path);
+
+	if (at >= 0) {
+		snprintf(va[at].hash, sizeof(va[at].hash), "%s", token);
+		va_dirty = 1;
+		return VA_UPDATED;
+	}
+	{
+		struct va_line l = { 0 };
+
+		l.path = strdup(path);
+		if (!l.path)
+			return VA_ERR;
+		snprintf(l.hash, sizeof(l.hash), "%s", token);
+		if (va_push(&l)) {
+			free(l.path);
+			return VA_ERR;
+		}
+		va_dirty = 1;
+		return VA_ADDED;
+	}
+}
+
+/* `vault-allow add-auto <file>...` - mark a single file as an auto-update
+ * entry (exec allowed without a hash check, for a binary that rewrites itself). */
+static int cmd_add_auto(int argc, char **argv)
+{
+	int i, rc = 0;
+
+	if (argc < 1)
+		return fprintf(stderr, "usage: secure-sudo vault-allow add-auto <file>...\n"), 2;
+	for (i = 0; i < argc; i++) {
+		char real[PATH_MAX];
+		struct stat st;
+		int r;
+
+		if (!realpath(argv[i], real) || stat(real, &st) != 0) {
+			fprintf(stderr, "secure-sudo: %s: %s\n", argv[i], strerror(errno));
+			rc = 1;
+			continue;
+		}
+		if (!S_ISREG(st.st_mode)) {
+			fprintf(stderr, "secure-sudo: %s is not a regular file\n", real);
+			rc = 1;
+			continue;
+		}
+		if (!path_representable(real)) {
+			fprintf(stderr, "secure-sudo: %s has whitespace in its path\n", real);
+			rc = 1;
+			continue;
+		}
+		r = va_set_token(real, "auto");
+		if (r == VA_ERR)
+			rc = 1;
+		else
+			printf("%s %s (auto-update, no hash)\n",
+			       r == VA_ADDED ? "added  " : "updated", real);
+	}
+	if (va_dirty && va_save_and_push() != 0)
+		rc = 1;
+	return rc;
+}
+
+/* `vault-allow add-autodir <dir>...` - mark a whole directory as auto-update:
+ * any binary under it execs without a hash check (for a self-updating app). */
+static int cmd_add_autodir(int argc, char **argv)
+{
+	int i, rc = 0;
+
+	if (argc < 1)
+		return fprintf(stderr, "usage: secure-sudo vault-allow add-autodir <dir>...\n"), 2;
+	for (i = 0; i < argc; i++) {
+		char real[PATH_MAX];
+		struct stat st;
+		int r;
+
+		if (!realpath(argv[i], real) || stat(real, &st) != 0) {
+			fprintf(stderr, "secure-sudo: %s: %s\n", argv[i], strerror(errno));
+			rc = 1;
+			continue;
+		}
+		if (!S_ISDIR(st.st_mode)) {
+			fprintf(stderr, "secure-sudo: %s is not a directory\n", real);
+			rc = 1;
+			continue;
+		}
+		if (!path_representable(real)) {
+			fprintf(stderr, "secure-sudo: %s has whitespace in its path\n", real);
+			rc = 1;
+			continue;
+		}
+		r = va_set_token(real, "autodir");
+		if (r == VA_ERR)
+			rc = 1;
+		else
+			printf("%s %s (auto-update directory, no hash)\n",
+			       r == VA_ADDED ? "added  " : "updated", real);
+	}
+	if (va_dirty && va_save_and_push() != 0)
+		rc = 1;
+	return rc;
+}
+
+/* remove-dir scan state (nftw callback has no user pointer). */
+static size_t rmdir_removed;
+
+static int rmdir_cb(const char *fpath, const struct stat *sb, int type,
+		    struct FTW *ftw)
+{
+	ssize_t at;
+
+	(void)ftw;
+	if (type != FTW_F || !S_ISREG(sb->st_mode))
+		return 0;
+	if (!is_executable(fpath, sb))
+		return 0;			/* only executables/scripts */
+	at = va_find(fpath);			/* fpath is already canonical */
+	if (at >= 0) {
+		free(va[at].path);
+		memmove(&va[at], &va[at + 1], (va_n - at - 1) * sizeof(*va));
+		va_n--;
+		va_dirty = 1;
+		rmdir_removed++;
+	}
+	return 0;
+}
+
+/* `vault-allow remove-dir <dir>...` - walk each directory, and remove from the
+ * allowlist every executable binary / script found under it. Also drops an
+ * auto-update-directory entry for the directory itself, if present. */
+static int cmd_remove_dir(int argc, char **argv)
+{
+	int i, rc = 0;
+
+	if (argc < 1)
+		return fprintf(stderr, "usage: secure-sudo vault-allow remove-dir <dir>...\n"), 2;
+	for (i = 0; i < argc; i++) {
+		char real[PATH_MAX];
+		ssize_t at;
+
+		if (!realpath(argv[i], real)) {
+			fprintf(stderr, "secure-sudo: %s: %s\n", argv[i], strerror(errno));
+			rc = 1;
+			continue;
+		}
+		rmdir_removed = 0;
+		if (nftw(real, rmdir_cb, 64, FTW_PHYS) != 0)
+			fprintf(stderr, "secure-sudo: warning: walk of %s was incomplete\n", real);
+		/* Drop an autodir entry for the directory itself, if any. */
+		at = va_find(real);
+		if (at >= 0) {
+			free(va[at].path);
+			memmove(&va[at], &va[at + 1], (va_n - at - 1) * sizeof(*va));
+			va_n--;
+			va_dirty = 1;
+			rmdir_removed++;
+		}
+		printf("removed %zu entries under %s\n", rmdir_removed, real);
+	}
+	if (va_dirty && va_save_and_push() != 0)
+		rc = 1;
+	return rc;
+}
+
 void vault_allow_usage(void)
 {
 	fprintf(stderr,
 "  vault-allow scan [-n] [-x] <dir>...  hash + allow every executable binary/script\n"
 "                                       (-n dry run, -x stay on one filesystem)\n"
 "  vault-allow add <file>...            hash + allow single files\n"
+"  vault-allow add-auto <file>...       allow a self-updating file (no hash check)\n"
+"  vault-allow add-autodir <dir>...     allow a whole self-updating directory (no hash)\n"
 "  vault-allow remove <file>...         remove entries\n"
+"  vault-allow remove-dir <dir>...      remove every executable/script under a dir\n"
 "  vault-allow list                     show the saved allowlist\n"
 "  vault-allow wipe [-y] [--force]      empty the allowlist\n");
 }
@@ -574,6 +750,12 @@ int cmd_vault_allow(int argc, char **argv)
 		rc = cmd_scan(argc - 1, argv + 1);
 	else if (!strcmp(sub, "add"))
 		rc = cmd_add(argc - 1, argv + 1);
+	else if (!strcmp(sub, "add-auto"))
+		rc = cmd_add_auto(argc - 1, argv + 1);
+	else if (!strcmp(sub, "add-autodir"))
+		rc = cmd_add_autodir(argc - 1, argv + 1);
+	else if (!strcmp(sub, "remove-dir"))
+		rc = cmd_remove_dir(argc - 1, argv + 1);
 	else if (!strcmp(sub, "remove") || !strcmp(sub, "rm"))
 		rc = cmd_remove(argc - 1, argv + 1);
 	else if (!strcmp(sub, "list") || !strcmp(sub, "ls"))

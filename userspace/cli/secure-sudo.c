@@ -61,6 +61,9 @@ static const struct knob knobs[] = {
 	{ "block_wifi",           "block_wifi" },
 	{ "block_bluetooth",      "block_bluetooth" },
 	{ "ethernet_only",        "ethernet_only" },
+	{ "timevault_allow_autoupdate", "timevault_allow_autoupdate" },
+	{ "timevault_max_entries", "timevault_max_entries" },
+	{ "prguard_enabled",      "prguard_enabled" },
 };
 
 /* policy list  config file  ->  securityfs file */
@@ -80,6 +83,7 @@ static const struct listmap lists[] = {
 	{ "home_map.conf",              "home_map" },
 	{ "home_write_allow.conf",      "home_write_allow" },
 	{ "binvault_allow.conf",        "binvault_allow" },
+	{ "prguard_allow.conf",         "prguard_allow" },
 };
 
 static const struct listmap *find_list(const char *name)
@@ -461,6 +465,142 @@ static int cmd_radio(int argc, char **argv)
 	return 0;
 }
 
+
+/*
+ * `secure-sudo prguard <on|off|status|list|add|remove> [path]`
+ *
+ * on/off      -> set prguard_enabled (kernel + persisted)
+ * status      -> print prguard_enabled
+ * list        -> print the live kernel exemption list
+ * add <path>  -> add an absolute exe path to prguard_allow.conf and push it
+ * remove <p>  -> remove it
+ *
+ * The exemption list file is /etc/secure_sudo/prguard_allow.conf, pushed to the
+ * securityfs file /sys/kernel/security/secure_sudo/prguard_allow as a whole-
+ * list replacement (same model as every other policy list).
+ */
+#define PRGUARD_CONF  CONFIG_DIR "/prguard_allow.conf"
+#define PRGUARD_SECFS SECFS "/prguard_allow"
+
+static int prguard_push_file(void)
+{
+	/* Read the conf file and write it verbatim to the securityfs node. */
+	char *buf = NULL;
+	long n = 0;
+	FILE *f = fopen(PRGUARD_CONF, "re");
+	int rc = 0;
+
+	if (f) {
+		fseek(f, 0, SEEK_END);
+		n = ftell(f);
+		if (n < 0) n = 0;
+		fseek(f, 0, SEEK_SET);
+		buf = malloc((size_t)n + 1);
+		if (buf && n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) {
+			free(buf); buf = NULL;
+		}
+		fclose(f);
+	}
+	if (!buf) { buf = malloc(1); n = 0; }
+	if (!buf) return -1;
+	buf[n] = '\0';
+	if (write_file(PRGUARD_SECFS, buf, (size_t)n) != 0) {
+		fprintf(stderr, "secure-sudo: could not push prguard list to the kernel "
+			"(is the LSM active and unlocked?)\n");
+		rc = -1;
+	}
+	free(buf);
+	return rc;
+}
+
+static int prguard_edit(const char *path, int add)
+{
+	/* Load lines, add/remove the exact path, rewrite the file. */
+	char real[PATH_MAX];
+	char **lines = NULL; size_t n = 0, i; int found = 0, rc = 0;
+	char linebuf[PATH_MAX + 8];
+	FILE *f;
+
+	if (!realpath(path, real))
+		snprintf(real, sizeof(real), "%s", path);	/* keep as given */
+	if (real[0] != '/') {
+		fprintf(stderr, "secure-sudo: prguard paths must be absolute\n");
+		return 1;
+	}
+	f = fopen(PRGUARD_CONF, "re");
+	if (f) {
+		while (fgets(linebuf, sizeof(linebuf), f)) {
+			char *p = linebuf, *e;
+			while (*p == ' ' || *p == '\t') p++;
+			e = p + strlen(p);
+			while (e > p && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' '))
+				*--e = '\0';
+			if (!strcmp(p, real)) { found = 1; if (!add) continue; }
+			if (*p) {
+				char **nl = realloc(lines, (n + 1) * sizeof(*lines));
+				if (!nl) { rc = 1; break; }
+				lines = nl; lines[n++] = strdup(p);
+			}
+		}
+		fclose(f);
+	}
+	if (add && !found) {
+		char **nl = realloc(lines, (n + 1) * sizeof(*lines));
+		if (nl) { lines = nl; lines[n++] = strdup(real); }
+		else rc = 1;
+	}
+	if (!add && !found)
+		fprintf(stderr, "secure-sudo: %s was not in the list\n", real);
+
+	if (!rc) {
+		mkdir(CONFIG_DIR, 0700);
+		f = fopen(PRGUARD_CONF, "we");
+		if (!f) { fprintf(stderr, "secure-sudo: %s: %s\n", PRGUARD_CONF, strerror(errno)); rc = 1; }
+		else {
+			fprintf(f, "# Process Runtime Guard (#20) exemption list - absolute exe paths.\n");
+			for (i = 0; i < n; i++) fprintf(f, "%s\n", lines[i]);
+			fclose(f);
+		}
+	}
+	for (i = 0; i < n; i++) free(lines[i]);
+	free(lines);
+	if (rc) return 1;
+	if (prguard_push_file() != 0) return 1;
+	printf("%s %s\n", add ? "added" : "removed", real);
+	return 0;
+}
+
+static int cmd_prguard(int argc, char **argv)
+{
+	if (argc < 1) {
+		fprintf(stderr, "usage: secure-sudo prguard <on|off|status|list|add|remove> [path]\n");
+		return 2;
+	}
+	if (!strcmp(argv[0], "on") || !strcmp(argv[0], "off")) {
+		const char *v = argv[0][1] == 'n' ? "1" : "0";
+		if (set_knob("prguard_enabled", v) != 0)
+			return 1;
+		persist_knob("prguard_enabled", v);
+		printf("prguard %s\n", argv[0]);
+		return 0;
+	}
+	if (!strcmp(argv[0], "status")) {
+		char path[256];
+		snprintf(path, sizeof(path), SYSFS "/prguard_enabled");
+		printf("prguard_enabled ");
+		if (cat_file(path) != 0) printf("(unavailable)\n");
+		return 0;
+	}
+	if (!strcmp(argv[0], "list"))
+		return cmd_list_one("prguard_allow") == 0 ? 0 : 1;
+	if (!strcmp(argv[0], "add") && argc == 2)
+		return prguard_edit(argv[1], 1);
+	if ((!strcmp(argv[0], "remove") || !strcmp(argv[0], "rm")) && argc == 2)
+		return prguard_edit(argv[1], 0);
+	fprintf(stderr, "usage: secure-sudo prguard <on|off|status|list|add|remove> [path]\n");
+	return 2;
+}
+
 static int cmd_otp(int argc, char **argv)
 {
 	/* Hand off to the OTP helper, preserving argv. */
@@ -492,6 +632,7 @@ static void usage(void)
 "  list <name>          show a policy list's current kernel contents\n"
 "  net <mode>           monitor | host | lan-only | public-only\n"
 "  radio <w|bt|ethernet-only> <on|off>   toggle Wi-Fi/Bluetooth (off = radio off)\n"
+"  prguard <on|off|status|list|add|remove> [path]   process runtime (memory) guard\n"
 "  timevault <on|off>   engage/disengage TimeVault lockdown\n"
 "  lock                 lock the config until reboot (irreversible)\n"
 "  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
@@ -552,6 +693,8 @@ int main(int argc, char **argv)
 	}
 	if (!strcmp(argv[1], "radio"))
 		return cmd_radio(argc - 2, argv + 2) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "prguard"))
+		return cmd_prguard(argc - 2, argv + 2) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "vault-allow"))
 		return cmd_vault_allow(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "detect-admins"))

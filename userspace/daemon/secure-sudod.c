@@ -343,6 +343,52 @@ static void maybe_cooldown(const char *line)
 		kill_offenders((uid_t)uid);
 }
 
+/*
+ * #13 TimeVault anti-tamper quarantine. When the kernel denies an exec because
+ * a listed binary's hash no longer matches ("hash mismatch") or an unlisted
+ * binary tried to run ("not on allowlist"), the kernel has already STOPPED the
+ * exec; here we move the offending file aside - compressed into the quarantine
+ * folder (vault_action=quarantine) or deleted (vault_action=wipe). The event
+ * text is: `timevault: denied exec <path> (<reason>)`.
+ */
+static void run_helper(const char *helper, const char *arg);	/* defined below */
+
+static void maybe_quarantine_denied(const struct cfg *c, const char *line)
+{
+	const char *p = strstr(line, "timevault: denied exec ");
+	const char *close;
+	char path[1024];
+	size_t len;
+	struct stat st;
+
+	if (!p)
+		return;
+	p += strlen("timevault: denied exec ");
+	/* The path runs up to the " (<reason>)" suffix. */
+	close = strstr(p, " (");
+	if (!close || *p != '/')
+		return;				/* no path, or unresolvable marker */
+	/* Act only on a genuine tamper/unknown-binary denial. */
+	if (!strstr(close, "(hash mismatch)") &&
+	    !strstr(close, "(not on allowlist)"))
+		return;
+	len = (size_t)(close - p);
+	if (len == 0 || len >= sizeof(path))
+		return;
+	memcpy(path, p, len);
+	path[len] = '\0';
+	/* Only touch a real regular file that still exists. */
+	if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode))
+		return;
+
+	syslog_line("timevault: quarantining tampered/unlisted binary %s (action=%s)",
+		    path, c->vault_action);
+	if (!strcmp(c->vault_action, "wipe"))
+		unlink(path);
+	else
+		run_helper(HELPER_QUAR, path);
+}
+
 /* ---- #10 network mode ---- */
 
 static int read_sysfs_str(const char *name, char *out, size_t n)
@@ -582,6 +628,7 @@ int main(void)
 				     line = strtok_r(NULL, "\n", &save)) {
 					write_log(&cfg, line, strlen(line));
 					maybe_cooldown(line);
+					maybe_quarantine_denied(&cfg, line);
 				}
 			}
 		}

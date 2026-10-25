@@ -53,6 +53,9 @@ Behaviour notes:
 * Limits match the kernel: 16384 entries / 4 MiB. Over that, nothing is saved.
 * If the LSM is not loaded yet, it still writes the `.conf` and tells you the
   kernel will pick it up at next boot.
+* This bash twin manages hash entries only. Auto-update entries (`add-auto`,
+  `add-autodir`) and `remove-dir` are features of the compiled `secure-sudo
+  vault-allow` CLI.
 
 ```sh
 sudo /usr/libexec/secure-sudo/timevault-whitelist.sh scan -n /usr/local/bin
@@ -209,9 +212,10 @@ rules. Multi-homed hosts may need the detected subnets tuned.
 
 ## `userspace/daemon/helpers/quarantine.sh`
 
-Called by `secure-sudod` when TimeVault is engaged and a new or changed file
-appears in a watched tree, if `vault_action=quarantine` (the default). Not run
-by hand.
+Called by `secure-sudod` in two cases, both when `vault_action=quarantine`
+(the default): when TimeVault is engaged and a new or changed file appears in a
+watched tree, and when the kernel **blocks an exec** because a listed binary's
+hash no longer matches or an unlisted binary tried to run. Not run by hand.
 
 ```
 quarantine.sh <file>

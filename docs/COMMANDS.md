@@ -170,15 +170,54 @@ in [SCRIPTS.md](SCRIPTS.md#timevault-whitelist).
 |------------|--------------|
 | `vault-allow scan [-n] [-x] <dir>…` | hash every executable binary/script under each `<dir>` and add it. `-n` dry run; `-x` stay on one filesystem |
 | `vault-allow add <file>…` | hash and add single files |
-| `vault-allow remove <file>…` | drop entries |
+| `vault-allow add-auto <file>…` | add a self-updating **file** as an auto-update entry (exec allowed without a hash check) |
+| `vault-allow add-autodir <dir>…` | add a self-updating **directory**: any binary under it execs without a hash check |
+| `vault-allow remove <file>…` | drop entries by path |
+| `vault-allow remove-dir <dir>…` | walk a directory and remove every executable binary / script found under it from the allowlist (plus an `autodir` entry for the dir itself) |
 | `vault-allow list` | print the saved allowlist |
 | `vault-allow wipe [-y] [--force]` | empty the allowlist (asks unless `-y`; refuses while engaged unless `--force`) |
+
+Auto-update entries are only honoured while `timevault_allow_autoupdate = 1`
+(see [CONFIGURATION.md](CONFIGURATION.md)); set that to `0` to refuse every
+auto-update entry at once. The allowlist size is capped by
+`timevault_max_entries`.
 
 ```sh
 sudo secure-sudo vault-allow scan /usr/bin /usr/sbin /opt/app
 sudo secure-sudo vault-allow add /usr/local/bin/mytool
+sudo secure-sudo vault-allow add-autodir /opt/self-updating-app
+sudo secure-sudo vault-allow remove-dir /opt/old-app
 sudo secure-sudo vault-allow list
 ```
+
+## `secure-sudo prguard <on|off|status|list|add|remove> [path]`
+
+Drive the Process Runtime Guard (#20), which protects the runtime memory of
+every process except whitelisted ones (denies cross-process ptrace/memory
+tampering and writable+executable mappings).
+
+| Form | What it does |
+|------|--------------|
+| `prguard on` / `prguard off` | enable/disable the guard (kernel + persisted) |
+| `prguard status` | print the live `prguard_enabled` value |
+| `prguard list` | print the live kernel exemption list |
+| `prguard add <path>` | add an absolute **executable path** to the exemption list and push it |
+| `prguard remove <path>` | remove an exemption |
+
+The exemption list is `/etc/secure_sudo/prguard_allow.conf` (securityfs
+`prguard_allow`); list a program here only if it genuinely needs to debug other
+processes or map W+X memory (gdb, strace, perf, some JITs). Refused once the
+config is locked.
+
+```sh
+sudo secure-sudo prguard add /usr/bin/gdb     # let gdb debug (exempt it)
+sudo secure-sudo prguard on                    # guard everything else
+sudo secure-sudo prguard status
+sudo secure-sudo prguard list
+```
+
+See [BINARYVAULT.md](BINARYVAULT.md) for the companion anti-tamper feature, and
+[CONFIGURATION.md](CONFIGURATION.md) for every setting these commands touch.
 
 ## `secure-sudo detect-admins [-n]`
 

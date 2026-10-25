@@ -11,8 +11,9 @@ apply to an LSM that parses untrusted input and makes exec/privilege
 decisions.
 
 Every issue below was **fixed in this tree**, and each fix was then re-reviewed
-for issues of its own. Findings #15 and #16 are the second-pass reviews of the new
-BinaryVault (#17) and RadioGuard (#19) features. The full LSM (16 `.c` files, including BinaryVault and RadioGuard) compiles
+for issues of its own. Findings #15, #16, #18 and #19 are the second-pass reviews of the new
+BinaryVault (#17), RadioGuard (#19), TimeVault v6, and Process Runtime Guard
+(#20) work. The full LSM (16 `.c` files, including BinaryVault and RadioGuard) compiles
 cleanly with `-Werror` against real 6.11 kernel header trees; the CLI, daemon
 and PAM modules compile cleanly with `-Wall -Wextra`.
 
@@ -319,6 +320,69 @@ dead. **Fixed** by reading `gen = inode->i_generation;` alongside `dev`/`ino`
 before the match. (It slipped past `-Werror` because the value is read across a
 `kmalloc`/`mutex_lock`, which defeats the compiler's uninitialised-use
 analysis.)
+
+
+### 18. TimeVault auto-update + quarantine review (#13, v6) — SI-7 / CM-5
+
+The v6 TimeVault additions (auto-update entries, a configurable size cap, and
+quarantine-on-exec-mismatch) were reviewed:
+
+* **Auto-update entries are a deliberate hole, gated twice.** An `auto` /
+  `autodir` entry skips the hash check, so it is only as safe as the path it
+  names. Two gates bound the risk: (1) the entries exist only if an admin wrote
+  them while the config was unlocked, and (2) they are honoured only while
+  `timevault_allow_autoupdate = 1` — turning that off refuses them outright (no
+  silent fall-through). Auto-update files are deliberately **not** added to the
+  inode write-guard (they must be writable to self-update), which is documented
+  as the cost of the feature; hash entries remain write-protected.
+* **autodir uses the component-boundary prefix test** (`ss_path_under`), so
+  `/opt/app autodir` covers `/opt/app/...` but never `/opt/app-evil`, closing
+  the usual prefix-confusion (CWE-41).
+* **No weakening of the hard denials.** Package managers, the dynamic loader,
+  and unlinked files are still denied *before* any allowlist lookup, so an
+  auto-update entry can never re-enable them.
+* **Configurable cap can't over-allocate (CWE-789).** `timevault_max_entries`
+  is range-checked (1..131072) and the parser allocates to that cap, not an
+  attacker-chosen size; the 16 MiB text cap still bounds a single write.
+* **Quarantine path parsing is strict.** The daemon acts only on the kernel's
+  own `timevault: denied exec <path> (hash mismatch|not on allowlist)` events,
+  requires an absolute path and an existing regular file before touching
+  anything, and reuses the `--`-hardened quarantine helper (CWE-88). The kernel
+  has already blocked the exec, so quarantine is post-hoc cleanup, not the
+  enforcement — a failed quarantine cannot let the binary run.
+
+### 19. Process Runtime Guard second-pass review (#20) — SC-39 / SI-16 / AC-6
+
+New feature (`ss_prguard.c`). Reviewed for the ways a memory-tamper guard is
+usually bypassed:
+
+* **One choke point for three attack routes.** `process_vm_writev()` and
+  `/proc/pid/mem` writes both call `ptrace_may_access(... ATTACH ...)`, which
+  invokes the `ptrace_access_check` hook — so guarding that one hook covers all
+  three of ptrace-attach, `process_vm_writev`, and `/proc/pid/mem`. Verified the
+  hook only denies **ATTACH** mode, leaving non-invasive `PTRACE_MODE_READ`
+  alone so ordinary tooling is not broken.
+* **traceme can't be used to invite a non-exempt tracer.** `ptrace_traceme` is
+  hooked separately and resolves the *prospective tracer* (@parent), not the
+  caller, so a victim cannot `PTRACE_TRACEME` its way open to a non-exempt
+  process (CWE-284).
+* **W^X is enforced on both creation and transition.** `mmap_file` and
+  `file_mprotect` both reject `PROT_WRITE|PROT_EXEC` together, so neither
+  mapping W+X directly nor `mprotect`-ing an existing page to W+X works.
+  Well-behaved JITs that flip between W and X (never both at once) are
+  unaffected; those that truly need W+X go on the exemption list.
+* **Fail-closed identity.** Exemption is keyed on the resolved path of the
+  process's own `mm->exe_file` (reference-counted via `get_mm_exe_file`, always
+  `fput`); if it cannot be resolved while the guard is on, the process is
+  treated as non-exempt (guarded), never exempt. The list is sorted and
+  bsearch'd.
+* **Lock discipline.** The toggle and the exemption list are `0600`, go through
+  `ss_may_admin()`, and are refused once the #16 lock latches, so the guard
+  cannot be turned off or widened on a locked box (CM-5).
+
+Residual (documented): a process already being traced when the guard is enabled
+is not retro-actively detached; the guard prevents *new* attaches. Enable it
+early (at boot via `load`) on an appliance that wants the full guarantee.
 
 
 ---

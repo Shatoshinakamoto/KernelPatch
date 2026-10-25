@@ -51,10 +51,11 @@ install/
 | 10 | Network host mode: deny raw/AF_PACKET sockets; nft for lan/public modes |
 | 11 | NodeJS child-process guard (LSM task blob + allowlist) |
 | 12 | Restrict exec/PROT_EXEC mmap from /tmp, /var/tmp, /dev/shm |
-| 13 | TimeVault exec allowlist + package-manager deny + quarantine |
+| 13 | TimeVault hash-based anti-tamper exec gate: allowlist (+ auto-update entries), configurable size cap, package-manager deny, and quarantine of any binary blocked for a hash mismatch / not being listed |
 | 16 | One-way config lock until reboot (TimeVault latches it); blocks module loads / kexec / kernel-memory patching while locked |
 | 17 | **BinaryVault**: freeze every executable + shared library against write/truncate/unlink/rename/hardlink/chmod/xattr — for all UIDs incl. root (anti-tamper/anti-persistence). Effective at boot; updates via a `secure_sudo.binvault_maint=1` maintenance reboot |
 | 19 | **RadioGuard**: Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch. Refuses the wireless/BT core modules at load, denies AF_BLUETOOTH sockets, and denies `/dev/rfkill` writes. Drive with `secure-sudo radio …` |
+| 20 | **Process Runtime Guard**: protects running-process memory — denies cross-process ptrace/`process_vm_writev`/`/proc/pid/mem` tampering and W^X (writable+executable) mappings, for all processes except a CLI-managed exemption list. Drive with `secure-sudo prguard …` |
 
 (#4 is implemented with `file_open` + the `path_*` hooks — both source versions
 had built it on a non-existent `path_permission` hook. It is opt-in because it

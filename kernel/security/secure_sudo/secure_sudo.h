@@ -97,6 +97,11 @@ struct ss_cfg {
 	/* ---- #13 TimeVault ---- */
 	bool timevault_enabled;		/* when on: exec allowlist + pkg-mgr deny */
 	bool timevault_strict_mmap;	/* also gate PROT_EXEC mmap (libraries) */
+	bool timevault_allow_autoupdate;/* honour auto-update (no-hash) entries */
+	u32  timevault_max_entries;	/* configurable cap on allowlist size */
+
+	/* ---- #20 Process Runtime Guard ---- */
+	bool prguard_enabled;		/* memory-tamper guard for all processes */
 
 	/* ---- #4 home write-restriction ---- */
 	bool block_home_write;		/* confine non-sudo writes to home + allow */
@@ -285,5 +290,10 @@ int  ss_binvault_secfs(struct dentry *dir);
 /* #19 RadioGuard: module-load/socket/file hooks early; knobs late. */
 void ss_radio_init(void);
 int  ss_radio_sysfs(struct kobject *kobj);
+
+/* #20 Process Runtime Guard: ptrace/mprotect/mmap hooks early; knob + list late. */
+void ss_prguard_init(void);
+int  ss_prguard_sysfs(struct kobject *kobj);
+int  ss_prguard_secfs(struct dentry *dir);
 
 #endif /* _SECURITY_SECURE_SUDO_H */

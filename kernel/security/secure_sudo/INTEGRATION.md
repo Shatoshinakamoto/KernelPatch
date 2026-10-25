@@ -103,5 +103,9 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/ethernet_only` | rw (0600) | #19 RadioGuard master switch: 1 = keep both radios off |
 | boot param `secure_sudo.tpm_maint=1` | — | #5 permit TPM clear this boot |
 | boot param `secure_sudo.binvault_maint=1` | — | #17 open BinaryVault this boot so binaries can be updated |
+| `/sys/kernel/secure_sudo/timevault_allow_autoupdate` | rw (0600) | #13 honour auto-update (no-hash) entries; 0 refuses them |
+| `/sys/kernel/secure_sudo/timevault_max_entries` | rw (0600) | #13 configurable allowlist cap (1..131072) |
+| `/sys/kernel/secure_sudo/prguard_enabled` | rw (0600) | #20 Process Runtime Guard on/off |
+| `/sys/kernel/security/secure_sudo/prguard_allow` | rw (root) | #20 exempt exe paths; whole list per write |
 
-All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.
+All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `prguard`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.
