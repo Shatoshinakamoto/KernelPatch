@@ -435,6 +435,92 @@ an inline *blocking* one; pair it with BinaryVault (#17) / TimeVault (#13) for
 inline immutability of executables. If the store itself is deleted there is
 nothing to restore from, so keep `/var/lib/secure_sudo` on protected storage.
 
+### 21. ProcGuard review (v8 add-on) — AC-3 / SI-4 / SC-28
+
+Allowlist process enforcer. The dangerous property is "kill everything not
+listed", reviewed accordingly:
+
+* **Fail-safe against an incomplete list.** Refuses to run with an empty/missing
+  allowlist (would mean "kill all"); always exempts PID 1, kernel threads (no
+  `/proc/pid/exe`), its own process tree, and the secure_sudo binaries,
+  regardless of the list. Default `mode = monitor` only logs what it *would*
+  kill — enforce is a deliberate opt-in after the list is proven in monitor.
+* **Identity by on-disk path, not name.** A process is matched by the realpath
+  of `/proc/<pid>/exe`, not by `comm`/`argv[0]` (which an implant sets freely),
+  so renaming to `[kworker]` does not grant it allow status (CWE-290).
+* **Respawn classification bounds action.** A one-off non-allowed process is
+  killed; only a path that respawns past the threshold within the window is
+  escalated to quarantine+remove, so a transient is not deleted off disk.
+* **Quarantine is compressed + hourly-rotated + root-only.** The infected binary
+  is stored compressed under a 0700 tree in this hour's bucket, so the stored
+  sample cannot be executed in place and a fixed path cannot be targeted to
+  re-expand it (the stated anti-reinfection goal). Removal of the live file is
+  gated by `remove_on_infection`.
+* **Off-box sync is operator-defined.** `sync_cmd` is a root-written template
+  with `%f` single-quoted; it runs only if configured. Noted: it is `system()`,
+  so the operator owns what it runs — it is not reachable by a non-root user.
+
+Residual: ProcGuard is a userspace poller (default 5 s), so a very short-lived
+process can run to completion between scans; it is an allowlist *enforcer/
+remover*, complementary to the kernel's exec-time controls (#2/#1b/#12/#13),
+not a replacement for them.
+
+### 22. DriverGuard review (v8 add-on) — SI-7 / CM-5
+
+Driver-file integrity + repair. `baseline` pins each module by SHA-256 and keeps
+an hourly-rotated compressed backup; `scan` restores a changed/missing module
+from the newest backup only in `mode = enforce`. Restore writes via a temp-free
+`store_restore_compressed` (O_TRUNC + fsync, 0600). The manifest and backups are
+0600 under a 0700 tree. Honest scope: this guards the module files on disk; a
+module already resident in the kernel is covered by core finding #5/#6 (loaded-
+bytes hashing), noted so the two are not confused. New modules added by a
+legitimate kernel update are not in the manifest and are simply not protected
+until the next `baseline` — they are never deleted.
+
+### 23. BiosGuard review (v8 add-on) — SI-7 / CM-5 (detect-and-stage)
+
+The central decision is to **not** auto-reflash. A generic userspace firmware
+write bricks boards; so detection (DMI + ACPI-table hashes) and staging are the
+default, and the only write path (`apply`) refuses without an explicit
+`--i-understand-the-risk`, requires `flashrom` + a configured programmer, and is
+operator-invoked — never a timer/daemon. This is a deliberate safety boundary,
+documented rather than papered over. Residual/honest limits: ACPI+DMI hashing
+detects a large class of firmware tamper but is **not** a full SPI-flash
+measurement (that needs `flashrom -r` or a TPM event log); without a configured
+`good_image` BiosGuard is detection-only. Stated plainly to the user.
+
+### 24. BootGuard review (v8 add-on) — SI-7 / CM-5 (stage-at-boot)
+
+Same safety stance for `/boot`: a live rewrite under a running kernel is unsafe,
+so tamper is **staged** (restore list + `PENDING` flag, 0600) and applied at the
+next boot by a systemd unit that no-ops unless `PENDING` is set; a forced live
+restore needs `apply-now --i-understand-the-risk`. Restores come from the
+hourly-rotated compressed backups. Honest limit, documented: the systemd unit
+applies as early as a normal unit can (after `/boot` mounts, before services use
+it); restoring before *anything* reads `/boot` needs an initramfs hook — the
+unit is the practical default, the initramfs hook the stronger option. New boot
+files are reported, never deleted (kernel updates add files).
+
+### 25. Locus + shared libs review (v8 add-on) — SC-39 / SC-28 / AC-4
+
+The allocator is a minimal attack surface by design: a fixed `ALLOC <purpose>`
+→ `OK <path>` protocol that only names a directory and touches nothing else.
+Reviewed:
+
+* **Purpose is constrained**, `[A-Za-z0-9-]`, ≤63 chars, so it cannot encode a
+  path or `..`; an unknown purpose is refused unless a `default_root` is set.
+* **The GUI is read-only**: GET-only, no request path is ever interpreted as a
+  filesystem path, no file serving, `X-Content-Type-Options: nosniff`. It can be
+  kept on `127.0.0.1` (default) while the allocator is on the LAN.
+* **Client-side validation**: a guard validates Locus's reply (absolute, no
+  `..`, no control chars) before writing to it, so a rogue/spoofed allocator
+  cannot steer a guard's writes. Locus is trusted only to *name* a location.
+* **Logging never blocks the guard**: `ssaddon_log` sends to the remote
+  collector best-effort (failed `send()` ignored), local writes are 0600 under a
+  0700 dir, and a size cap rotates the local file. Exposure note: the
+  allocator/GUI bind addresses are the operator's responsibility — the defaults
+  are loopback, and the docs say to put only the allocator on the LAN.
+
 
 ---
 

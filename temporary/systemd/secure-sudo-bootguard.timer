@@ -1,0 +1,10 @@
+[Unit]
+Description=Run secure_sudo BootGuard scan hourly (v8 add-on)
+
+[Timer]
+OnBootSec=9min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

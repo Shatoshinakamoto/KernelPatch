@@ -67,6 +67,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <time.h>
+#include <syslog.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <openssl/evp.h>
@@ -446,6 +447,7 @@ static int do_snapshot(void)
 		return -1;
 	}
 	chmod(MANIFEST, 0600);
+	syslog(LOG_INFO, "snapshot captured %zu files", ctx.files);
 	printf("secure-sudo pheonixbox: snapshot captured %zu files\n", ctx.files);
 	return 0;
 }
@@ -539,6 +541,7 @@ static int cmd_enable(void)
 		fclose(f);
 		chmod(ENABLED, 0600);
 	}
+	syslog(LOG_WARNING, "ENABLED - protected files locked read-only, scanning active");
 	printf("secure-sudo pheonixbox: ENABLED - files locked read-only, scanning active\n");
 	return 0;
 }
@@ -566,6 +569,7 @@ static int cmd_disable(void)
 	 * (this undoes the read-only lock). */
 	for_each_manifest(restore_perms, NULL);
 	unlink(ENABLED);
+	syslog(LOG_WARNING, "DISABLED - original permissions restored");
 	printf("secure-sudo pheonixbox: DISABLED - original permissions restored\n");
 	return 0;
 }
@@ -602,10 +606,15 @@ static void scan_one(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 		return;
 	if (blob_restore(path, mode) == 0) {
 		c->repaired++;
+		/* Log every repair (forwardable off-box via syslog/rsyslog) so a
+		 * tamper event leaves a durable record even if quiet. */
+		syslog(LOG_CRIT, "repaired tampered file %s", path);
 		if (!c->quiet)
 			printf("repaired %s\n", path);
-	} else if (!c->quiet) {
-		fprintf(stderr, "secure-sudo pheonixbox: FAILED to repair %s\n", path);
+	} else {
+		syslog(LOG_ERR, "FAILED to repair %s", path);
+		if (!c->quiet)
+			fprintf(stderr, "secure-sudo pheonixbox: FAILED to repair %s\n", path);
 	}
 }
 
@@ -771,6 +780,10 @@ int main(int argc, char **argv)
 	}
 	if (require_root() != 0)
 		return 1;
+	/* Open syslog so PheonixBox's tamper/repair and enable/disable events are
+	 * recorded and can be shipped to an external log server via the system's
+	 * syslog (rsyslog/syslog-ng forwarding) for off-box backup. */
+	openlog("secure-sudo-pheonixbox", LOG_PID, LOG_AUTHPRIV);
 	cmd = argv[1];
 
 	if (!strcmp(cmd, "on") || !strcmp(cmd, "enable"))
