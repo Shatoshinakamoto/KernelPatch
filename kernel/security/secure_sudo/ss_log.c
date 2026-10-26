@@ -42,6 +42,13 @@ static DEFINE_KFIFO(ss_ring, char, SS_RING_BYTES);
 static DEFINE_SPINLOCK(ss_ring_lock);
 static DECLARE_WAIT_QUEUE_HEAD(ss_ring_wq);
 static bool ss_ring_ready;
+/* Lines discarded because a slow reader let the ring fill (never reset). */
+static atomic64_t ss_ring_dropped = ATOMIC64_INIT(0);
+
+u64 ss_events_dropped(void)
+{
+	return atomic64_read(&ss_ring_dropped);
+}
 
 /*
  * Optional second sink: the kernel audit subsystem, so auditd / ausearch /
@@ -103,9 +110,18 @@ void ss_event(const char *fmt, ...)
 	line[n++] = '\n';
 
 	spin_lock_irqsave(&ss_ring_lock, flags);
-	/* Make room by discarding oldest bytes if necessary. */
-	while (kfifo_avail(&ss_ring) < n && !kfifo_is_empty(&ss_ring))
-		kfifo_skip(&ss_ring);
+	/*
+	 * Make room by discarding the oldest WHOLE lines, so a reader never
+	 * starts mid-event, and count each one so consumers can see that
+	 * history is missing instead of assuming they saw everything.
+	 */
+	while (kfifo_avail(&ss_ring) < n && !kfifo_is_empty(&ss_ring)) {
+		char c;
+
+		while (kfifo_get(&ss_ring, &c) && c != '\n')
+			;
+		atomic64_inc(&ss_ring_dropped);
+	}
 	kfifo_in(&ss_ring, line, n);
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 

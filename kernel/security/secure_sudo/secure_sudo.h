@@ -20,6 +20,7 @@
 #include <linux/mutex.h>
 #include <linux/kobject.h>
 #include <linux/lsm_hooks.h>
+#include <linux/kernel_read_file.h>
 
 #define SS_NAME "secure_sudo"
 
@@ -209,6 +210,8 @@ static inline int ss_check_range(u32 v, u32 lo, u32 hi)
  * pr_warn_ratelimited() when a human reading dmesg should also see the event.
  */
 __printf(1, 2) void ss_event(const char *fmt, ...);
+/* #9: number of event lines dropped from the ring since boot. */
+u64 ss_events_dropped(void);
 
 /* SHA-256 a file's full contents into @hex_out (>=65 bytes, hex + NUL). Defined
  * in ss_driver.c, shared with TimeVault. Returns 0 on success. */
@@ -234,12 +237,19 @@ static inline struct ss_task *ss_task(const struct task_struct *t)
 }
 
 /*
- * Per-subsystem setup. Each protection lives in its own file and exposes two
- * entry points:
- *   *_init()  - called from the LSM .init (very early); registers LSM hooks.
+ * Per-subsystem setup. Each protection lives in its own file and exposes up to
+ * two entry points:
+ *   *_init()  - called from the LSM .init (very early); registers the LSM
+ *               hooks that only this protection uses.
  *   *_sysfs() - called from a late_initcall; creates the /sys knobs.
  * Splitting the two matters: LSM .init runs long before the driver model and
  * sysfs are ready, so kobjects must not be created there.
+ *
+ * A hook used by more than one protection is registered exactly once, by
+ * ss_hooks.c, which calls each protection's handler (declared at the end of
+ * this file) in a fixed order. Since 6.9 the kernel gives every LSM a fixed
+ * number of static-call slots per hook; registering one hook several times
+ * from the same LSM runs out of slots and panics at boot.
  */
 void ss_creds_init(void);
 int  ss_creds_sysfs(struct kobject *kobj);
@@ -250,28 +260,23 @@ int  ss_creds_secfs(struct dentry *dir);
 /* #16 lock enforcement hooks (locked_down, module/kexec loads). */
 void ss_lock_init(void);
 
-/* #2 command blacklist: hooks early, securityfs "blacklist" file late. */
-void ss_exec_init(void);
+/* #2 command blacklist: bprm handler (shared); securityfs "blacklist" late. */
 int  ss_exec_secfs(struct dentry *dir);
 
-/* #3 firmware/flash protection: file_open hook early, sysfs knob late. */
-void ss_firmware_init(void);
+/* #3 firmware/flash protection: file_open handler (shared), sysfs knob late. */
 int  ss_firmware_sysfs(struct kobject *kobj);
 
-/* #5 TPM-clear block: file_open hook (applies to everyone, not just non-sudo). */
-void ss_tpm_init(void);
+/* #5 TPM-clear block: file_open handler only (shared; applies to everyone). */
 
 /* #7 RAM-spike detection: no hooks (a kthread/worker); start it late. */
 int  ss_ram_sysfs(struct kobject *kobj);
 void ss_ram_start(void);
 
-/* #12 exec-from-tmp restriction: bprm + mmap hooks early, knobs/allowlist late. */
-void ss_tmpexec_init(void);
+/* #12 exec-from-tmp restriction: bprm + mmap handlers (shared); knobs late. */
 int  ss_tmpexec_sysfs(struct kobject *kobj);
 int  ss_tmpexec_secfs(struct dentry *dir);
 
-/* #10 network socket block (HOST mode): socket_create hook early, knob late. */
-void ss_net_init(void);
+/* #10 network socket block (HOST mode): socket_create handler (shared). */
 int  ss_net_sysfs(struct kobject *kobj);
 
 /* #9 event log: ring has no hooks; create the securityfs "events" file late. */
@@ -281,8 +286,7 @@ int  ss_log_secfs(struct dentry *dir);
 void ss_node_init(void);
 int  ss_node_secfs(struct dentry *dir);
 
-/* #8 sudo brute-force cooldown: bprm hook early; knobs + PAM feed file late. */
-void ss_cooldown_init(void);
+/* #8 sudo brute-force cooldown: bprm handler (shared); knobs + PAM feed late. */
 int  ss_cooldown_sysfs(struct kobject *kobj);
 int  ss_cooldown_secfs(struct dentry *dir);
 
@@ -290,8 +294,7 @@ int  ss_cooldown_secfs(struct dentry *dir);
 void ss_driver_init(void);
 int  ss_driver_secfs(struct dentry *dir);
 
-/* #13 TimeVault exec allowlist: bprm hook early; knob + allowlist late. */
-void ss_timevault_init(void);
+/* #13 TimeVault exec allowlist: handlers (shared); knob + allowlist late. */
 int  ss_timevault_sysfs(struct kobject *kobj);
 int  ss_timevault_secfs(struct dentry *dir);
 
@@ -305,8 +308,7 @@ void ss_binvault_init(void);
 int  ss_binvault_sysfs(struct kobject *kobj);
 int  ss_binvault_secfs(struct dentry *dir);
 
-/* #19 RadioGuard: module-load/socket/file hooks early; knobs late. */
-void ss_radio_init(void);
+/* #19 RadioGuard: module-load/socket/file handlers (shared); knobs late. */
 int  ss_radio_sysfs(struct kobject *kobj);
 
 /* #20 Process Runtime Guard: ptrace/mprotect/mmap hooks early; knob + list late. */
@@ -318,8 +320,78 @@ int  ss_prguard_secfs(struct dentry *dir);
 void ss_bpf_init(void);
 int  ss_bpf_sysfs(struct kobject *kobj);
 
-/* #23 SysctlGuard: file_open hook early; knob late. */
-void ss_sysctl_init(void);
+/* #23 SysctlGuard: file_open handler (shared); knob late. */
 int  ss_sysctl_sysfs(struct kobject *kobj);
+
+/*
+ * Handlers for hooks shared by several protections, registered once by
+ * ss_hooks.c (see the note above the *_init() list). Same signatures and
+ * return conventions as the LSM hooks they serve.
+ */
+struct linux_binprm;
+struct vm_area_struct;
+struct path;
+struct file;
+
+void ss_hooks_init(void);
+
+int ss_exec_bprm(struct linux_binprm *bprm);
+int ss_tmp_bprm(struct linux_binprm *bprm);
+int ss_node_bprm(struct linux_binprm *bprm);
+int ss_cooldown_bprm(struct linux_binprm *bprm);
+int ss_timevault_bprm(struct linux_binprm *bprm);
+
+int ss_firmware_file_open(struct file *file);
+int ss_tpm_file_open(struct file *file);
+int ss_timevault_file_open(struct file *file);
+int ss_home_file_open(struct file *file);
+int ss_binvault_file_open(struct file *file);
+int ss_radio_file_open(struct file *file);
+int ss_sysctl_file_open(struct file *file);
+
+int ss_tmp_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
+		unsigned long flags);
+int ss_timevault_mmap(struct file *file, unsigned long reqprot,
+		      unsigned long prot, unsigned long flags);
+int ss_pg_mmap_file(struct file *file, unsigned long reqprot,
+		    unsigned long prot, unsigned long flags);
+
+int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+		    unsigned long prot);
+int ss_timevault_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+			  unsigned long prot);
+int ss_pg_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+		   unsigned long prot);
+
+int ss_lock_read_file(struct file *file, enum kernel_read_file_id id,
+		      bool contents);
+int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
+			bool contents);
+int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
+		       bool contents);
+
+#ifdef CONFIG_SECURITY_PATH
+int ss_timevault_truncate(const struct path *path);
+int ss_home_path_truncate(const struct path *path);
+int ss_home_path_unlink(const struct path *dir, struct dentry *d);
+int ss_binvault_path_unlink(const struct path *dir, struct dentry *d);
+int ss_home_path_link(struct dentry *old, const struct path *ndir,
+		      struct dentry *nd);
+int ss_binvault_path_link(struct dentry *old_dentry, const struct path *new_dir,
+			  struct dentry *new_dentry);
+int ss_home_path_rename(const struct path *odir, struct dentry *od,
+			const struct path *ndir, struct dentry *nd,
+			unsigned int flags);
+int ss_binvault_path_rename(const struct path *odir, struct dentry *od,
+			    const struct path *ndir, struct dentry *nd,
+			    unsigned int flags);
+int ss_home_path_chmod(const struct path *path, umode_t mode);
+int ss_binvault_path_chmod(const struct path *path, umode_t mode);
+#endif
+
+#ifdef CONFIG_SECURITY_NETWORK
+int ss_net_socket_create(int family, int type, int protocol, int kern);
+int ss_radio_socket_create(int family, int type, int protocol, int kern);
+#endif
 
 #endif /* _SECURITY_SECURE_SUDO_H */

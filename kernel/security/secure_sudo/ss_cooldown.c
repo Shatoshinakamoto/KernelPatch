@@ -189,7 +189,7 @@ static bool is_priv_tool(const struct linux_binprm *bprm, const char *base)
 	       mnt_may_suid(bprm->file->f_path.mnt);
 }
 
-static int ss_cooldown_bprm(struct linux_binprm *bprm)
+int ss_cooldown_bprm(struct linux_binprm *bprm)
 {
 	char *buf, *p;
 	const char *base;
@@ -229,15 +229,7 @@ static int ss_cooldown_bprm(struct linux_binprm *bprm)
 	return ret;
 }
 
-static struct security_hook_list ss_cooldown_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(bprm_check_security, ss_cooldown_bprm),
-};
 
-void __init ss_cooldown_init(void)
-{
-	security_add_hooks(ss_cooldown_hooks, ARRAY_SIZE(ss_cooldown_hooks),
-			   &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knobs -------------------------------- */
 

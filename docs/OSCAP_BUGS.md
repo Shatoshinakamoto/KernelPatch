@@ -53,7 +53,7 @@ manual-review controls (OSB-14).
 
 | ID | Rule | Symptom | Root cause | Patch | Verified |
 |----|------|---------|-----------|-------|----------|
-| **OSB-03** | `banner_etc_profiled_ssh_confirm` | Still **fail** after its own fix; `/etc/profile.d/ssh_confirm.sh` became one broken line. | **Upstream SSG bug:** the fix writes the OVAL regex token `(?:[n]+\|(?:n)+)` literally where newlines belong. Reproduced again in v11, so it is still in 0.1.78. | Replace each token with a newline, check with `bash -n`, restore the original if the check fails. Backup kept as `.pre-patch`. | Reproduced and fixed (§3) |
+| **OSB-03** | `banner_etc_profiled_ssh_confirm`, `banner_etc_issue_net` | Still **fail** after its own fix; `/etc/profile.d/ssh_confirm.sh` became one broken line, and in the VM `/etc/issue.net` got the same token. | **Upstream SSG bug:** the fixes write the OVAL regex token `(?:[n]+\|(?:n)+)` literally where newlines belong. Reproduced again in v11, so it is still in 0.1.78. | Replace each token with a newline (`ssh_confirm.sh`, `/etc/issue.net`, `/etc/issue`); for the script, check with `bash -n` and restore the original if the check fails. Backup kept as `.pre-patch`. | Reproduced and fixed (§3); `issue.net` part not yet VM-verified |
 | **OSB-05** | `sssd_enable_user_cert` | Still **fail** after its own fix. | The fix sets `pam_cert_auth = True`, but the OVAL check looks for `ldap_user_certificate` in the `[domain/...]` section, which the fix never writes. | Add `ldap_user_certificate = userCertificate;binary` to each existing `[domain/...]` section (only if one exists); keep mode 0600; backup kept. | Reproduced and fixed (§3) |
 | **OSB-06** | `file_groupowner_var_log` | Still **fail** after its own fix. | The fix only `chgrp`s to `syslog` if that group exists and silently does nothing otherwise; a minimal install has no rsyslog, so no `syslog` group. | Install rsyslog when the group is missing (STIG requires it anyway), then `chgrp syslog /var/log`. | Reproduced and fixed (§3) |
 
@@ -157,7 +157,57 @@ no login shell for system accounts, `su` restricted to an empty wheel group,
 
 ---
 
-## 5. How to reproduce
+## 5. Release run in a VM (v12, 2026-10-26)
+
+`tests/vm/distro/run-stig-test.sh` on a fresh Ubuntu 24.04 cloud image with
+the secure_sudo kernel installed and committed (systemd, AppArmor, GRUB,
+real block devices), QEMU without KVM. Raw output:
+[`docs/vm/results/07-distro-stig/`](vm/results/07-distro-stig/).
+
+| Step | Pass | Fail | Error | Not applicable | Not checked |
+|------|-----:|-----:|------:|---------------:|------------:|
+| Baseline | 57 | 64 | 0 | 105 | 4 |
+| Remediation pass 1 | 122 | 95 | 0 | 8 | 5 |
+| Remediation pass 2 | **206** | **11** | **0** | 8 | 5 |
+
+The VM evaluates the machine-level rules a container marks not applicable,
+so far more of the same 230 rules apply (8 not applicable instead of 164). **Zero evaluation errors**: `apparmor_configured` (OSB-13) evaluates
+and passes on a real host, as expected.
+
+The run was stopped after pass 2: the post-remediation scan was cut off by
+the build host's 2-hour job limit, and the final rescan after the fixes below
+was skipped to ship v12. **The fixes below are therefore not yet confirmed by
+a VM scan**; the next run of the workflow's nightly STIG job is that check.
+
+Every rule not at pass after pass 2, by rule ID:
+
+| Rule | Result | Cause | What v12 does | ID |
+|------|--------|-------|---------------|----|
+| `encrypt_partitions` | **pass (false)** | The disk is not encrypted. The scanner cannot check this rule here, see OSB-19. | Independent check; the gate uses it (it reports fail, as expected for the test VM) | OSB-19, OSB-12 |
+| `is_fips_mode_enabled` | fail | No FIPS mode on a self-built kernel; it cannot be FIPS 140-validated. | **Accepted** by Pheonix; listed as an allowed fail | — |
+| `service_sssd_enabled` | fail | The STIG fix writes a placeholder `[domain/example.com]` with no `id_provider`; sssd refuses to start ("No domain is enabled"). Needs the site's directory. | **Accepted** by Pheonix; listed as an allowed fail; STIG.md lists the settings | — |
+| `banner_etc_issue_net` | fail | Same SSG bug as OSB-03, in `/etc/issue.net`: the regex token written instead of newlines. Applies only on a real host (the rule needs `linux-base`). | OSB-03 now repairs `/etc/issue.net` and `/etc/issue` too | OSB-03 |
+| `banner_etc_profiled_ssh_confirm` | fail | OSB-03 (the post-patch ran after this scan) | existing patch | OSB-03 |
+| `accounts_password_pam_retry` | fail | Unlike in the container, this fails on a real host after both passes. OSB-04's patch (`retry = 3` in `pwquality.conf`) ran after this scan; whether it is what this rule needs here is not yet confirmed | existing patch | OSB-04 |
+| `sssd_enable_user_cert` | fail | OSB-05 (the post-patch ran after this scan) | existing patch | OSB-05 |
+| `directory_permissions_var_log_audit` | fail | Passed after pass 1. Pass 2's fix for `file_group_ownership_var_log_audit_stig` sets `log_group = root`, which makes this rule want 0700 instead of 0750, and nothing re-runs its fix. | New post-patch | OSB-20 |
+| `check_ufw_active`, `ufw_rate_limit` | fail | SSG has no fix for either ("FIX FOR THIS RULE ... IS MISSING"): turning on the firewall is the site's call. | Site step: `ufw limit 22/tcp`, `ufw --force enable`. **Doing this showed ufw cannot start on the test kernel**, see OSB-21 | OSB-21 |
+| `auditd_offload_logs` | fail | No SSG fix; wants a weekly `/etc/cron.weekly/audit-offload`. | Site step installs one (local stand-in destination in the VM; a site sends to its log host) | — |
+| `chronyd_specify_remote_server` | fail | Every `server` line must be in the approved list, which the STIG profile fixes to `0.us.pool.ntp.mil`; the VM's site server is 10.0.2.2. | New `stig-harden.sh --tailoring FILE`; the VM run passes `tests/vm/distro/stig-vm-tailoring.xml` | — |
+| `account_temp_expire_date`, `ensure_sudo_group_restricted`, `only_allow_dod_certs` | notchecked | Manual review | listed | OSB-14 |
+| `ufw_only_required_services`, `auditd_audispd_configure_sufficiently_large_partition` | notchecked | Manual review (new on the VM) | listed | OSB-14 |
+
+### New issues found by the VM run
+
+| ID | Symptom | Root cause | Patch | Status |
+|----|---------|-----------|-------|--------|
+| **OSB-19** | `encrypt_partitions` **passes on an unencrypted disk**. | Two bugs together. (1) Ubuntu builds OpenSCAP 1.3.9 with PCRE2; the partition probe counts only a return of 0 as a match, PCRE2 returns 1, so a `partition_object` selected by a mount-point pattern never has items and the rule's "no unencrypted partition" test is always true. (2) The cloud image's `/etc/crypttab` holds only a comment, and the rule's pattern `^\s*(\S+)` takes the `#` as an entry. The same probe bug empties `dir_perms_world_writable_sticky_bits`'s list of filesystems, so it passes without searching. Evidence: `07-distro-stig/oscap-partition-probe.txt`. | `stig-harden.sh` checks both rules itself after every scan (dm-crypt under every local filesystem outside `/boot`; `find -xdev` for world-writable directories without the sticky bit) and writes `<result>.crosscheck`. The gate uses those results instead of the scanner's for the rules marked `crosscheck` in the expectation file, says so in its output, and in release mode **fails** if they are missing. | Patched in our tooling; upstream not checked (GitHub unreachable) |
+| **OSB-20** | `directory_permissions_var_log_audit` passes after pass 1, fails after pass 2. | Ordering between two rules' fixes (see table). | Post-patch: when `auditd.conf` has `log_group = root`, set the audit log directory to 0700. | Fixed in script, not yet VM-verified |
+| **OSB-21** | `ufw --force enable` fails on the secure_sudo test kernel: `Extension conntrack ... not supported`, `RULE_APPEND failed`; ufw is left half-applied and new SSH connections hang. | The VM kernel was built with `SS_LOCALMOD` (localmodconfig from a fresh guest's `lsmod`), which drops every module not loaded at that moment. ufw was not on yet, so `NF_CONNTRACK`, `NFT_COMPAT`, the xt matches and `ip_tables` were not built. Log: `07-distro-stig/site-ufw-enable.log`. | `install.sh build-kernel` now always keeps the netfilter stack ufw and secure_sudo's network modes need when `SS_LOCALMOD` is used, and stops if it does not stick. Checked with Kconfig (`make olddefconfig`) against the VM kernel's config; **not yet rebuilt and booted**. The default build (no `SS_LOCALMOD`) starts from the distro config and was not affected. | Fixed in installer, not yet VM-verified |
+
+---
+
+## 6. How to reproduce
 
 ```sh
 # STIG: scan, two remediation passes, known-issue patches, final scan

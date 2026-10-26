@@ -352,7 +352,7 @@ static void maybe_cooldown(const char *line)
  * folder (vault_action=quarantine) or deleted (vault_action=wipe). The event
  * text is: `timevault: denied exec <path> (<reason>)`.
  */
-static void run_helper(const char *helper, const char *arg);	/* defined below */
+static int run_helper(const char *helper, const char *arg);	/* defined below */
 
 static void maybe_quarantine_denied(const struct cfg *c, const char *line)
 {
@@ -386,8 +386,8 @@ static void maybe_quarantine_denied(const struct cfg *c, const char *line)
 		    path, c->vault_action);
 	if (!strcmp(c->vault_action, "wipe"))
 		unlink(path);
-	else
-		run_helper(HELPER_QUAR, path);
+	else if (run_helper(HELPER_QUAR, path) != 0)
+		syslog_line("timevault: quarantine of %s failed; file left in place", path);
 }
 
 /* ---- #10 network mode ---- */
@@ -411,18 +411,34 @@ static int read_sysfs_str(const char *name, char *out, size_t n)
 	return 0;
 }
 
-static void run_helper(const char *helper, const char *arg)
+/* Run a helper and wait for it. Returns its exit status (128 + signal if it
+ * was killed, -1 if it could not be started). */
+static int run_helper_quiet(const char *helper, const char *arg)
 {
 	pid_t pid = fork();
+	int st, rc = -1;
 
 	if (pid == 0) {
 		execl(helper, helper, arg, (char *)NULL);
 		_exit(127);
-	} else if (pid > 0) {
-		int st;
-
-		waitpid(pid, &st, 0);
 	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid) {
+		if (WIFEXITED(st))
+			rc = WEXITSTATUS(st);
+		else if (WIFSIGNALED(st))
+			rc = 128 + WTERMSIG(st);
+	}
+	return rc;
+}
+
+/* As run_helper_quiet(), and a non-zero result is logged. */
+static int run_helper(const char *helper, const char *arg)
+{
+	int rc = run_helper_quiet(helper, arg);
+
+	if (rc != 0)
+		syslog_line("helper %s %s failed (status %d)", helper, arg, rc);
+	return rc;
 }
 
 /* ---- #21 PheonixBox periodic scan+repair ----
@@ -444,18 +460,34 @@ static void pheonixbox_scan(void)
 	}
 }
 
+/*
+ * Apply the kernel's net_mode with the nft helper. A mode counts as applied
+ * only once the helper succeeded; until then it is retried on every periodic
+ * pass (e.g. public-only at boot, before the network has a default route),
+ * and the failure is logged once rather than every 5 seconds. The helper
+ * leaves the previous rules in place when it fails.
+ */
 static void apply_net_mode(void)
 {
-	static char last[32] = "";
+	static char applied[32] = "", failing[32] = "";
 	char mode[32];
 
 	if (read_sysfs_str("net_mode", mode, sizeof(mode)) != 0)
 		return;
-	if (!strcmp(mode, last))
+	if (!strcmp(mode, applied))
 		return;
-	snprintf(last, sizeof(last), "%s", mode);
-	syslog_line("net: applying mode %s", mode);
-	run_helper(HELPER_NET, mode);
+	if (strcmp(mode, failing))
+		syslog_line("net: applying mode %s", mode);
+	if (run_helper_quiet(HELPER_NET, mode) == 0) {
+		snprintf(applied, sizeof(applied), "%s", mode);
+		if (!strcmp(mode, failing))
+			syslog_line("net: mode %s applied after retrying", mode);
+		failing[0] = '\0';
+	} else if (strcmp(mode, failing)) {
+		syslog_line("net: mode %s NOT applied yet (helper failed); retrying every 5s",
+			    mode);
+		snprintf(failing, sizeof(failing), "%s", mode);
+	}
 }
 
 /* ---- #13 TimeVault scan ---- */
@@ -565,10 +597,15 @@ static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
 		/* New or changed file while the vault is engaged. */
 		syslog_line("timevault: %s %s (action=%s)",
 			    prev[0] ? "changed" : "new", path, c->vault_action);
-		if (!strcmp(c->vault_action, "wipe"))
+		if (!strcmp(c->vault_action, "wipe")) {
 			unlink(path);
-		else
-			run_helper(HELPER_QUAR, path);
+		} else if (run_helper(HELPER_QUAR, path) != 0) {
+			/* Not recorded: a file that could not be quarantined
+			 * must not become "known" and stop being flagged. */
+			syslog_line("timevault: quarantine of %s failed; file left in place, will retry",
+				    path);
+			continue;
+		}
 		manifest_record(path, have);
 	}
 	closedir(d);

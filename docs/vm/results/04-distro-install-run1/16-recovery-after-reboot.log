@@ -1,0 +1,8 @@
+# E4 after the reboot
+not ok 1 - E4 the reboot cleared the lock
+not ok 2 - E4 the fixed config was applied at boot
+ok 3 - E4 tester can sudo
+cp: cannot stat '/root/conf.orig': No such file or directory
+#   /root/recovery-exercises.sh: line 36: secure-sudo: command not found
+not ok 4 - back to the installed policy
+1..4

@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# The release gate (TODO P0-1, P0-2): every push and pull request runs
+# ci/build-gate.sh on a clean checkout, against the installer's default kernel
+# (verified against kernel.org's signature before it is unpacked) and the
+# runner's installed headers. A release is made only from a passing run; the
+# gate record is kept as an artifact.
+#
+# The distro VM job (install/rollback/removal/recovery, then the STIG release
+# gate on a fresh guest) runs nightly and on demand: it needs KVM and takes
+# about an hour.
+#
+# Written and checked locally; it has not run on GitHub yet.
+name: build-gate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
+            libpam0g-dev libqrencode-dev zlib1g-dev libcrypt-dev shellcheck python3 \
+            gnupg xz-utils curl nftables iproute2 netcat-openbsd zip unzip \
+            "linux-headers-$(uname -r)"
+
+      - name: Fetch and verify the installer's default kernel
+        run: |
+          kver=$(sed -n 's/^KVER="${KVER:-\([0-9.]*\)}".*/\1/p' install/install.sh)
+          mkdir -p "$RUNNER_TEMP/k" && cd "$RUNNER_TEMP/k"
+          curl -fLO "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$kver.tar.xz"
+          curl -fLO "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$kver.tar.sign"
+          bash "$GITHUB_WORKSPACE/scripts/verify-kernel-source.sh" --fetch-missing \
+            --keys "$GITHUB_WORKSPACE/install/keys" --metadata kernel-source.txt \
+            "linux-$kver.tar.xz" "linux-$kver.tar.sign"
+          tar -xf "linux-$kver.tar.xz"
+          echo "KTREE=$RUNNER_TEMP/k/linux-$kver" >> "$GITHUB_ENV"
+
+      - name: Build gate
+        run: |
+          sudo bash ci/build-gate.sh --kernel-tree "$KTREE" \
+            --headers "/usr/src/linux-headers-$(uname -r)" \
+            --record "$RUNNER_TEMP/build-gate-record.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-gate-record
+          path: |
+            ${{ runner.temp }}/build-gate-record.txt
+            ${{ runner.temp }}/k/kernel-source.txt
+
+  distro-vm:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client \
+            build-essential bc bison flex libelf-dev libssl-dev libpam0g-dev libqrencode-dev \
+            zlib1g-dev libcrypt-dev debhelper rsync kmod cpio zstd gnupg xz-utils curl python3
+          sudo chmod 666 /dev/kvm || true
+
+      - name: Verified Ubuntu 24.04 cloud image
+        run: |
+          mkdir -p "$RUNNER_TEMP/img" && cd "$RUNNER_TEMP/img"
+          curl -fLO https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
+          curl -fLO https://cloud-images.ubuntu.com/noble/current/SHA256SUMS.gpg
+          gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg SHA256SUMS.gpg SHA256SUMS
+          curl -fLO https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+          sha256sum -c --ignore-missing SHA256SUMS
+
+      - name: Kernel package via install.sh build-kernel
+        run: |
+          # The guest's config and module list, from one throwaway boot.
+          W="$RUNNER_TEMP/probe"
+          bash tests/vm/distro/vm.sh up "$W" "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img"
+          bash tests/vm/distro/vm.sh ssh "$W" 'lsmod > /root/lsmod.txt'
+          bash tests/vm/distro/vm.sh get "$W" "/boot/config-*" "$RUNNER_TEMP/base.config"
+          bash tests/vm/distro/vm.sh get "$W" /root/lsmod.txt "$RUNNER_TEMP/lsmod.txt"
+          bash tests/vm/distro/vm.sh down "$W"
+          sudo env BUILD_ROOT="$RUNNER_TEMP/ssbuild" SS_BASE_CONFIG="$RUNNER_TEMP/base.config" \
+            SS_LOCALMOD="$RUNNER_TEMP/lsmod.txt" bash install/install.sh build-kernel
+
+      - name: Install, trial boot, fallback, commit, recovery drills, rollback, removal
+        run: |
+          out=$(ls -d "$RUNNER_TEMP"/ssbuild/out/*/ | head -1)
+          sudo bash tests/vm/distro/run-install-test.sh \
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$out" "$RUNNER_TEMP/res-install"
+
+      - name: STIG release gate in the VM (only encrypt_partitions may fail)
+        run: |
+          # The SSG content the gate is pinned to (docs/OSCAP_BUGS.md); the
+          # datastream must match the recorded hash.
+          cd "$RUNNER_TEMP"
+          curl -fLO https://github.com/ComplianceAsCode/content/releases/download/v0.1.78/scap-security-guide-0.1.78.zip
+          unzip -q scap-security-guide-0.1.78.zip
+          ds="$RUNNER_TEMP/scap-security-guide-0.1.78/ssg-ubuntu2404-ds.xml"
+          echo "8ec037c7f1f8484eed419172054a9e5acd611a5aa480c2ec18090344363c36ac  $ds" | sha256sum -c
+          out=$(ls -d "$RUNNER_TEMP"/ssbuild/out/*/ | head -1)
+          cd "$GITHUB_WORKSPACE"
+          sudo bash tests/vm/distro/run-stig-test.sh \
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$out" "$ds" "$RUNNER_TEMP/res-stig"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: distro-vm-results
+          path: |
+            ${{ runner.temp }}/res-install
+            ${{ runner.temp }}/res-stig

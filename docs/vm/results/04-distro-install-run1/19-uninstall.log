@@ -1,0 +1,28 @@
+[1;32m[secure_sudo][0m removed the secure_sudo lines from /etc/pam.d/sudo (the old file is in /var/backups/secure_sudo-pam-20261026-154418)
+[1;32m[secure_sudo][0m removing kernel package(s): linux-headers-6.14.0-secure-sudo linux-image-6.14.0-secure-sudo
+(Reading database ... 82705 files and directories currently installed.)
+Removing linux-headers-6.14.0-secure-sudo (6.14.0-2) ...
+Removing linux-image-6.14.0-secure-sudo (6.14.0-2) ...
+update-initramfs: Deleting /boot/initrd.img-6.14.0-secure-sudo
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/50-cloudimg-settings.cfg'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.8.0-147-generic
+Found initrd image: /boot/initrd.img-6.8.0-147-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+Purging configuration files for linux-image-6.14.0-secure-sudo (6.14.0-2) ...
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/50-cloudimg-settings.cfg'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.8.0-147-generic
+Found initrd image: /boot/initrd.img-6.8.0-147-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+[1;32m[secure_sudo][0m uninstall complete: everything this script installed is gone

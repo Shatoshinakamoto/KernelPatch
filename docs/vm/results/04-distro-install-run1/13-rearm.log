@@ -1,0 +1,56 @@
+[1;32m[secure_sudo][0m distro family: debian (PAM dir /lib/x86_64-linux-gnu/security)
+secure_sudo 0.12.0 preflight (install-kernel): nothing is changed
+system
+  distro           ubuntu 24.04 (family debian)
+  running kernel   6.8.0-147-generic
+  installed        secure_sudo 0.12.0 (this run upgrades it)
+boot
+  boot method      BIOS
+  bootloader       grub
+  secure boot      disabled
+  trial boot       yes: 6.8.0-147-generic stays the default, the new kernel boots once
+  /boot space      717 MB free
+tools
+  missing          none
+changes
+  kernel           install it next to 6.8.0-147-generic, which stays installed and in the boot menu
+  bootloader       regenerate the menu
+preflight: OK
+[1;32m[secure_sudo][0m installing linux-headers-6.14.0-secure-sudo_6.14.0-2_amd64.deb linux-image-6.14.0-secure-sudo_6.14.0-2_amd64.deb
+(Reading database ... 82705 files and directories currently installed.)
+Preparing to unpack .../linux-headers-6.14.0-secure-sudo_6.14.0-2_amd64.deb ...
+Unpacking linux-headers-6.14.0-secure-sudo (6.14.0-2) over (6.14.0-2) ...
+Preparing to unpack .../linux-image-6.14.0-secure-sudo_6.14.0-2_amd64.deb ...
+Unpacking linux-image-6.14.0-secure-sudo (6.14.0-2) over (6.14.0-2) ...
+Setting up linux-headers-6.14.0-secure-sudo (6.14.0-2) ...
+Setting up linux-image-6.14.0-secure-sudo (6.14.0-2) ...
+update-initramfs: Generating /boot/initrd.img-6.14.0-secure-sudo
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/50-cloudimg-settings.cfg'
+Sourcing file `/etc/default/grub.d/99-secure-sudo.cfg'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.14.0-secure-sudo
+Found initrd image: /boot/initrd.img-6.14.0-secure-sudo
+Found linux image: /boot/vmlinuz-6.8.0-147-generic
+Found initrd image: /boot/initrd.img-6.8.0-147-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/50-cloudimg-settings.cfg'
+Sourcing file `/etc/default/grub.d/99-secure-sudo.cfg'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.14.0-secure-sudo
+Found initrd image: /boot/initrd.img-6.14.0-secure-sudo
+Found linux image: /boot/vmlinuz-6.8.0-147-generic
+Found initrd image: /boot/initrd.img-6.8.0-147-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+[1;32m[secure_sudo][0m boot menu has 6.14.0-secure-sudo and the known-good 6.8.0-147-generic
+[1;32m[secure_sudo][0m trial boot armed: the next boot (only) runs 6.14.0-secure-sudo; 6.8.0-147-generic stays the default.
+[1;32m[secure_sudo][0m after it boots, run: install.sh verify --commit

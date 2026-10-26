@@ -1,0 +1,54 @@
+# E4 after the reboot
+ok 1 - E4 the reboot cleared the lock
+ok 2 - E4 the fixed config was applied at boot
+ok 3 - E4 tester can sudo
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#   lint: 0 error(s), 1 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 0               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 4 - back to the installed policy
+1..4

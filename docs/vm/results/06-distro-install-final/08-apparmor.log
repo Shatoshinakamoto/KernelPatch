@@ -1,0 +1,6 @@
+enabled
+apparmor module is loaded.
+117 profiles are loaded.
+23 profiles are in enforce mode.
+   /usr/bin/man
+   /usr/lib/snapd/snap-confine

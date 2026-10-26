@@ -1,0 +1,11 @@
+[1;32m[secure_sudo][0m distro family: debian (PAM dir /lib/x86_64-linux-gnu/security)
+[1;32m[secure_sudo][0m installing runtime packages: libqrencode4 zip unzip
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Package libqrencode4 is not available, but is referred to by another package.
+This may mean that the package is missing, has been obsoleted, or
+is only available from another source
+
+E: Package 'libqrencode4' has no installation candidate
+[1;31m[secure_sudo][0m could not install the runtime packages libqrencode4 zip unzip; nothing else was changed

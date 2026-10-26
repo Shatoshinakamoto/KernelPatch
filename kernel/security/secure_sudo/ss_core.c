@@ -323,6 +323,14 @@ static struct kobj_attribute field##_attr =				\
 CORE_BOOL(audit_events);
 CORE_BOOL(lock_confidentiality);
 
+/* #9 read-only: event lines lost because the ring filled. */
+static ssize_t events_dropped_show(struct kobject *k, struct kobj_attribute *a,
+				   char *buf)
+{
+	return sysfs_emit(buf, "%llu\n", (unsigned long long)ss_events_dropped());
+}
+static struct kobj_attribute events_dropped_attr = __ATTR_RO_MODE(events_dropped, 0400);
+
 static struct kobj_attribute lock_attr =
 	__ATTR(lock, 0600, lock_show, lock_store);
 static struct kobj_attribute lock_modules_attr =
@@ -333,6 +341,7 @@ static struct attribute *ss_core_attrs[] = {
 	&lock_modules_attr.attr,
 	&audit_events_attr.attr,
 	&lock_confidentiality_attr.attr,
+	&events_dropped_attr.attr,
 	NULL,
 };
 
@@ -386,7 +395,7 @@ static int ss_lock_load_id(int is_module, int is_kexec, int is_trust,
 	return 0;
 }
 
-static int ss_lock_read_file(struct file *file, enum kernel_read_file_id id,
+int ss_lock_read_file(struct file *file, enum kernel_read_file_id id,
 			     bool contents)
 {
 	return ss_lock_load_id(id == READING_MODULE,
@@ -409,7 +418,6 @@ static int ss_lock_load_data(enum kernel_load_data_id id, bool contents)
 
 static struct security_hook_list ss_lock_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(locked_down,      ss_lock_locked_down),
-	LSM_HOOK_INIT(kernel_read_file, ss_lock_read_file),
 	LSM_HOOK_INIT(kernel_load_data, ss_lock_load_data),
 };
 
@@ -470,21 +478,13 @@ static int __init ss_lsm_init(void)
 	/* Register each protection's hooks. */
 	ss_lock_init();
 	ss_creds_init();
-	ss_exec_init();
-	ss_firmware_init();
-	ss_tpm_init();
-	ss_tmpexec_init();
-	ss_net_init();
 	ss_node_init();
-	ss_cooldown_init();
 	ss_driver_init();
-	ss_timevault_init();
 	ss_home_init();
 	ss_binvault_init();
-	ss_radio_init();
 	ss_prguard_init();
 	ss_bpf_init();
-	ss_sysctl_init();
+	ss_hooks_init();	/* hooks shared by several protections */
 
 	pr_info("LSM initialised (id=0x%llx)\n", (unsigned long long)ss_lsmid.id);
 	return 0;
@@ -552,6 +552,8 @@ static int __init ss_sysfs_init(void)
 		ret = ss_log_secfs(ss_secfs_dir);
 		if (!ret)
 			ret = ss_exec_secfs(ss_secfs_dir);
+		if (!ret)
+			ret = ss_creds_secfs(ss_secfs_dir);	/* #1b allowlist */
 		if (!ret)
 			ret = ss_tmpexec_secfs(ss_secfs_dir);
 		if (!ret)

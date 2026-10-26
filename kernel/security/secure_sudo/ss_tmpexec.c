@@ -156,12 +156,12 @@ static int tmp_check(const struct path *path, const char *what, bool is_mmap)
 	return ret;
 }
 
-static int ss_tmp_bprm(struct linux_binprm *bprm)
+int ss_tmp_bprm(struct linux_binprm *bprm)
 {
 	return tmp_check(&bprm->file->f_path, "exec", false);
 }
 
-static int ss_tmp_mmap(struct file *file, unsigned long reqprot,
+int ss_tmp_mmap(struct file *file, unsigned long reqprot,
 		       unsigned long prot, unsigned long flags)
 {
 	if (!file)
@@ -171,7 +171,7 @@ static int ss_tmp_mmap(struct file *file, unsigned long reqprot,
 	return tmp_check(&file->f_path, "PROT_EXEC mmap", true);
 }
 
-static int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 			   unsigned long prot)
 {
 	if (!vma->vm_file || !(prot & PROT_EXEC) || (vma->vm_flags & VM_EXEC))
@@ -179,16 +179,7 @@ static int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 	return tmp_check(&vma->vm_file->f_path, "mprotect(PROT_EXEC)", true);
 }
 
-static struct security_hook_list ss_tmp_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(bprm_check_security, ss_tmp_bprm),
-	LSM_HOOK_INIT(mmap_file,           ss_tmp_mmap),
-	LSM_HOOK_INIT(file_mprotect,       ss_tmp_mprotect),
-};
 
-void __init ss_tmpexec_init(void)
-{
-	security_add_hooks(ss_tmp_hooks, ARRAY_SIZE(ss_tmp_hooks), &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knob --------------------------------- */
 

@@ -58,7 +58,7 @@ static bool is_blocked_dev_path(const char *p)
 	       str_has_prefix(p, "/dev/mei");
 }
 
-static int ss_file_open(struct file *file)
+int ss_firmware_file_open(struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	umode_t mode = inode->i_mode;
@@ -120,15 +120,7 @@ out:
 	return ret;
 }
 
-static struct security_hook_list ss_firmware_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(file_open, ss_file_open),
-};
 
-void __init ss_firmware_init(void)
-{
-	security_add_hooks(ss_firmware_hooks, ARRAY_SIZE(ss_firmware_hooks),
-			   &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knob --------------------------------- */
 

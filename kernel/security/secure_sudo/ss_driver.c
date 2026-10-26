@@ -145,7 +145,7 @@ static bool name_blacklisted(const char *name)
 	return hit;
 }
 
-static int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
+int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
 			       bool contents)
 {
 	char *buf, *resolved;
@@ -216,7 +216,6 @@ static int ss_driver_post_load(char *buf, loff_t size,
 }
 
 static struct security_hook_list ss_driver_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(kernel_read_file,      ss_driver_read_file),
 	LSM_HOOK_INIT(kernel_post_read_file, ss_driver_post_read),
 	LSM_HOOK_INIT(kernel_post_load_data, ss_driver_post_load),
 };

@@ -1,0 +1,24 @@
+# Rules of the Ubuntu 24.04 DISA STIG profile (SSG content pinned in
+# docs/OSCAP_BUGS.md) that are allowed NOT to pass, by rule ID. Read by
+# scripts/oscap-results.py gate (tests/oscap/stig-gate.sh).
+#
+#   <result>  <rule>  <reason>
+#   crosscheck <rule> <reason>   the scanner cannot evaluate this rule here;
+#                                the gate uses stig-harden.sh's independent
+#                                check instead (release mode requires one)
+#
+# Anything not at pass/notapplicable that is not listed here fails the gate.
+# "container-only" marks results allowed only in diagnostic (container) mode;
+# the release VM must not show them at all.
+
+fail        encrypt_partitions            OSB-12: the test VM disk is not LUKS-encrypted; real hosts use install/encrypted/
+fail        is_fips_mode_enabled          accepted (Pheonix, 2026-10-26): a self-built kernel cannot be FIPS 140-validated
+fail        service_sssd_enabled          accepted (Pheonix, 2026-10-26): needs the site's directory (LDAP/AD); docs/STIG.md lists the sssd settings
+notchecked  account_temp_expire_date      OSB-14 manual review: temporary-account expiry is site policy
+notchecked  ensure_sudo_group_restricted  OSB-14 manual review: audit the sudo group (secure_sudo admin_gid limits who counts)
+notchecked  only_allow_dod_certs          OSB-14 manual review: install your DoD CA bundle
+notchecked  ufw_only_required_services    OSB-14 manual review: confirm every port ufw allows is needed
+notchecked  auditd_audispd_configure_sufficiently_large_partition  OSB-14 manual review: size the audit log partition for your retention
+error       apparmor_configured           OSB-13 container-only: no init and no AppArmor to query inside a container
+crosscheck  encrypt_partitions            OSB-19: Ubuntu's oscap 1.3.9 partition probe matches no mount point
+crosscheck  dir_perms_world_writable_sticky_bits  OSB-19: Ubuntu's oscap 1.3.9 partition probe matches no mount point

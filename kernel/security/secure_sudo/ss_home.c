@@ -131,7 +131,7 @@ static int home_check(const char *path, const char *what)
 
 /* ------------------------------ file_open -------------------------------- */
 
-static int ss_home_file_open(struct file *file)
+int ss_home_file_open(struct file *file)
 {
 	char *buf, *p;
 	int ret = 0;
@@ -197,34 +197,34 @@ out:
 	return ret;
 }
 
-static int ss_path_mkdir(const struct path *dir, struct dentry *d, umode_t m)
+static int ss_home_path_mkdir(const struct path *dir, struct dentry *d, umode_t m)
 {
 	return check_dir_dentry(dir, d, "mkdir");
 }
-static int ss_path_rmdir(const struct path *dir, struct dentry *d)
+static int ss_home_path_rmdir(const struct path *dir, struct dentry *d)
 {
 	return check_dir_dentry(dir, d, "rmdir");
 }
-static int ss_path_unlink(const struct path *dir, struct dentry *d)
+int ss_home_path_unlink(const struct path *dir, struct dentry *d)
 {
 	return check_dir_dentry(dir, d, "unlink");
 }
-static int ss_path_symlink(const struct path *dir, struct dentry *d,
+static int ss_home_path_symlink(const struct path *dir, struct dentry *d,
 			   const char *old)
 {
 	return check_dir_dentry(dir, d, "symlink");
 }
-static int ss_path_link(struct dentry *old, const struct path *ndir,
+int ss_home_path_link(struct dentry *old, const struct path *ndir,
 			struct dentry *nd)
 {
 	return check_dir_dentry(ndir, nd, "link");
 }
-static int ss_path_mknod(const struct path *dir, struct dentry *d, umode_t m,
+static int ss_home_path_mknod(const struct path *dir, struct dentry *d, umode_t m,
 			 unsigned int dev)
 {
 	return check_dir_dentry(dir, d, "mknod");
 }
-static int ss_path_rename(const struct path *odir, struct dentry *od,
+int ss_home_path_rename(const struct path *odir, struct dentry *od,
 			  const struct path *ndir, struct dentry *nd,
 			  unsigned int flags)
 {
@@ -248,33 +248,27 @@ static int check_path(const struct path *path, const char *what)
 	return ret;
 }
 
-static int ss_path_truncate(const struct path *path)
+int ss_home_path_truncate(const struct path *path)
 {
 	return check_path(path, "truncate");
 }
-static int ss_path_chmod(const struct path *path, umode_t mode)
+int ss_home_path_chmod(const struct path *path, umode_t mode)
 {
 	return check_path(path, "chmod");
 }
-static int ss_path_chown(const struct path *path, kuid_t uid, kgid_t gid)
+static int ss_home_path_chown(const struct path *path, kuid_t uid, kgid_t gid)
 {
 	return check_path(path, "chown");
 }
 #endif /* CONFIG_SECURITY_PATH */
 
 static struct security_hook_list ss_home_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(file_open, ss_home_file_open),
 #ifdef CONFIG_SECURITY_PATH
-	LSM_HOOK_INIT(path_mkdir,    ss_path_mkdir),
-	LSM_HOOK_INIT(path_rmdir,    ss_path_rmdir),
-	LSM_HOOK_INIT(path_unlink,   ss_path_unlink),
-	LSM_HOOK_INIT(path_symlink,  ss_path_symlink),
-	LSM_HOOK_INIT(path_link,     ss_path_link),
-	LSM_HOOK_INIT(path_mknod,    ss_path_mknod),
-	LSM_HOOK_INIT(path_rename,   ss_path_rename),
-	LSM_HOOK_INIT(path_truncate, ss_path_truncate),
-	LSM_HOOK_INIT(path_chmod,    ss_path_chmod),
-	LSM_HOOK_INIT(path_chown,    ss_path_chown),
+	LSM_HOOK_INIT(path_mkdir,    ss_home_path_mkdir),
+	LSM_HOOK_INIT(path_rmdir,    ss_home_path_rmdir),
+	LSM_HOOK_INIT(path_symlink,  ss_home_path_symlink),
+	LSM_HOOK_INIT(path_mknod,    ss_home_path_mknod),
+	LSM_HOOK_INIT(path_chown,    ss_home_path_chown),
 #endif
 };
 

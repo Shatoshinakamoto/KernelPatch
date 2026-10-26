@@ -17,24 +17,43 @@ userspace/
   pam/        pam_secure_sudo.so  feeds sudo/su auth results to the kernel
               pam_secure_otp.so   verifies the rotating OTP password
   daemon/     secure-sudod        logs, cooldown kill, nft, TimeVault
-  otp/        secure-sudo-otp     TOTP setup/verify, local QR, sealed secret
+  otp/        secure-sudo-otp     TOTP setup/verify, local QR, encrypted secret
   config/     templates for /etc/secure_sudo/
 scripts/
   timevault-whitelist.sh          bash TimeVault allowlist tool (scan/add/remove/list/wipe)
   detect-admin-gids.sh            finds every admin group GID (used by install.sh)
+  verify-kernel-source.sh         kernel.org signature check before extraction (fail closed)
+  gen-sbom.sh                     SPDX SBOM of the release
+  stig-harden.sh, oscap-results.py  STIG/CIS scan, remediation, result parsing
 docs/
   COMMANDS.md                     every CLI command, explained
   CONFIGURATION.md                every config file and option
   SCRIPTS.md                      every script, with flags and usage
+  RECOVERY.md                     getting a machine back: boot, Secure Boot, install, policy
+  HARDWARE_SMOKE_TEST.md          the per-machine test plan VMs cannot replace
+  ROADMAP_STATUS.md               where each Strategic TODO item stands, with evidence
   SECURITY_REVIEW.md              NIST-framed review: findings + fixes
   STIG.md                         STIG/CIS tooling, control map, results
   OSCAP_BUGS.md                   every oscap bug, root cause, patch, before/after
   FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
+  vm/results/                     recorded boot and VM test runs
 install/
-  install.sh                      per-distro build+install (Debian/Fedora/Arch/openSUSE)
+  install.sh                      preflight, build, trial-boot install, verify, rollback, uninstall
+  keys/                           kernel.org signing key and pinned fingerprints
   ansible/secure_sudo.yml         YAML scaffold wrapping the installer
   encrypted/install-encrypted.sh  encrypted-source + Secure Boot (MOK) variant
   encrypted/deploy-encrypted.yml  Ansible wrapper for the encrypted variant
+ci/
+  build-gate.sh                   the release gate: lint, -Werror builds, header and in-tree
+                                  kernel builds, every test suite, reproducible package
+  make-release.sh                 byte-reproducible release tarball + SBOM
+tests/
+  run-all.sh                      every host test suite (TAP)
+  install/ userspace/ provenance/ oscap/   host suites (root-only parts say so)
+  vm/                             in-kernel tests in QEMU (initramfs)
+  vm/distro/                      full Ubuntu VM: install, trial boot, recovery, removal, STIG
+.github/workflows/build-gate.yml  CI for the gate and the VM jobs (written, not yet run on GitHub)
+temporary/                        opt-in add-ons (below)
 ```
 
 ## What secure_sudo enforces
@@ -57,10 +76,10 @@ install/
 | 12 | K | Restrict exec and `PROT_EXEC` mmap from `/tmp`, `/var/tmp`, `/dev/shm`. |
 | 13 | K + U | **TimeVault:** hash-based exec gate with allowlist (+ auto-update entries), size cap, package-manager deny, and quarantine of blocked binaries. |
 | 14 | U | **Rotating OTP sudo password:** prefix + 6-digit TOTP, verified by `pam_secure_otp`; QR rendered locally (`userspace/otp`). |
-| 15 | U | **Sealed OTP secret:** AES-256-GCM (TPM2 or root-only key), `mlock`ed at runtime, prefix stored as a yescrypt hash. |
+| 15 | U | **Encrypted OTP secret:** AES-256-GCM under a root-only key file (not TPM-sealed), `mlock`ed at runtime, prefix stored as a yescrypt hash, each code accepted once (RFC 6238 §5.2). |
 | 16 | K | One-way config lock until reboot (TimeVault latches it); blocks module loads, kexec and kernel-memory patching while locked. |
 | 17 | K | **BinaryVault:** freeze every executable + shared library (write/truncate/unlink/rename/hardlink/chmod/xattr) for all UIDs incl. root. Updates via a `secure_sudo.binvault_maint=1` maintenance reboot. See [docs/BINARYVAULT.md](docs/BINARYVAULT.md). |
-| 18 | U | **STIG / OpenSCAP:** `scripts/stig-harden.sh` scan + two-pass remediate + known-issue patches; real results: DISA Ubuntu 24.04 STIG 61 pass / 1 fail, CIS L2 Server 190 / 17. See [docs/STIG.md](docs/STIG.md) and [docs/OSCAP_BUGS.md](docs/OSCAP_BUGS.md). |
+| 18 | U | **STIG / OpenSCAP:** `scripts/stig-harden.sh` scan + two-pass remediate + known-issue patches; real results: DISA Ubuntu 24.04 STIG 61 pass / 1 fail in a container and 206 pass / 11 fail / 0 error in a VM after two passes (each remaining rule classified; final VM rescan pending), CIS L2 Server 190 / 17. See [docs/STIG.md](docs/STIG.md) and [docs/OSCAP_BUGS.md](docs/OSCAP_BUGS.md). |
 | 19 | K | **RadioGuard:** Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch (refuses wireless/BT core modules, `AF_BLUETOOTH` sockets, `/dev/rfkill` writes). `secure-sudo radio ...` |
 | 20 | K | **Process Runtime Guard:** denies cross-process ptrace / `process_vm_writev` / `/proc/pid/mem` tampering and W^X mappings, with a CLI-managed exemption list; optional `prguard_observe` memory-access feed. `secure-sudo prguard ...` |
 | 21 | U | **PheonixBox:** snapshot tamper protection + auto-repair for chosen files/dirs (SHA-256 manifest detects, compressed snapshot restores, permissions snapshot). See [docs/PHEONIXBOX.md](docs/PHEONIXBOX.md). |
@@ -98,13 +117,23 @@ Full write-up, honesty notes, commands, and settings: [docs/ADDONS.md](docs/ADDO
 
 ## Install (quick)
 
+Keep a second root session open the whole time (`docs/RECOVERY.md`).
+
 ```sh
-sudo ./install/install.sh          # builds kernel 6.12 + userspace, packages it
-# reboot into the new kernel, then:
-sudo secure-sudo status
-sudo secure-sudo load              # push /etc/secure_sudo/* into the kernel
-sudo secure-sudo settings          # list every configurable setting
+sudo ./install/install.sh preflight     # what will happen; changes nothing
+sudo ./install/install.sh               # build 6.12 LTS (signature-verified), install it
+                                        # next to the running kernel, install userspace
+sudo ./install/install.sh verify        # check what was installed
+sudo reboot                             # the new kernel boots ONCE; the old one stays default
+sudo ./install/install.sh verify --commit   # happy with it: make it the default
+sudo secure-sudo lint && sudo secure-sudo load   # check, then apply /etc/secure_sudo/*
 ```
+
+If the new kernel does not come up, the next boot is the previous kernel by
+itself. `install.sh rollback` boots the previous kernel again later;
+`install.sh uninstall` removes exactly what was installed (and refuses while
+PAM still uses the modules). Every command and variable is in
+[docs/SCRIPTS.md](docs/SCRIPTS.md).
 
 Plus DISA **STIG** tooling (#18): `scripts/stig-harden.sh` scans and optionally
 remediates to the STIG baseline, and the installer honours `STIG=scan` /
@@ -148,10 +177,23 @@ PAM wiring (cooldown + OTP) is deliberately left as a reviewed manual step —
 
 ## Status
 
-The kernel LSM and all userspace components are written and have been through a
-NIST-framed security review (see [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)).
-The CLI, daemon, both PAM modules and the OTP helper compile cleanly; the OTP
-TOTP is verified against the RFC 6238 test vectors. The LSM now compiles
-cleanly (`-Werror`) against real 6.11 and 6.14 kernel header trees; the final
-build against the 6.12 tree happens inside `install.sh`. It has not yet been
-boot-tested on real hardware — that is the last mile.
+Release 0.12.0 works through the project's Strategic TODO; where every item
+stands, with the evidence, is in [docs/ROADMAP_STATUS.md](docs/ROADMAP_STATUS.md).
+In short:
+
+* **Booted, not just compiled.** v11 compiled cleanly and still panicked at
+  boot; v12 fixes that and is boot-tested on upstream **6.14** in QEMU: 118
+  in-kernel checks pass (also with AppArmor stacked), and in a full Ubuntu
+  24.04 guest the installer's package boots with GRUB, systemd and AppArmor,
+  falls back to the old kernel when not committed, passes the four recovery
+  drills, rolls back and uninstalls cleanly. Recorded runs:
+  [docs/vm/results/](docs/vm/results/).
+* **Not yet booted:** the 6.12 LTS default (compiled against its headers
+  only), UEFI / Secure Boot, other distros, and real hardware. Run
+  [docs/HARDWARE_SMOKE_TEST.md](docs/HARDWARE_SMOKE_TEST.md) on each machine
+  model before relying on it there.
+* **Build and tests:** `ci/build-gate.sh` (lint, `-Werror` builds, header and
+  in-tree kernel builds, every test suite, reproducible package) passes
+  locally; the GitHub workflow is written but has not run yet.
+* Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
+  (findings #35–#47 came from v12's tests and boots).

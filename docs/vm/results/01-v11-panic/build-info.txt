@@ -1,0 +1,6 @@
+kernel_release=6.14.0
+source_tree=/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/ksrc/src/linux-6.14
+compiler=gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+config_sha256=4519731398136c920130f087ae61528c90c3d76a03488cb9b1f88d4b558cfaef
+lsm_list="landlock,lockdown,yama,secure_sudo,bpf"
+built=2026-10-26T08:54:12Z

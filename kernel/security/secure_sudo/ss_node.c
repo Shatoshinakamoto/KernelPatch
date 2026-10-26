@@ -240,7 +240,7 @@ static bool child_allowed(const char *resolved, const char *base)
 	return found;
 }
 
-static int ss_node_bprm(struct linux_binprm *bprm)
+int ss_node_bprm(struct linux_binprm *bprm)
 {
 	struct ss_task *cur = ss_task(current);
 	bool marked = cur->flags & SS_TASK_NODE;
@@ -313,7 +313,6 @@ static void ss_node_committing(const struct linux_binprm *bprm)
 
 static struct security_hook_list ss_node_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(task_alloc,          ss_node_task_alloc),
-	LSM_HOOK_INIT(bprm_check_security, ss_node_bprm),
 	LSM_HOOK_INIT(bprm_committing_creds, ss_node_committing),
 };
 

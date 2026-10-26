@@ -224,13 +224,13 @@ static int wx_check(unsigned long prot, const char *what)
 	return -EPERM;
 }
 
-static int ss_pg_mmap_file(struct file *file, unsigned long reqprot,
+int ss_pg_mmap_file(struct file *file, unsigned long reqprot,
 			   unsigned long prot, unsigned long flags)
 {
 	return wx_check(prot, "mmap");
 }
 
-static int ss_pg_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
+int ss_pg_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 			  unsigned long prot)
 {
 	return wx_check(prot, "mprotect");
@@ -239,8 +239,6 @@ static int ss_pg_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 static struct security_hook_list ss_pg_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(ptrace_access_check, ss_pg_ptrace_access),
 	LSM_HOOK_INIT(ptrace_traceme,      ss_pg_ptrace_traceme),
-	LSM_HOOK_INIT(mmap_file,           ss_pg_mmap_file),
-	LSM_HOOK_INIT(file_mprotect,       ss_pg_mprotect),
 };
 
 void __init ss_prguard_init(void)

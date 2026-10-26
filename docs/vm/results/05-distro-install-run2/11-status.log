@@ -1,0 +1,44 @@
+secure_sudo status
+==================
+admin_gid                27,110
+block_setid              1
+block_userns             1
+block_setid_exec         0
+block_flash              1
+ram_spike_enabled        0
+max_ram_percent          90
+check_interval_ms        5000
+drop_cooldown_ms         2000
+block_tmp_exec           1
+block_tmpfs_exec         0
+net_mode                 monitor
+sudo_max_fails           5
+sudo_window_sec          60
+sudo_block_time_sec      300
+sudo_cooldown_enabled    1
+block_home_write         0
+timevault_strict_mmap    0
+lock_modules             1
+binaryvault              0
+block_wifi               0
+block_bluetooth          0
+ethernet_only            0
+timevault_allow_autoupdate 1
+timevault_max_entries    16384
+prguard_enabled          0
+prguard_observe          0
+bpf_guard                1
+bpf_lock_tracing         1
+perf_guard               1
+sysctl_guard             1
+audit_events             1
+lock_confidentiality     0
+timevault                0
+timevault_denied         0
+lock                     0
+binvault_maint           0
+secure-sudo lint: /etc/secure_sudo
+  WARN   admin_gid                  group admin (110) has no members
+  note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+  WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+lint: 0 error(s), 2 warning(s), 1 note(s)

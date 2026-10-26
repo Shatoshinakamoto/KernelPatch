@@ -1,0 +1,13 @@
+# Pinned OpenPGP fingerprints allowed to sign the kernel.org release archives
+# that install.sh builds. scripts/verify-kernel-source.sh accepts a signature
+# only if its PRIMARY key fingerprint is listed here. One fingerprint per line
+# (40 hex digits, no spaces); everything after '#' is a comment.
+#
+# Before trusting a new entry, confirm it through a channel independent of the
+# download itself: https://www.kernel.org/signature.html , the kernel.org WKD
+# (gpg --locate-keys <email>), and the maintainer's published key. See README.md.
+
+# Greg Kroah-Hartman - signs the stable/LTS point releases (6.12.y)
+647F28654894E3BD457199BE38DBBDC86092693E
+# Linus Torvalds - signs mainline releases (6.12, 6.13, ...)
+ABAF11C65A2970B130ABE3C479BE3E4300411886

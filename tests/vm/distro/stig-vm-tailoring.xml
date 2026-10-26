@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Site values for the STIG run in the test VM (run-stig-test.sh), passed to
+     scripts/stig-harden.sh with tailoring. A real site writes the same kind
+     of file with its own values: here only the approved time server, which
+     the STIG profile otherwise fixes to 0.us.pool.ntp.mil. -->
+<xccdf-1.2:Tailoring xmlns:xccdf-1.2="http://checklists.nist.gov/xccdf/1.2" id="xccdf_org.secure-sudo_tailoring_vm-site">
+  <xccdf-1.2:benchmark href="/usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml"/>
+  <xccdf-1.2:version time="2026-10-26T00:00:00">1</xccdf-1.2:version>
+  <xccdf-1.2:Profile id="xccdf_org.secure-sudo_profile_stig_vm-site" extends="xccdf_org.ssgproject.content_profile_stig">
+    <xccdf-1.2:title>DISA STIG with the test VM's site values</xccdf-1.2:title>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_multiple_time_servers">10.0.2.2</xccdf-1.2:set-value>
+  </xccdf-1.2:Profile>
+</xccdf-1.2:Tailoring>

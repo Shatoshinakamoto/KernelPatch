@@ -3,16 +3,23 @@
  * pam_secure_otp.so - verify a rotating OTP sudo password (#14).
  *
  * The user's password is "prefix" + a 6-digit TOTP code that rotates with
- * time (e.g. whale$482910). This module obtains the entered password and asks
- * the OTP helper to verify it. All the sensitive machinery - the TPM-sealed
- * secret, the mlock'd runtime copy, the yescrypt-hashed prefix - lives in the
- * helper (see the otp component), so this module holds no secrets and simply
- * trusts the helper's exit status. The candidate password is passed on the
- * helper's stdin, never on its argv, so it cannot leak through ps/proc.
+ * time (e.g. whale$482910). This module asks for it and has the OTP helper
+ * verify it. All the sensitive machinery - the AES-GCM-encrypted seed, the
+ * mlock'd runtime copy, the yescrypt-hashed prefix, the replay record - lives
+ * in the helper (see the otp component), so this module holds no secrets and
+ * simply trusts the helper's exit status. The candidate password is passed on
+ * the helper's stdin, never on its argv, so it cannot leak through ps/proc.
  *
- * Stack it where you want OTP enforced, e.g. for sudo:
+ * It prompts for its own "OTP password:" and neither reads nor sets PAM's
+ * shared password item (PAM_AUTHTOK). Earlier builds took that item, so after
+ * pam_unix it verified the Unix password as an OTP, and before pam_unix it
+ * handed the OTP to pam_unix as the Unix password: either order failed every
+ * login (tests/userspace/test-pam.sh). With "use_first_pass" it does take the
+ * password an earlier module collected instead of prompting.
+ *
+ * As a second factor, for sudo (after the password verifier):
+ *   @include common-auth            (or auth include system-auth)
  *   auth  required  pam_secure_otp.so
- *   auth  ...       (the rest of the stack)
  */
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -25,7 +32,9 @@
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
 
+#ifndef OTP_HELPER	/* overridden only by tests/userspace/test-pam.sh */
 #define OTP_HELPER "/usr/bin/secure-sudo-otp"
+#endif
 
 /* Run "secure-sudo-otp verify", write @token to its stdin, return exit code
  * (0 = valid). Returns -1 on spawn error. */
@@ -71,18 +80,32 @@ static int verify_with_helper(pam_handle_t *pamh, const char *token)
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
 			const char **argv)
 {
-	const char *token = NULL;
-	int rc;
+	const void *item = NULL;
+	char *answer = NULL;
+	const char *token;
+	int rc, i, first_pass = 0;
 
-	(void)flags; (void)argc; (void)argv;	/* fixed PAM signature; unused */
+	(void)flags;	/* fixed PAM signature; unused */
+	for (i = 0; i < argc; i++)
+		if (!strcmp(argv[i], "use_first_pass"))
+			first_pass = 1;
 
-	/* Prefer an already-supplied token; otherwise prompt for it. */
-	if (pam_get_authtok(pamh, PAM_AUTHTOK, &token, "OTP password: ") != PAM_SUCCESS
-	    || token == NULL) {
-		return PAM_AUTH_ERR;
+	if (first_pass) {
+		if (pam_get_item(pamh, PAM_AUTHTOK, &item) != PAM_SUCCESS || !item)
+			return PAM_AUTH_ERR;
+		token = item;
+	} else {
+		if (pam_prompt(pamh, PAM_PROMPT_ECHO_OFF, &answer,
+			       "OTP password: ") != PAM_SUCCESS || !answer)
+			return PAM_AUTH_ERR;
+		token = answer;
 	}
 
 	rc = verify_with_helper(pamh, token);
+	if (answer) {
+		explicit_bzero(answer, strlen(answer));
+		free(answer);
+	}
 	if (rc == 0)
 		return PAM_SUCCESS;
 	if (rc == 127 || rc < 0) {

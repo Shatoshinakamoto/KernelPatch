@@ -21,7 +21,48 @@ Run `secure-sudo` with no arguments for the built-in usage summary.
 
 ---
 
-## `secure-sudo load`
+## `secure-sudo lint [options]`
+
+Check the configuration before it is enforced (TODO P0-6). Nothing is
+written; `lint` is the one command that also runs without root (the checks
+that need root are then skipped and say so). It reports every problem with
+the file and line it comes from, as `error`, `warning` or `note`, and exits
+non-zero when there is at least one error.
+
+What it checks:
+
+* **syntax and bounds** — every line of `secure-sudo.conf` parses, every key
+  is known (a typo is an error, not silently ignored), every value is in the
+  range the kernel accepts (`max_ram_percent` 1–100, `sudo_max_fails`
+  1–1000, …), booleans are `0`/`1`, `net_mode` is one of its four values;
+* **list files** — absolute paths where paths are expected, names where
+  names are, `uid /home/…` pairs in `home_map.conf`; files and the directory
+  are root-owned and not group/world-writable;
+* **admin groups** — every `admin_gid` exists and has members, and covers the
+  admin running `lint` (via `SUDO_UID`); `unset` with `block_setid_exec = 1`
+  is an error (only root could run setuid programs);
+* **combinations** — settings that only work together (e.g.
+  `block_home_write` with an empty `home_map.conf`), and what engaging the
+  lock would freeze;
+* **PAM** — the `sudo`/`su` stacks, following `@include`/`include`/`substack`:
+  `pam_secure_sudo.so` placed before the password check, no
+  `[default=die]` on a verifier, no old `authfail`/`authsucc` lines, OTP
+  wired only once an OTP secret exists, `use_first_pass` not before a
+  verifier, every referenced module installed;
+* **the running kernel** — the LSM is active, every knob exists in this
+  kernel, and the config is not locked (a locked kernel refuses every write
+  until reboot).
+
+```sh
+secure-sudo lint                    # the installed configuration
+secure-sudo lint -q                 # problems and the summary only
+secure-sudo lint --source-tree --config-dir userspace/config --no-kernel   # a checkout
+```
+
+Options: `--config-dir DIR`, `--pam-dir DIR`, `--otp-dir DIR`, `--no-kernel`,
+`--no-pam`, `--source-tree` (no ownership/machine/kernel/PAM checks), `-q`.
+
+## `secure-sudo load [--force]`
 
 Read every file under `/etc/secure_sudo/` and push it into the kernel. This is
 what makes the on-disk configuration take effect: scalar keys from
@@ -30,14 +71,29 @@ each policy `*.conf` is written to its securityfs file.
 
 `load` runs automatically at every boot (the systemd unit calls it with
 `ExecStartPre`), so the kernel starts in `root-only` safe defaults and then
-picks up your saved policy. Run it by hand after editing a `.conf` by hand.
+picks up your saved policy. Run it by hand after editing a `.conf`.
 
-A key the kernel does not recognise (the daemon-only keys such as
-`retain_days`) is skipped, not an error.
+It runs `lint` first (PAM problems count as warnings there) and **refuses to
+change anything** if lint finds an error, so a typo cannot leave the kernel
+running half a policy; `--force` loads anyway. Then it reports every setting:
+
+```
+  accepted  block_setid = 1
+  rejected  sudo_max_fails = 7: Operation not permitted
+  skipped   retain_days (read by secure-sudod, not the kernel)
+load: 41 accepted, 1 rejected, 6 skipped
+secure-sudo: load INCOMPLETE: the kernel is running a partial policy; ...
+```
+
+Exit status is non-zero on a refusal or when any setting was rejected.
+Daemon-only keys (`retain_days`, `remote_syslog`, …) and `timevault_enabled`
+are reported as skipped, never as errors.
 
 ```sh
-sudo secure-sudo load
+sudo secure-sudo lint && sudo secure-sudo load
 ```
+
+Recovery from a policy that locks you out: [RECOVERY.md](RECOVERY.md).
 
 ## `secure-sudo status`
 

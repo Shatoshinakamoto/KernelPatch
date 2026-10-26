@@ -1,0 +1,21 @@
+[1;32m[secure_sudo][0m distro family: debian (PAM dir /lib/x86_64-linux-gnu/security)
+[1;32m[secure_sudo][0m building userspace into /tmp/tmp.ibt8p82fcN/stage
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/cli'
+install -D -m0755 secure-sudo /tmp/tmp.ibt8p82fcN/stage/usr/bin/secure-sudo
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/cli'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/pam'
+install -D -m0644 pam_secure_sudo.so /tmp/tmp.ibt8p82fcN/stage/lib/x86_64-linux-gnu/security/pam_secure_sudo.so
+install -D -m0644 pam_secure_otp.so  /tmp/tmp.ibt8p82fcN/stage/lib/x86_64-linux-gnu/security/pam_secure_otp.so
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/pam'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/daemon'
+install -D -m0755 secure-sudod /tmp/tmp.ibt8p82fcN/stage/usr/sbin/secure-sudod
+install -D -m0755 helpers/apply-net.sh  /tmp/tmp.ibt8p82fcN/stage/usr/libexec/secure-sudo/apply-net.sh
+install -D -m0755 helpers/quarantine.sh /tmp/tmp.ibt8p82fcN/stage/usr/libexec/secure-sudo/quarantine.sh
+install -D -m0644 secure-sudod.service  /tmp/tmp.ibt8p82fcN/stage/lib/systemd/system/secure-sudod.service
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/daemon'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/otp'
+install -D -m0755 secure-sudo-otp /tmp/tmp.ibt8p82fcN/stage/usr/bin/secure-sudo-otp
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/otp'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/pheonixbox'
+install -D -m0755 secure-sudo-pheonixbox /tmp/tmp.ibt8p82fcN/stage/usr/bin/secure-sudo-pheonixbox
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run1-src/userspace/pheonixbox'

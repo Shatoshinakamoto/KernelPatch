@@ -1,0 +1,24 @@
+secure_sudo 0.12.0 preflight (all): nothing is changed
+system
+  distro           ubuntu 24.04 (family debian)
+  running kernel   6.8.0-147-generic
+  installed        nothing yet
+boot
+  boot method      BIOS
+  bootloader       grub
+  secure boot      disabled
+  trial boot       yes: 6.8.0-147-generic stays the default, the new kernel boots once
+  /boot space      756 MB free
+  build space      BLOCKED: 17055 MB free at /usr/src/secure_sudo-build, need about 20000
+  kernel source    linux-6.12.114 from cdn.kernel.org, verified against /root/ss/KernelPatch-merged/install/keys before extraction
+  base config      /boot/config-6.8.0-147-generic
+tools
+  missing          make gcc bison flex (installed by the dependency step)
+changes
+  kernel           build linux-6.12.114-secure-sudo packages into /usr/src/secure_sudo-build/out (secure_sudo in CONFIG_LSM, module signatures enforced, reboot 10s after a panic)
+  kernel           install it next to 6.8.0-147-generic, which stays installed and in the boot menu
+  bootloader       add /etc/default/grub.d/99-secure-sudo.cfg (GRUB_DEFAULT=saved), regenerate the menu
+  files            secure-sudo, secure-sudod, secure-sudo-otp, secure-sudo-pheonixbox, PAM modules in /lib/x86_64-linux-gnu/security, /usr/libexec/secure-sudo/*, secure-sudod.service (enabled)
+  config           /etc/secure_sudo/*.conf where missing (existing files are kept)
+  pam              nothing: wiring PAM is left to you (guidance at the end)
+preflight: 1 blocking problem(s)

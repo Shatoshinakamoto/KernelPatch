@@ -1,0 +1,17 @@
+diff-vs-regen=0
+154c154
+< 	linux	/vmlinuz-6.8.0-147-generic root=LABEL=cloudimg-rootfs ro  console=tty1 console=ttyS0
+---
+> 	linux	/vmlinuz-6.8.0-147-generic root=UUID=59134bd0-a76f-4ea0-8e4a-770b2e1eafc2 ro  console=tty1 console=ttyS0
+168c168
+< 		linux	/vmlinuz-6.8.0-147-generic root=LABEL=cloudimg-rootfs ro  console=tty1 console=ttyS0
+---
+> 		linux	/vmlinuz-6.8.0-147-generic root=UUID=59134bd0-a76f-4ea0-8e4a-770b2e1eafc2 ro  console=tty1 console=ttyS0
+181c181
+< 		linux	/vmlinuz-6.8.0-147-generic root=LABEL=cloudimg-rootfs ro recovery nomodeset dis_ucode_ldr 
+---
+> 		linux	/vmlinuz-6.8.0-147-generic root=UUID=59134bd0-a76f-4ea0-8e4a-770b2e1eafc2 ro recovery nomodeset dis_ucode_ldr 
+200a201,203
+> 
+> ### BEGIN /etc/grub.d/30_os-prober ###
+> ### END /etc/grub.d/30_os-prober ###

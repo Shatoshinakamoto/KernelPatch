@@ -70,25 +70,38 @@
       failed_when: false
 
     # --- Optional PAM wiring (OFF by default; test with a root shell open) ---
-    - name: Wire cooldown reporting into sudo PAM (failure path)
+    # One line, first in the auth section (above the password include). It
+    # only observes: see userspace/pam/pam_secure_sudo.c and
+    # tests/userspace/test-pam.sh. The authfail/authsucc pair earlier
+    # versions added denied the correct password, so it is removed first.
+    - name: Remove the old cooldown lines from sudo/su PAM
       ansible.builtin.lineinfile:
-        path: /etc/pam.d/sudo
-        line: "auth  required  pam_secure_sudo.so authfail"
-        insertafter: '^auth'
+        path: "/etc/pam.d/{{ item }}"
+        regexp: '^auth\s+required\s+pam_secure_sudo\.so\s+auth(fail|succ)'
+        state: absent
+        backup: true
+      loop: [sudo, su]
       when: secure_sudo_enable_pam_cooldown | bool
 
-    - name: Wire cooldown reporting into sudo PAM (success path)
+    - name: Wire cooldown reporting into sudo/su PAM
       ansible.builtin.lineinfile:
-        path: /etc/pam.d/sudo
-        line: "auth  required  pam_secure_sudo.so authsucc"
-        insertafter: '^auth'
+        path: "/etc/pam.d/{{ item }}"
+        line: "auth  optional  pam_secure_sudo.so"
+        insertbefore: '^(auth|@include)\s'
+        firstmatch: true
+        backup: true
+      loop: [sudo, su]
       when: secure_sudo_enable_pam_cooldown | bool
 
+    # Second factor: after the password include, never before it. Run
+    # `secure-sudo otp setup` and `secure-sudo otp verify` first.
     - name: Wire OTP into sudo PAM
       ansible.builtin.lineinfile:
         path: /etc/pam.d/sudo
         line: "auth  required  pam_secure_otp.so"
-        insertafter: '^#%PAM'
+        insertafter: '^(@include\s+common-auth|auth\s+(include|substack)\s+(system-auth|common-auth))'
+        firstmatch: true
+        backup: true
       when: secure_sudo_enable_pam_otp | bool
 
     - name: Reboot reminder

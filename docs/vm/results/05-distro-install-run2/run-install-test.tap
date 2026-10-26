@@ -1,0 +1,88 @@
+ok 1 - fresh guest boots from the verified image
+ok 2 - guest runs the distro kernel 6.8.0-147-generic
+ok 3 - release tarball, staged userspace and kernel packages are in the guest
+not ok 4 - preflight (install-kernel, userspace) passes on the guest
+ok 5 - preflight: trial boot will be used
+ok 6 - preflight: changed nothing
+ok 7 - install-kernel succeeds
+ok 8 - install-kernel: trial boot armed
+ok 9 - the kernel package is installed
+ok 10 - the boot menu has the new kernel
+ok 11 - the boot menu still has 6.8.0-147-generic
+ok 12 - GRUB default stays on 6.8.0-147-generic
+ok 13 - the next boot (only) is the new kernel
+ok 14 - userspace install succeeds
+ok 15 - verify passes before the reboot
+ok 16 - verify: the trial boot is armed
+ok 17 - trial boot: the secure_sudo kernel came up
+ok 18 - secure_sudo is an active LSM
+ok 19 - AppArmor is still active next to it
+ok 20 - AppArmor is enabled and loads profiles
+ok 21 - secure-sudod and sshd are active
+ok 22 - verify passes on the trial boot
+ok 23 - verify: running kernel checks
+ok 24 - verify: module signatures enforced
+ok 25 - verify: the trial is up, waiting for --commit
+ok 26 - secure-sudo status and lint pass against the real kernel
+ok 27 - an uncommitted trial falls back to 6.8.0-147-generic on the next boot
+ok 28 - verify reports the trial did not stay
+ok 29 - re-arming the trial (reinstall) succeeds
+ok 30 - second trial boot runs the secure_sudo kernel
+ok 31 - verify --commit succeeds
+ok 32 - commit makes it the default
+ok 33 - after commit the secure_sudo kernel boots by default
+# ok 1 - lint: the installed configuration has no errors
+# ok 2 - load: succeeds
+# ok 3 - load: every setting accepted by the kernel, none rejected
+# ok 4 - the kernel holds the detected admin group (27)
+# ok 5 - tester (sudo group) can sudo
+# ok 6 - plain (no sudo) can run passwd
+# ok 7 - E1 lint fails
+# ok 8 - E1 lint names the missing GID 4242
+# ok 9 - E1 load fails
+# ok 10 - E1 load says it refused and changed nothing
+# ok 11 - E1 the kernel still has the good admin group
+# ok 12 - E1 tester can still sudo (nothing was applied)
+# ok 13 - E1 forced through anyway: tester's sudo is denied by the setid-exec gate
+# ok 14 - E1 recovery: load accepted
+# ok 15 - E1 recovery: tester can sudo again
+# ok 16 - E2 load accepted
+# ok 17 - E2 tester (admin) is unaffected
+# ok 18 - E2 plain cannot run passwd: the allowlist is incomplete
+# ok 19 - E2 recovery: load accepted
+# ok 20 - E2 recovery: plain can run passwd again
+# ok 21 - E3 lint fails
+# ok 22 - E3 lint: OTP is wired but not set up
+# ok 23 - E3 sudo now fails for tester
+# ok 24 - E3 recovery: tester can sudo again
+# ok 25 - lint accepts the documented PAM wiring
+# ok 26 - sudo works with the cooldown feed wired
+# ok 27 - a wrong password is still refused
+# ok 28 - E4 the lock engages
+# ok 29 - E4 lint fails
+# ok 30 - E4 lint: the kernel is locked until reboot
+# ok 31 - E4 load while locked fails
+# ok 32 - E4 load says INCOMPLETE, not success
+# ok 33 - E4 the lock cannot be undone in place
+# ok 34 - E4 the change has not reached the kernel
+# ok 35 - E4 root can still fix the config file while locked
+ok 34 - recovery exercises all pass in the guest
+ok 35 - after the lock exercise the box reboots into the secure_sudo kernel
+ok 36 - after the reboot the lock is gone and the fixed policy applies
+ok 37 - install.sh rollback arms the previous kernel for the next boot
+ok 38 - rollback: 6.8.0-147-generic boots on request
+ok 39 - uninstall refuses while PAM uses the modules
+ok 40 - uninstall --remove-pam-lines succeeds
+ok 41 - uninstall reports a complete removal
+ok 42 - no secure_sudo kernel package is left
+ok 43 - the boot menu no longer lists the secure_sudo kernel
+ok 44 - grubenv has no saved or one-shot entry left
+ok 45 - the install record is gone
+ok 46 - PAM files are back to their original content
+ok 47 - clean removal: every file install.sh placed is gone and every file it changed is back
+ok 48 - the only packages left behind are runtime libraries/tools, no kernel
+ok 49 - the boot menu is byte-identical to the one GRUB generated before the install
+ok 50 - after removal the box boots 6.8.0-147-generic
+ok 51 - after removal systemd is healthy
+1..51
+exit=1

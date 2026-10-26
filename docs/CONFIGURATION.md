@@ -346,26 +346,54 @@ root only):
 | `prefix.hash` | A yescrypt (`crypt(3)`) hash of the optional prefix word — never decrypted, only verified. |
 | `meta` | Account / issuer strings for the `otpauth://` URI. |
 | `qr.png` | The QR image written by `show-qr` (0600). |
+| `last_step` | The last TOTP time step accepted, so a code cannot be replayed (0600). |
 
 At verify time the seed is decrypted into an `mlock`'d buffer that is wiped
 immediately after use. The password is `prefix` + the 6-digit rotating code.
 
 ### Wiring OTP (and the cooldown feed) into PAM
 
-PAM changes are deliberately left manual so a typo cannot lock you out. Keep a
-root shell open while testing. The installer prints the exact lines; in
-`/etc/pam.d/sudo` (and `/etc/pam.d/su`):
+PAM changes are deliberately left manual so a mistake cannot lock you out.
+Keep a root shell open while testing, and test from a second terminal with
+`sudo -k; sudo true`. The installer prints the same lines.
+
+**Cooldown feed (#8).** One line, as the first `auth` line of
+`/etc/pam.d/sudo` and `/etc/pam.d/su`, above `@include common-auth`
+(Debian/Ubuntu/openSUSE) or `auth include system-auth` (Fedora/RHEL/Arch):
 
 ```
-auth  [default=die]  pam_unix.so            # your existing verifier
-auth  required       pam_secure_sudo.so authfail
-auth  sufficient     pam_unix.so
-auth  required       pam_secure_sudo.so authsucc
+auth  optional  pam_secure_sudo.so
 ```
 
-For the rotating OTP password, after `secure-sudo otp setup` and a successful
-`secure-sudo otp verify` test:
+It never changes the result. It marks each attempt; sudo and su call
+`pam_setcred()` only after a successful login, which reports `ok`, and an
+attempt that ends any other way (wrong password, ^C, sudo's retry, a failed
+account check) is reported as `fail`. Because it does not depend on jump
+counts it works unchanged with `pam_faillock`, `pam_sss` or OTP in the stack.
+
+> Earlier versions documented a four-line stack starting with
+> `auth [default=die] pam_unix.so`. That stack **denies the correct password**
+> (PAM returns `PAM_PERM_DENIED`) and never reports a failure. If you added
+> it, replace it with the line above. `tests/userspace/test-pam.sh` checks
+> both against the real `pam_unix`.
+
+**Rotating OTP (#14), as a second factor.** After `secure-sudo otp setup`
+and a successful `secure-sudo otp verify`, add right after the password
+include:
 
 ```
-auth  required       pam_secure_otp.so
+@include common-auth                 # or: auth include system-auth
+auth  required  pam_secure_otp.so
 ```
+
+The module asks for its own `OTP password:` and never reuses the Unix
+password (earlier versions did, which failed every login whichever order
+the lines were in). With `use_first_pass` it takes the password an earlier
+module collected instead, for a stack where OTP replaces the Unix password.
+
+Each code is accepted once (RFC 6238 section 5.2): the helper records the last
+time step it accepted in `last_step` and refuses that code and any older one,
+so a code seen over someone's shoulder cannot be reused. It fails closed: if
+that record cannot be written, OTP logins are refused. If the clock is stepped
+backwards, OTP logins resume once it passes the last accepted step (about a
+minute for a typical NTP correction).

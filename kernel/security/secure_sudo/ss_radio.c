@@ -133,7 +133,7 @@ static bool name_in(const char *name, const char *const *list, size_t n)
 }
 
 /* --------- LAYER 1: refuse loading the wireless/Bluetooth stack ---------- */
-static int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
+int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
 			      bool contents)
 {
 	char *buf;
@@ -171,7 +171,7 @@ static int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
 
 /* ------------- LAYER 2: deny AF_BLUETOOTH sockets when BT off ------------ */
 #ifdef CONFIG_SECURITY_NETWORK
-static int ss_radio_socket_create(int family, int type, int protocol, int kern)
+int ss_radio_socket_create(int family, int type, int protocol, int kern)
 {
 	if (kern)			/* kernel-internal socket: leave alone */
 		return 0;
@@ -185,7 +185,7 @@ static int ss_radio_socket_create(int family, int type, int protocol, int kern)
 #endif
 
 /* --------------- LAYER 3: deny writes to /dev/rfkill --------------------- */
-static int ss_radio_file_open(struct file *file)
+int ss_radio_file_open(struct file *file)
 {
 	char *buf, *p;
 	int ret = 0;
@@ -208,18 +208,7 @@ static int ss_radio_file_open(struct file *file)
 	return ret;
 }
 
-static struct security_hook_list ss_radio_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(kernel_read_file, ss_radio_read_file),
-	LSM_HOOK_INIT(file_open,        ss_radio_file_open),
-#ifdef CONFIG_SECURITY_NETWORK
-	LSM_HOOK_INIT(socket_create,    ss_radio_socket_create),
-#endif
-};
 
-void __init ss_radio_init(void)
-{
-	security_add_hooks(ss_radio_hooks, ARRAY_SIZE(ss_radio_hooks), &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knobs -------------------------------- */
 /*

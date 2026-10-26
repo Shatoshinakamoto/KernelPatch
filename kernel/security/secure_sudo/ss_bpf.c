@@ -100,17 +100,44 @@ static int ss_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 #endif /* CONFIG_BPF_SYSCALL */
 
 #ifdef CONFIG_PERF_EVENTS
-/* Step 3: perf_event_open for non-sudo users when perf_guard is on. */
-static int ss_perf_open(struct perf_event_attr *attr, int type)
+/*
+ * Step 3: perf_event_open for non-sudo users when perf_guard is on.
+ *
+ * The hook's shape differs between kernels: 6.12 passes only the security
+ * class (PERF_SECURITY_OPEN, _CPU, _KERNEL, _TRACEPOINT); later kernels, and
+ * distro kernels that backport the change, also pass the perf_event_attr.
+ * Both handlers exist and SS_PERF_HOOK picks the one that matches this
+ * tree's security_perf_event_open() at compile time.
+ */
+static int ss_perf_check(int sec_class, int ev_type)
 {
 	if (!READ_ONCE(ss_cfg.perf_guard) || ss_is_sudo_user())
 		return 0;
 	pr_warn_ratelimited("perf: denied perf_event_open for uid %u\n",
 			    from_kuid(&init_user_ns, current_uid()));
-	ss_event("perf: denied perf_event_open type %u uid %u (%s)", attr->type,
+	ss_event("perf: denied perf_event_open class %d type %d uid %u (%s)",
+		 sec_class, ev_type,
 		 from_kuid(&init_user_ns, current_uid()), current->comm);
 	return -EPERM;
 }
+
+static int __maybe_unused ss_perf_open_attr(struct perf_event_attr *attr,
+					    int type)
+{
+	return ss_perf_check(type, attr ? (int)attr->type : -1);
+}
+
+static int __maybe_unused ss_perf_open_class(int type)
+{
+	return ss_perf_check(type, -1);
+}
+
+#define SS_PERF_HOOK							\
+	__builtin_choose_expr(						\
+		__builtin_types_compatible_p(				\
+			typeof(security_perf_event_open),		\
+			int (struct perf_event_attr *, int)),		\
+		ss_perf_open_attr, ss_perf_open_class)
 #endif
 
 static struct security_hook_list ss_bpf_hooks[] __ro_after_init = {
@@ -119,7 +146,7 @@ static struct security_hook_list ss_bpf_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(bpf_prog_load, ss_bpf_prog_load),
 #endif
 #ifdef CONFIG_PERF_EVENTS
-	LSM_HOOK_INIT(perf_event_open, ss_perf_open),
+	LSM_HOOK_INIT(perf_event_open, SS_PERF_HOOK),
 #endif
 };
 

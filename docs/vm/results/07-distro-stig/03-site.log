@@ -1,0 +1,120 @@
+Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease
+Hit:2 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:3 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Hit:4 http://security.ubuntu.com/ubuntu noble-security InRelease
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+ufw is already the newest version (0.36.2-6).
+ufw set to manually installed.
+The following additional packages will be installed:
+  liblua5.3-0 libopendbx1-sqlite3 libopendbx1t64 libopenscap25t64 librpm9t64
+  librpmio9t64 openscap-common rpm-common tzdata-legacy
+Suggested packages:
+  openscap-doc
+The following packages will be REMOVED:
+  systemd-timesyncd
+The following NEW packages will be installed:
+  chrony liblua5.3-0 libopendbx1-sqlite3 libopendbx1t64 libopenscap25t64
+  librpm9t64 librpmio9t64 openscap-common openscap-scanner rpm-common
+  tzdata-legacy
+0 upgraded, 11 newly installed, 1 to remove and 18 not upgraded.
+Need to get 2806 kB of archives.
+After this operation, 72.9 MB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 tzdata-legacy all 2026e-0ubuntu0.24.04.1 [95.4 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 chrony amd64 4.5-1ubuntu4.2 [316 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble/universe amd64 liblua5.3-0 amd64 5.3.6-2build2 [143 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble/universe amd64 libopendbx1t64 amd64 1.4.6-17 [27.2 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble/universe amd64 libopendbx1-sqlite3 amd64 1.4.6-17 [5348 B]
+Get:6 http://archive.ubuntu.com/ubuntu noble/universe amd64 librpmio9t64 amd64 4.18.2+dfsg-2.1build2 [95.2 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble/universe amd64 librpm9t64 amd64 4.18.2+dfsg-2.1build2 [217 kB]
+Get:8 http://archive.ubuntu.com/ubuntu noble/universe amd64 libopenscap25t64 amd64 1.3.9+dfsg-1.1ubuntu2 [507 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/universe amd64 openscap-common all 1.3.9+dfsg-1.1ubuntu2 [1315 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble/universe amd64 openscap-scanner amd64 1.3.9+dfsg-1.1ubuntu2 [51.3 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/universe amd64 rpm-common amd64 4.18.2+dfsg-2.1build2 [34.0 kB]
+Fetched 2806 kB in 1s (2214 kB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 82742 files and directories currently installed.)
+Removing systemd-timesyncd (255.4-1ubuntu8.18) ...
+Selecting previously unselected package tzdata-legacy.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 82726 files and directories currently installed.)
+Preparing to unpack .../00-tzdata-legacy_2026e-0ubuntu0.24.04.1_all.deb ...
+Unpacking tzdata-legacy (2026e-0ubuntu0.24.04.1) ...
+Selecting previously unselected package chrony.
+Preparing to unpack .../01-chrony_4.5-1ubuntu4.2_amd64.deb ...
+Unpacking chrony (4.5-1ubuntu4.2) ...
+Selecting previously unselected package liblua5.3-0:amd64.
+Preparing to unpack .../02-liblua5.3-0_5.3.6-2build2_amd64.deb ...
+Unpacking liblua5.3-0:amd64 (5.3.6-2build2) ...
+Selecting previously unselected package libopendbx1t64.
+Preparing to unpack .../03-libopendbx1t64_1.4.6-17_amd64.deb ...
+Unpacking libopendbx1t64 (1.4.6-17) ...
+Selecting previously unselected package libopendbx1-sqlite3.
+Preparing to unpack .../04-libopendbx1-sqlite3_1.4.6-17_amd64.deb ...
+Unpacking libopendbx1-sqlite3 (1.4.6-17) ...
+Selecting previously unselected package librpmio9t64.
+Preparing to unpack .../05-librpmio9t64_4.18.2+dfsg-2.1build2_amd64.deb ...
+Unpacking librpmio9t64 (4.18.2+dfsg-2.1build2) ...
+Selecting previously unselected package librpm9t64.
+Preparing to unpack .../06-librpm9t64_4.18.2+dfsg-2.1build2_amd64.deb ...
+Unpacking librpm9t64 (4.18.2+dfsg-2.1build2) ...
+Selecting previously unselected package libopenscap25t64.
+Preparing to unpack .../07-libopenscap25t64_1.3.9+dfsg-1.1ubuntu2_amd64.deb ...
+Unpacking libopenscap25t64 (1.3.9+dfsg-1.1ubuntu2) ...
+Selecting previously unselected package openscap-common.
+Preparing to unpack .../08-openscap-common_1.3.9+dfsg-1.1ubuntu2_all.deb ...
+Unpacking openscap-common (1.3.9+dfsg-1.1ubuntu2) ...
+Selecting previously unselected package openscap-scanner.
+Preparing to unpack .../09-openscap-scanner_1.3.9+dfsg-1.1ubuntu2_amd64.deb ...
+Unpacking openscap-scanner (1.3.9+dfsg-1.1ubuntu2) ...
+Selecting previously unselected package rpm-common.
+Preparing to unpack .../10-rpm-common_4.18.2+dfsg-2.1build2_amd64.deb ...
+Unpacking rpm-common (4.18.2+dfsg-2.1build2) ...
+Setting up tzdata-legacy (2026e-0ubuntu0.24.04.1) ...
+Setting up openscap-common (1.3.9+dfsg-1.1ubuntu2) ...
+Setting up liblua5.3-0:amd64 (5.3.6-2build2) ...
+Setting up libopendbx1t64 (1.4.6-17) ...
+Setting up libopendbx1-sqlite3 (1.4.6-17) ...
+Setting up chrony (4.5-1ubuntu4.2) ...
+
+Creating config file /etc/chrony/chrony.conf with new version
+
+Creating config file /etc/chrony/chrony.keys with new version
+dpkg-statoverride: warning: --update given but /var/log/chrony does not exist
+Created symlink /etc/systemd/system/chronyd.service → /usr/lib/systemd/system/chrony.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/chrony.service → /usr/lib/systemd/system/chrony.service.
+Setting up librpmio9t64 (4.18.2+dfsg-2.1build2) ...
+Setting up librpm9t64 (4.18.2+dfsg-2.1build2) ...
+Setting up rpm-common (4.18.2+dfsg-2.1build2) ...
+Setting up libopenscap25t64 (1.3.9+dfsg-1.1ubuntu2) ...
+Setting up openscap-scanner (1.3.9+dfsg-1.1ubuntu2) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+Processing triggers for man-db (2.12.0-4build2) ...
+setpriv: setresgid failed: Operation not permitted
+Processing triggers for dbus (1.14.10-4ubuntu4.1) ...
+
+Running kernel seems to be up-to-date.
+
+No services need to be restarted.
+
+No containers need to be restarted.
+
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+Rules updated
+Rules updated (v6)
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/50-cloudimg-settings.cfg'
+Sourcing file `/etc/default/grub.d/99-secure-sudo.cfg'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.14.0-secure-sudo
+Found initrd image: /boot/initrd.img-6.14.0-secure-sudo
+Found linux image: /boot/vmlinuz-6.8.0-147-generic
+Found initrd image: /boot/initrd.img-6.8.0-147-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+done

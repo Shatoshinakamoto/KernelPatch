@@ -1,0 +1,24 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+3EFCAE00+3EF0AE00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2J[    0.254654] Kernel panic - not syncing: lsm_static_call_init - Ran out of static slots.
+[    0.254899] CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.14.0 #1
+[    0.254899] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[    0.254899] Call Trace:
+[    0.254899]  <TASK>
+[    0.254899]  panic+0x326/0x380
+[    0.254899]  ? security_path_chown+0x1e/0x90
+[    0.254899]  security_add_hooks+0x82/0xf0
+[    0.254899]  ss_lsm_init+0xe6/0x120
+[    0.254899]  initialize_lsm+0x22/0x60
+[    0.254899]  security_init+0x2b4/0x580
+[    0.254899]  start_kernel+0x4c8/0x7d0
+[    0.254899]  x86_64_start_reservations+0x18/0x30
+[    0.254899]  x86_64_start_kernel+0xc5/0xe0
+[    0.254899]  common_startup_64+0x12c/0x138
+[    0.254899]  </TASK>

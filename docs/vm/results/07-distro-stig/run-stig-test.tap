@@ -1,0 +1,6 @@
+ok 1 - fresh guest boots
+ok 2 - install-kernel + userspace succeed
+ok 3 - trial boot of 6.14.0-secure-sudo verified and committed
+ok 4 - running the secure_sudo kernel
+ok 5 - site steps applied (ufw allows ssh, GRUB password with unrestricted entries, chrony server)
+ok 6 - tester can reach root through sudo

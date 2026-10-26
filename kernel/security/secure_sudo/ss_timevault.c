@@ -194,7 +194,7 @@ static void tv_deny(const char *what, const char *why)
 	ss_event("timevault: denied exec %s (%s)", what, why);
 }
 
-static int ss_timevault_bprm(struct linux_binprm *bprm)
+int ss_timevault_bprm(struct linux_binprm *bprm)
 {
 	struct file *file = bprm->file;
 	struct inode *inode = file_inode(file);
@@ -303,7 +303,7 @@ out:
 }
 
 /* While engaged, a verified binary must not change: refuse write-opens. */
-static int ss_timevault_file_open(struct file *file)
+int ss_timevault_file_open(struct file *file)
 {
 	if (!READ_ONCE(ss_cfg.timevault_enabled))
 		return 0;
@@ -321,7 +321,7 @@ static int ss_timevault_file_open(struct file *file)
 }
 
 #ifdef CONFIG_SECURITY_PATH
-static int ss_timevault_truncate(const struct path *path)
+int ss_timevault_truncate(const struct path *path)
 {
 	if (!READ_ONCE(ss_cfg.timevault_enabled))
 		return 0;
@@ -359,7 +359,7 @@ static int tv_check_exec_map(struct file *file)
 	return e ? 0 : -EPERM;
 }
 
-static int ss_timevault_mmap(struct file *file, unsigned long reqprot,
+int ss_timevault_mmap(struct file *file, unsigned long reqprot,
 			     unsigned long prot, unsigned long flags)
 {
 	if (!(prot & PROT_EXEC))
@@ -367,7 +367,7 @@ static int ss_timevault_mmap(struct file *file, unsigned long reqprot,
 	return tv_check_exec_map(file);
 }
 
-static int ss_timevault_mprotect(struct vm_area_struct *vma,
+int ss_timevault_mprotect(struct vm_area_struct *vma,
 				 unsigned long reqprot, unsigned long prot)
 {
 	if (!(prot & PROT_EXEC) || (vma->vm_flags & VM_EXEC))
@@ -375,20 +375,7 @@ static int ss_timevault_mprotect(struct vm_area_struct *vma,
 	return tv_check_exec_map(vma->vm_file);
 }
 
-static struct security_hook_list ss_tv_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(bprm_check_security, ss_timevault_bprm),
-	LSM_HOOK_INIT(file_open,           ss_timevault_file_open),
-#ifdef CONFIG_SECURITY_PATH
-	LSM_HOOK_INIT(path_truncate,       ss_timevault_truncate),
-#endif
-	LSM_HOOK_INIT(mmap_file,           ss_timevault_mmap),
-	LSM_HOOK_INIT(file_mprotect,       ss_timevault_mprotect),
-};
 
-void __init ss_timevault_init(void)
-{
-	security_add_hooks(ss_tv_hooks, ARRAY_SIZE(ss_tv_hooks), &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knobs -------------------------------- */
 

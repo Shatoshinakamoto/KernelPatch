@@ -32,79 +32,6 @@
 #define OTP_HELPER "/usr/bin/secure-sudo-otp"
 #define PHEONIXBOX_HELPER "/usr/bin/secure-sudo-pheonixbox"
 
-/* scalar knob  <- config key  (sysfs file under SYSFS) */
-struct knob {
-	const char *cfg_key;	/* key in secure-sudo.conf */
-	const char *sysfs;	/* file under SYSFS */
-};
-
-static const struct knob knobs[] = {
-	{ "admin_gid",            "admin_gid" },
-	{ "block_setid",          "block_setid" },
-	{ "block_userns",         "block_userns" },
-	{ "block_setid_exec",     "block_setid_exec" },
-	{ "block_flash",          "block_flash" },
-	{ "ram_spike_enabled",    "ram_spike_enabled" },
-	{ "max_ram_percent",      "max_ram_percent" },
-	{ "check_interval_ms",    "check_interval_ms" },
-	{ "drop_cooldown_ms",     "drop_cooldown_ms" },
-	{ "block_tmp_exec",       "block_tmp_exec" },
-	{ "block_tmpfs_exec",     "block_tmpfs_exec" },
-	{ "net_mode",             "net_mode" },
-	{ "sudo_max_fails",       "sudo_max_fails" },
-	{ "sudo_window_sec",      "sudo_window_sec" },
-	{ "sudo_block_time_sec",  "sudo_block_time_sec" },
-	{ "sudo_cooldown_enabled","sudo_cooldown_enabled" },
-	{ "block_home_write",     "block_home_write" },
-	{ "timevault_strict_mmap","timevault_strict_mmap" },
-	{ "lock_modules",         "lock_modules" },
-	{ "binaryvault",          "binaryvault" },
-	{ "block_wifi",           "block_wifi" },
-	{ "block_bluetooth",      "block_bluetooth" },
-	{ "ethernet_only",        "ethernet_only" },
-	{ "timevault_allow_autoupdate", "timevault_allow_autoupdate" },
-	{ "timevault_max_entries", "timevault_max_entries" },
-	{ "prguard_enabled",      "prguard_enabled" },
-	{ "prguard_observe",      "prguard_observe" },
-	{ "bpf_guard",            "bpf_guard" },
-	{ "bpf_lock_tracing",     "bpf_lock_tracing" },
-	{ "perf_guard",           "perf_guard" },
-	{ "sysctl_guard",         "sysctl_guard" },
-	{ "audit_events",         "audit_events" },
-	{ "lock_confidentiality", "lock_confidentiality" },
-};
-
-/* policy list  config file  ->  securityfs file */
-struct listmap {
-	const char *cfg_file;	/* file in CONFIG_DIR */
-	const char *secfs;	/* file under SECFS */
-};
-
-static const struct listmap lists[] = {
-	{ "blacklist.conf",             "blacklist" },
-	{ "setid_exec_allow.conf",      "setid_exec_allow" },
-	{ "tmp_exec_allow.conf",        "tmp_exec_allow" },
-	{ "node_allowed_children.conf", "node_allowed_children" },
-	{ "node_sea_binaries.conf",     "node_sea_binaries" },
-	{ "driver_blacklist.conf",      "driver_blacklist" },
-	{ "timevault_allow.conf",       "timevault_allow" },
-	{ "home_map.conf",              "home_map" },
-	{ "home_write_allow.conf",      "home_write_allow" },
-	{ "binvault_allow.conf",        "binvault_allow" },
-	{ "prguard_allow.conf",         "prguard_allow" },
-};
-
-static const struct listmap *find_list(const char *name)
-{
-	size_t i;
-
-	for (i = 0; i < sizeof(lists) / sizeof(lists[0]); i++)
-		if (!strcmp(lists[i].secfs, name) ||
-		    !strcmp(lists[i].cfg_file, name))
-			return &lists[i];
-	return NULL;
-}
-
 static int require_root(void)
 {
 	if (geteuid() != 0) {
@@ -114,26 +41,36 @@ static int require_root(void)
 	return 0;
 }
 
-/* Write a NUL-terminated string to a kernel file; returns 0 on success. */
-int write_file(const char *path, const char *data, size_t len)
+/* Write @len bytes to a kernel file in one write(). Silent: on failure
+ * returns -1 with the errno (the kernel's verdict, e.g. ERANGE) in *err. */
+int write_file_err(const char *path, const char *data, size_t len, int *err)
 {
-	int fd = open(path, O_WRONLY | O_TRUNC);
+	int fd = open(path, O_WRONLY | O_TRUNC | O_CLOEXEC);
 	ssize_t n;
 
 	if (fd < 0) {
-		fprintf(stderr, "secure-sudo: open %s: %s\n", path,
-			strerror(errno));
+		*err = errno;
 		return -1;
 	}
 	n = write(fd, data, len);
-	if (n < 0) {
-		fprintf(stderr, "secure-sudo: write %s: %s\n", path,
-			strerror(errno));
+	if (n < 0 || (size_t)n != len) {
+		*err = n < 0 ? errno : EIO;
 		close(fd);
 		return -1;
 	}
 	close(fd);
 	return 0;
+}
+
+/* Same, printing the reason; returns 0 on success. */
+int write_file(const char *path, const char *data, size_t len)
+{
+	int err;
+
+	if (write_file_err(path, data, len, &err) == 0)
+		return 0;
+	fprintf(stderr, "secure-sudo: write %s: %s\n", path, strerror(err));
+	return -1;
 }
 
 static int cat_file(const char *path)
@@ -148,16 +85,6 @@ static int cat_file(const char *path)
 		fwrite(buf, 1, n, stdout);
 	close(fd);
 	return 0;
-}
-
-static const struct knob *find_knob(const char *key)
-{
-	size_t i;
-
-	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++)
-		if (!strcmp(knobs[i].cfg_key, key))
-			return &knobs[i];
-	return NULL;
 }
 
 static int set_knob(const char *key, const char *val)
@@ -232,9 +159,9 @@ static int cmd_get(const char *key)
 		snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
 		return cat_file(path) == 0 ? 0 : -1;
 	}
-	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++) {
-		snprintf(path, sizeof(path), SYSFS "/%s", knobs[i].sysfs);
-		printf("%-22s ", knobs[i].cfg_key);
+	for (i = 0; i < ss_nknobs; i++) {
+		snprintf(path, sizeof(path), SYSFS "/%s", ss_knobs[i].sysfs);
+		printf("%-22s ", ss_knobs[i].cfg_key);
 		if (cat_file(path) != 0)
 			printf("(unavailable)\n");
 	}
@@ -247,12 +174,12 @@ static int cmd_settings(void)
 	size_t i;
 
 	printf("Scalar settings (get/set; set persists to secure-sudo.conf):\n");
-	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++)
-		printf("  %s\n", knobs[i].cfg_key);
+	for (i = 0; i < ss_nknobs; i++)
+		printf("  %s\n", ss_knobs[i].cfg_key);
 	printf("\nPolicy lists (list/load; edit the .conf then `load`):\n");
-	for (i = 0; i < sizeof(lists) / sizeof(lists[0]); i++)
-		printf("  %-22s (%s/%s)\n", lists[i].secfs, CONFIG_DIR,
-		       lists[i].cfg_file);
+	for (i = 0; i < ss_nlists; i++)
+		printf("  %-22s (%s/%s)\n", ss_lists[i].secfs, CONFIG_DIR,
+		       ss_lists[i].cfg_file);
 	printf("\nTimeVault allowlist has its own command: vault-allow\n");
 	printf("Config lock: `secure-sudo lock` (one-way, until reboot)\n");
 	return 0;
@@ -272,116 +199,175 @@ static int cmd_list_one(const char *name)
 	return cat_file(path) == 0 ? 0 : -1;
 }
 
-/* Push a config list file into its securityfs target. Missing file = clear. */
-static int load_list(const struct listmap *m)
+/*
+ * `load`: push /etc/secure_sudo into the kernel (TODO P0-6).
+ *
+ * The same checks as `secure-sudo lint` run first; if they find an error,
+ * nothing is written (--force overrides). Then the lists are loaded before
+ * the settings, so a protection is switched on only after its allowlist is in
+ * place, and every list and setting is reported as accepted, rejected (with
+ * the kernel's reason) or skipped. Any rejection means the kernel is running
+ * a partial policy; load says so and exits non-zero.
+ */
+struct load_tally {
+	int accepted, rejected, skipped;
+};
+
+static void report(struct load_tally *t, const char *verdict, const char *what,
+		   int line, const char *detail)
 {
-	char cfg[256], sec[256], *buf = NULL;
+	if (!strcmp(verdict, "rejected"))
+		t->rejected++;
+	else if (!strcmp(verdict, "skipped"))
+		t->skipped++;
+	else
+		t->accepted++;
+	if (line)
+		printf("  %-9s %-34s line %-4d %s\n", verdict, what, line,
+		       detail ? detail : "");
+	else
+		printf("  %-9s %-34s %s\n", verdict, what, detail ? detail : "");
+}
+
+/* Push a config list file into its securityfs target. Missing file = clear. */
+static void load_list(const struct listmap *m, struct load_tally *t)
+{
+	char cfg[256], sec[256], detail[96], *buf = NULL;
 	size_t cap = 0, len = 0;
+	int err = 0, entries = 0;
 	FILE *f;
-	int ret;
 
 	snprintf(cfg, sizeof(cfg), CONFIG_DIR "/%s", m->cfg_file);
 	snprintf(sec, sizeof(sec), SECFS "/%s", m->secfs);
 
 	f = fopen(cfg, "re");
-	if (!f) {
-		/* No config file: write a single newline to clear the list. */
-		return write_file(sec, "\n", 1);
-	}
+	if (f) {
+		for (;;) {
+			char chunk[4096];
+			size_t n = fread(chunk, 1, sizeof(chunk), f);
 
-	/* Slurp the whole file. */
-	for (;;) {
-		char chunk[4096];
-		size_t n = fread(chunk, 1, sizeof(chunk), f);
+			if (n == 0)
+				break;
+			if (len + n + 1 > cap) {
+				char *grown;
 
-		if (n == 0)
-			break;
-		if (len + n + 1 > cap) {
-			cap = (len + n + 1) * 2;
-			buf = realloc(buf, cap);
-			if (!buf) {
-				fclose(f);
-				fprintf(stderr, "secure-sudo: out of memory\n");
-				return -1;
+				cap = (len + n + 1) * 2;
+				grown = realloc(buf, cap);
+				if (!grown) {
+					free(buf);
+					fclose(f);
+					report(t, "rejected", m->secfs, 0, "out of memory");
+					return;
+				}
+				buf = grown;
 			}
+			memcpy(buf + len, chunk, n);
+			len += n;
 		}
-		memcpy(buf + len, chunk, n);
-		len += n;
+		fclose(f);
 	}
-	fclose(f);
-	if (!buf) {
-		return write_file(sec, "\n", 1);
+	if (buf) {
+		char *p, *save = NULL, *copy;
+
+		buf[len] = '\0';
+		copy = strdup(buf);
+		for (p = copy; p && (p = strtok_r(p == copy ? copy : NULL, "\n", &save)); p = NULL) {
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p && *p != '#')
+				entries++;
+		}
+		free(copy);
 	}
-	buf[len] = '\0';
-	ret = write_file(sec, buf, len);
+	if (write_file_err(sec, buf ? buf : "\n", buf ? len : 1, &err) != 0) {
+		snprintf(detail, sizeof(detail), "%s", strerror(err));
+		report(t, "rejected", m->secfs, 0, detail);
+	} else if (!f) {
+		report(t, "accepted", m->secfs, 0, "cleared (no config file)");
+	} else {
+		snprintf(detail, sizeof(detail), "%d entr%s", entries,
+			 entries == 1 ? "y" : "ies");
+		report(t, "accepted", m->secfs, 0, detail);
+	}
 	free(buf);
-	return ret;
 }
 
-/* Parse secure-sudo.conf (key = value, # comments) and push every knob. */
-static int load_knobs(void)
+/* Push every setting in secure-sudo.conf, in file order. */
+static void load_knobs(struct load_tally *t)
 {
-	char path[256], line[512];
-	FILE *f;
-	int rc = 0;
+	struct cfg_file c;
+	char what[96], why[160], path[256];
+	int i, err;
 
-	snprintf(path, sizeof(path), CONFIG_DIR "/secure-sudo.conf");
-	f = fopen(path, "re");
-	if (!f) {
-		fprintf(stderr, "secure-sudo: %s not found, skipping knobs\n",
-			path);
-		return 0;
+	if (cfg_parse(CONFIG_DIR "/secure-sudo.conf", &c) != 0) {
+		report(t, "skipped", "secure-sudo.conf", 0,
+		       "not found: kernel settings keep their current values");
+		return;
 	}
+	for (i = 0; i < c.n; i++) {
+		const struct cfg_entry *e = &c.e[i];
+		const struct knob *k = e->bad ? NULL : find_knob(e->key);
 
-	while (fgets(line, sizeof(line), f)) {
-		char *key, *val, *eq, *p;
-
-		p = line;
-		while (isspace((unsigned char)*p))
-			p++;
-		if (*p == '#' || *p == '\0' || *p == '\n')
-			continue;
-		eq = strchr(p, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		key = p;
-		val = eq + 1;
-
-		/* trim key */
-		for (char *e = key + strlen(key) - 1; e >= key && isspace((unsigned char)*e); e--)
-			*e = '\0';
-		/* trim val */
-		while (isspace((unsigned char)*val))
-			val++;
-		for (char *e = val + strlen(val) - 1; e >= val && isspace((unsigned char)*e); e--)
-			*e = '\0';
-
-		if (!find_knob(key))
-			continue;	/* non-kernel key (daemon-only), skip */
-		if (set_knob(key, val) != 0)
-			rc = -1;
+		snprintf(what, sizeof(what), "%.40s = %.48s", e->key, e->val);
+		if (e->bad) {
+			report(t, "rejected", e->key, e->line, e->bad);
+		} else if (k) {
+			if (check_value(k, e->val, why, sizeof(why))) {
+				report(t, "rejected", what, e->line, why);
+				continue;
+			}
+			snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
+			if (write_file_err(path, e->val, strlen(e->val), &err) == 0)
+				report(t, "accepted", what, e->line, NULL);
+			else
+				report(t, "rejected", what, e->line, strerror(err));
+		} else if (is_daemon_key(e->key)) {
+			report(t, "skipped", e->key, e->line, "read by secure-sudod, not the kernel");
+		} else if (!strcmp(e->key, "timevault_enabled")) {
+			report(t, "skipped", e->key, e->line,
+			       "TimeVault is only engaged by hand (it locks the config)");
+		} else {
+			report(t, "rejected", e->key, e->line, "unknown setting");
+		}
 	}
-	fclose(f);
-	return rc;
+	cfg_free(&c);
 }
 
-static int cmd_load(void)
+static int cmd_load(int force)
 {
+	struct lint_opts o = {
+		.cfgdir = CONFIG_DIR, .pamdir = "/etc/pam.d",
+		.otpdir = "/var/lib/secure_sudo/otp", .sysfs = SYSFS, .secfs = SECFS,
+		.quiet = 1, .pam_soft = 1,
+	};
+	struct load_tally t = { 0, 0, 0 };
 	size_t i;
-	int rc = 0;
 
-	if (load_knobs() != 0)
-		rc = -1;
-	for (i = 0; i < sizeof(lists) / sizeof(lists[0]); i++)
-		if (load_list(&lists[i]) != 0)
-			rc = -1;
+	printf("secure-sudo load: %s\n", CONFIG_DIR);
+	if (access(SYSFS, F_OK) != 0) {
+		fprintf(stderr, "secure-sudo: LSM not active (no %s); nothing loaded\n", SYSFS);
+		return -1;
+	}
+	if (policy_lint(&o) > 0) {
+		if (!force) {
+			fprintf(stderr, "secure-sudo: load refused: fix the errors above "
+				"(nothing was changed), or use `load --force`\n");
+			return -1;
+		}
+		fprintf(stderr, "secure-sudo: --force: loading despite the errors above\n");
+	}
+	for (i = 0; i < ss_nlists; i++)
+		load_list(&ss_lists[i], &t);
+	load_knobs(&t);
 
-	if (rc == 0)
-		printf("secure-sudo: policy loaded from %s\n", CONFIG_DIR);
-	else
-		fprintf(stderr, "secure-sudo: policy load finished with errors\n");
-	return rc;
+	printf("load: %d accepted, %d rejected, %d skipped\n",
+	       t.accepted, t.rejected, t.skipped);
+	if (t.rejected) {
+		fprintf(stderr, "secure-sudo: load INCOMPLETE: the kernel is running a "
+			"partial policy; fix the rejected lines and run load again\n");
+		return -1;
+	}
+	return 0;
 }
 
 static int cmd_status(void)
@@ -395,9 +381,9 @@ static int cmd_status(void)
 		       SYSFS);
 		return 1;
 	}
-	for (i = 0; i < sizeof(knobs) / sizeof(knobs[0]); i++) {
-		snprintf(path, sizeof(path), SYSFS "/%s", knobs[i].sysfs);
-		printf("%-24s ", knobs[i].cfg_key);
+	for (i = 0; i < ss_nknobs; i++) {
+		snprintf(path, sizeof(path), SYSFS "/%s", ss_knobs[i].sysfs);
+		printf("%-24s ", ss_knobs[i].cfg_key);
 		if (cat_file(path) != 0)
 			printf("(unavailable)\n");
 	}
@@ -653,7 +639,10 @@ static void usage(void)
 {
 	fprintf(stderr,
 "Usage: secure-sudo <command> [args]\n"
-"  load                 push /etc/secure_sudo/* into the kernel\n"
+"  lint [--config-dir D] check the policy, admin groups, allowlists and PAM\n"
+"                       order before enforcing (read-only; any user)\n"
+"  load [--force]       lint, then push /etc/secure_sudo/* into the kernel and\n"
+"                       report every setting as accepted/rejected/skipped\n"
 "  status               show current kernel policy state\n"
 "  settings             list every configurable knob and policy list\n"
 "  get [<knob>]         show one (or all) live scalar knob value(s)\n"
@@ -668,12 +657,14 @@ static void usage(void)
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n"
 "  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list snapshot tamper protection\n"
 "\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
-"All commands are root-only and refused once the config is locked.\n");
+"All commands but lint are root-only and refused once the config is locked.\n");
 	vault_allow_usage();
 }
 
 int main(int argc, char **argv)
 {
+	/* Reports mix stdout and stderr; keep them in order through a pipe. */
+	setvbuf(stdout, NULL, _IOLBF, 0);
 	if (argc < 2) {
 		usage();
 		return 2;
@@ -685,11 +676,16 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "pheonixbox"))
 		return cmd_pheonixbox(argc, argv) == 0 ? 0 : 1;
 
+	/* lint is read-only and may run as anyone (e.g. before install). */
+	if (!strcmp(argv[1], "lint"))
+		return cmd_lint(argc - 2, argv + 2);
+
 	if (require_root() != 0)
 		return 1;
 
-	if (!strcmp(argv[1], "load"))
-		return cmd_load() == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "load") &&
+	    (argc == 2 || (argc == 3 && !strcmp(argv[2], "--force"))))
+		return cmd_load(argc == 3) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 	if (!strcmp(argv[1], "settings"))
@@ -718,10 +714,9 @@ int main(int argc, char **argv)
 		const char *v = !strcmp(argv[2], "on") ? "1" :
 				!strcmp(argv[2], "off") ? "0" : NULL;
 		if (!v) { usage(); return 2; }
-		if (write_file(SYSFS "/timevault", v, 1) != 0)
-			return 1;
-		persist_knob("timevault_enabled", v);
-		return 0;
+		/* Not persisted: engaging TimeVault also locks the config, so
+		 * it is never re-engaged automatically by `load` at boot. */
+		return write_file(SYSFS "/timevault", v, 1) == 0 ? 0 : 1;
 	}
 	if (!strcmp(argv[1], "radio"))
 		return cmd_radio(argc - 2, argv + 2) == 0 ? 0 : 1;

@@ -1,0 +1,88 @@
+49:		-o ControlMaster=auto -o ControlPath="$work/cm-%C" -o ControlPersist=120 \
+copied
+Document type: XCCDF Tailoring
+Imported: 2026-10-26T20:26:28
+Benchmark Hint: /usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml
+Profiles:
+	Title: DISA STIG with the test VM's site values
+		Id: xccdf_org.secure-sudo_profile_stig_vm-site
+#!/bin/sh
+set -eu
+d=/var/backups/audit-offload/$(date +%Y%m%d)
+mkdir -p -m 0700 "$d"
+find /var/log/audit -name "audit.log.*" -exec cp -p {} "$d"/ \;
+total 12
+drwx------ 3 root root 4096 Oct 26 20:26 .
+drwxr-xr-x 3 root root 4096 Oct 26 20:26 ..
+drwx------ 2 root root 4096 Oct 26 20:26 20261026
+Rules updated
+Rules updated (v6)
+Skipping unsupported IPv4 'limit' rule
+Skipping unsupported IPv6 'limit' rule
+ERROR: problem running ufw-init
+Warning: Extension conntrack revision 0 not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+iptables-restore v1.8.10 (nf_tables): 
+line 2: RULE_APPEND failed (No such file or directory): rule in chain ufw-track-output
+line 3: RULE_APPEND failed (No such file or directory): rule in chain ufw-track-output
+Warning: Extension conntrack revision 0 not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+Warning: Extension icmp revision 0 not supported, missing kernel module?
+Warning: Extension udp revision 0 not supported, missing kernel module?
+Warning: Extension addrtype revision 0 not supported, missing kernel module?
+Warning: Extension addrtype is not supported, missing kernel module?
+Warning: Extension addrtype is not supported, missing kernel module?
+Warning: Extension limit revision 0 not supported, missing kernel module?
+iptables-restore v1.8.10 (nf_tables): 
+line 25: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 26: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-output
+line 27: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-forward
+line 30: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 31: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 34: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 35: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 36: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 37: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-input
+line 40: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-forward
+line 41: RULE_APPEND failed (No such file or directory): rule in chain ufw-before-forward
+line 63: RULE_APPEND failed (No such file or di
+Warning: Extension udp revision 0 not supported, missing kernel module?
+Warning: Extension tcp revision 0 not supported, missing kernel module?
+Warning: Extension addrtype revision 0 not supported, missing kernel module?
+iptables-restore v1.8.10 (nf_tables): 
+line 27: RULE_APPEND failed (No such file or directory): rule in chain ufw-after-input
+Warning: Extension LOG revision 0 not supported, missing kernel module?
+Warning: Extension limit revision 0 not supported, missing kernel module?
+Warning: Extension conntrack revision 0 not supported, missing kernel module?
+iptables-restore v1.8.10 (nf_tables): 
+line 21: RULE_APPEND failed (No such file or directory): rule in chain ufw-after-logging-input
+line 22: RULE_APPEND failed (No such file or directory): rule in chain ufw-after-logging-forward
+line 23: RULE_INSERT failed (No such file or directory): rule in chain ufw-logging-deny
+line 24: RULE_APPEND failed (No such file or directory): rule in chain ufw-logging-deny
+line 25: RULE_APPEND failed (No such file or directory): rule in chain ufw-logging-allow
+Warning: Extension conntrack is not supported, missing kernel module?
+ip6tables-restore v1.8.10 (nf_tables): Couldn't load match `conntrack':No such file or directory
+Error occurred at line: 2
+Try `ip6tables-restore -h' or 'ip6tables-restore --help' for more information.
+Warning: Extension rt revision 0 not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+ip6tables-restore v1.8.10 (nf_tables): Couldn't load match `conntrack':No such file or directory
+Error occurred at line: 29
+Try `ip6tables-restore -h' or 'ip6tables-restore --help' for more information.
+Warning: Extension udp revision 0 not supported, missing kernel module?
+Warning: Extension tcp revision 0 not supported, missing kernel module?
+Warning: Extension LOG revision 0 not supported, missing kernel module?
+Warning: Extension limit revision 0 not supported, missing kernel module?
+Warning: Extension conntrack is not supported, missing kernel module?
+ip6tables-restore v1.8.10 (nf_tables): Couldn't load match `conntrack':No such file or directory
+Error occurred at line: 23
+Try `ip6tables-restore -h' or 'ip6tables-restore --help' for more information.
+Problem running '/etc/ufw/before.rules'
+Problem running '/etc/ufw/after.rules'
+Problem running '/etc/ufw/user.rules'
+Problem running '/etc/ufw/before6.rules'
+Problem running '/etc/ufw/user6.rules'
+[exited with code 0]

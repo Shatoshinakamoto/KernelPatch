@@ -1,0 +1,34 @@
+secure_sudo 0.12.0 preflight (install-kernel): nothing is changed
+system
+  distro           ubuntu 24.04 (family debian)
+  running kernel   6.8.0-147-generic
+  installed        nothing yet
+boot
+  boot method      BIOS
+  bootloader       grub
+  secure boot      disabled
+  trial boot       yes: 6.8.0-147-generic stays the default, the new kernel boots once
+  /boot space      756 MB free
+tools
+  missing          none
+changes
+  kernel           install it next to 6.8.0-147-generic, which stays installed and in the boot menu
+  bootloader       add /etc/default/grub.d/99-secure-sudo.cfg (GRUB_DEFAULT=saved), regenerate the menu
+preflight: OK
+secure_sudo 0.12.0 preflight (userspace): nothing is changed
+system
+  distro           ubuntu 24.04 (family debian)
+  running kernel   6.8.0-147-generic
+  installed        nothing yet
+boot
+  boot method      BIOS
+  bootloader       grub
+  secure boot      disabled
+tools
+  missing          BLOCKED: make gcc
+changes
+  files            secure-sudo, secure-sudod, secure-sudo-otp, secure-sudo-pheonixbox, PAM modules in /lib/x86_64-linux-gnu/security, /usr/libexec/secure-sudo/*, secure-sudod.service (enabled)
+  config           /etc/secure_sudo/*.conf where missing (existing files are kept)
+  packages         install libqrencode4 zip unzip from the distro (left installed by uninstall)
+  pam              nothing: wiring PAM is left to you (guidance at the end)
+preflight: 1 blocking problem(s)

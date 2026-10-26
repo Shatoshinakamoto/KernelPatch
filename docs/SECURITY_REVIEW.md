@@ -13,9 +13,12 @@ decisions.
 Every issue below was **fixed in this tree**, and each fix was then re-reviewed
 for issues of its own. Findings #15, #16, #18 and #19 are the second-pass reviews of the new
 BinaryVault (#17), RadioGuard (#19), TimeVault v6, and Process Runtime Guard
-(#20) work. The full LSM (16 `.c` files, including BinaryVault and RadioGuard) compiles
-cleanly with `-Werror` against real 6.11 kernel header trees; the CLI, daemon
-and PAM modules compile cleanly with `-Wall -Wextra`.
+(#20) work. Findings #35–#47 came from v12's tests and boot runs rather than
+from reading the code, and several of them (the boot panic, OTP replay, the
+PAM order, the IPv6 gap) had survived every earlier review. The full LSM (20
+`.c` files) compiles cleanly with `-Werror` against the 6.11, 6.12.114 and
+6.14 headers and in six in-tree kernel configurations (`ci/build-gate.sh`);
+the CLI, daemon, PAM modules and add-ons compile with `-Werror`.
 
 Scope note: this review hardens the implementation. It does not change the
 project's threat model — several protections (home-write, TimeVault strict
@@ -667,6 +670,175 @@ skipped; skipped rules still show as fail in the report, so nothing is hidden.
 Full record: [OSCAP_BUGS.md](OSCAP_BUGS.md).
 
 
+### 35. v11 kernel panicked at boot: LSM static-call slots exhausted (v11 bug, fixed in v12) — SI-17 / CP-10
+
+Found by the first real boot (`tests/vm/boot-test.sh`, upstream 6.14 under
+QEMU): `Kernel panic - not syncing: lsm_static_call_init - Ran out of static
+slots`, before userspace. Since 6.9 the LSM framework gives each hook one
+static-call slot per LSM; v11 registered `file_open` seven times (and other
+hooks several times). Every compile check passed, which is exactly why
+compilation is not a boot test. Fix: `ss_hooks.c` registers each shared hook
+once and calls the protections' handlers in their old order, first non-zero
+return wins (the framework's own rule), so behaviour is unchanged. Proven by
+118/118 in-kernel checks, with and without AppArmor stacked; the panic log and
+both runs are in `docs/vm/results/`.
+
+### 36. OTP codes could be used twice; prefix setup always failed (v11 bugs, fixed in v12) — IA-2(8) / CWE-294
+
+RFC 6238 §5.2 requires that a verified code is not accepted again. v11 kept
+no record, so a code seen over a shoulder or in a log could be replayed for
+the rest of its window. Now the last verified time step is stored under an
+exclusive lock (two concurrent sudo prompts cannot both spend one code) and
+only later steps are accepted; if the record cannot be written the code is
+refused (fail closed). Also fixed: `otp setup --prefix` always failed, and
+`otp reset` silently dropped the prefix. 66 checks, including the RFC 4226 and
+RFC 6238 test vectors (`tests/userspace/test-otp.sh`).
+
+### 37. The documented PAM lines denied the right password (v11 bug, fixed in v12) — IA-2 / availability
+
+`pam_secure_otp.so` read and set PAM's shared password item. After
+`pam_unix` it verified the Unix password as an OTP; before it, it handed the
+OTP to `pam_unix` as the Unix password. Either documented order failed every
+sudo. It now prompts for its own `OTP password:` and touches the shared item
+only with `use_first_pass`. Proven through libpam with the documented stacks,
+against the real `pam_unix` and `pam_faillock` on a throwaway account in a
+private mount namespace (`tests/userspace/test-pam.sh`, 50 checks). `secure-sudo lint` now also reports a wrong order, a missing
+module, an OTP line with no OTP set up, and `[default=die]` on a verifier.
+
+### 38. Network modes: `lan-only` let all IPv6 through; `public-only` cut DHCP and DNS (v11 bugs, fixed in v12) — SC-7 / AC-4
+
+The `lan-only` rules matched IPv4 only, so every IPv6 destination was
+allowed: the mode did not do what it said. `public-only` dropped the
+gateway's DHCP and DNS, so a host in that mode lost its lease and its name
+resolution. Both are now tested with real `nft` rules in network namespaces
+(`tests/userspace/test-helpers.sh`): IPv6 is filtered like IPv4 (link-local,
+multicast and ICMPv6 stay allowed for neighbour discovery), and DHCP/DHCPv6
+and DNS to the gateway are kept.
+
+### 39. Quarantine deleted the original when archiving failed (v11 bug, fixed in v12) — SI-7 / CWE-460
+
+`quarantine.sh` removed the file even if the archive step failed (disk full,
+`zip` missing and `tar` failing), destroying the evidence it was meant to keep.
+The original is now removed only after the archive exists and is checked to
+contain it.
+
+### 40. The daemon treated failed helpers as success (v11 bug, fixed in v12) — AU-5 / SI-11
+
+`secure-sudod` did not check the exit status of `apply-net.sh` and
+`quarantine.sh`, so a network mode that was never applied was reported as
+active. Failures are now logged with the status, and a network mode that did
+not apply is retried every 5 seconds and reported as `NOT applied yet`.
+
+### 41. `ss_bpf.c` did not build against 6.12; the setuid allowlist file was never created (v11 bugs, fixed in v12) — CM-2 / AC-6
+
+* The `perf_event_open` hook's signature differs between kernels: the
+  6.12.114 headers take only the event type, the 6.11 (Ubuntu) and 6.14
+  headers also take the attributes. v11 used the two-argument form, so it did
+  not compile for the project's own target with `-Werror`. `ss_bpf.c` now
+  picks the matching form at compile time (`__builtin_choose_expr` on the
+  hook's type). Caught by the new build gate (`ci/build-gate.sh`), which
+  compiles the LSM against the 6.11, 6.12.114 and 6.14 headers and builds six
+  in-tree kernel config variants.
+* `ss_creds_secfs()` was never called, so
+  `/sys/kernel/security/secure_sudo/setid_exec_allow` did not exist and
+  `block_setid_exec = 1` could not be given an allowlist: every setuid
+  program, `passwd` included, was refused for non-sudo users. `ss_core.c` now
+  creates it with the other policy files; the in-kernel tests and the VM
+  recovery drill (allowlist `/usr/bin/passwd`) use it.
+* `ci/check-lsm-hooks.sh` (part of the gate) fails when a hook is
+  registered twice, so the #35 panic cannot come back unnoticed.
+
+### 42. `load` silently applied part of a policy (v11 behaviour, fixed in v12) — CM-6 / SI-10
+
+v11 skipped unknown keys without a word (so a typo such as `block_setid_exce`
+left the protection off), continued after rejected writes, and ended with
+`finished with errors`. v12 runs `secure-sudo lint` first and refuses to
+change anything when it finds an error, then reports every setting as
+accepted, rejected or skipped, and ends with `load INCOMPLETE` if the kernel
+holds a partial policy. Lint checks syntax, unknown keys, kernel support
+for each key, allowlist files and paths (existence; root-owned and not
+writable by others), dependent settings, the admin group (exists, has
+members, covers the admin running it), PAM order and what the one-way lock
+will freeze. The recovery drills for a wrong admin
+GID, an incomplete allowlist, a bad PAM line and an accidental lock run on
+the real kernel in the distro VM test (`docs/RECOVERY.md`).
+
+### 43. Installer review (v12 rewrite) — CM-3 / CM-5 / CP-10 / SI-7
+
+Each of these was a v11 `install.sh` behaviour:
+
+* **`module.sig_enforce=1` on the shared GRUB command line** applied to every
+  kernel, including the fallback one; a distro kernel with unsigned DKMS
+  modules could then fail to boot exactly when it was needed. Signature
+  enforcement is now built into the secure_sudo kernel only
+  (`CONFIG_MODULE_SIG_FORCE`); uninstall reverts the old edit.
+* **`update-grub` failures were ignored.** Install now stops on a failure, and
+  checks that the regenerated menu lists both the new and the running kernel.
+* **`rpm -i --force`** could overwrite files of an installed distro kernel,
+  and the `kernel-headers` package replaced the distro's userspace headers.
+  Neither is done any more.
+* **An upgrade overwrote `admin_gid`** in an existing `secure-sudo.conf`.
+  Existing configuration files are now never touched; the detected value is
+  written only into a newly created file.
+* **No known-good boot, no rollback, removal by glob.** The new kernel now
+  boots once (`grub-reboot`) while the running kernel stays the default
+  until `verify --commit`; `CONFIG_PANIC_TIMEOUT=10` makes a panicking trial
+  reboot into it. Every installed file is recorded with its hash; uninstall
+  removes only unchanged recorded files, restores what it replaced, and
+  refuses while PAM still uses the modules.
+* **Secure Boot**: an unsigned kernel installed with Secure Boot on is not
+  bootable. Preflight now blocks unless an enrolled MOK is given, and
+  `verify` checks the image signature.
+* **`lsm=` on the kernel command line removes secure_sudo** (any LSM can be
+  left out that way). That is a recovery route (`docs/RECOVERY.md`) and also
+  a bypass for anyone at the boot menu, so a GRUB password is required on a
+  hardened box (STIG `grub2_password`); the STIG VM run sets one with
+  `--unrestricted` entries so unattended boots still work.
+
+Covered by `tests/install/test-install.sh` (100 checks: manifest, backups,
+upgrade, refusals, byte-identical removal, interrupted installs, GRUB entry
+parsing) and by the distro VM run (`tests/vm/distro/run-install-test.sh`).
+
+### 44. Event ring cut lines on overflow (v11 bug, fixed in v12) — AU-9 / AU-5
+
+When the ring wrapped, the oldest bytes were overwritten wherever the write
+landed, so the reader could start in the middle of a line and pass a
+fragment to the daemon as an event. The ring now drops whole events and
+counts them in `events_dropped` (root-only, `0400`), so loss is visible
+instead of silent. Covered by the in-kernel tests (wrap and reader
+behaviour).
+
+### 45. Every package shipped its scripts without the executable bit (v1–v11) — CM-2
+
+The release archives were made from a network share that drops file modes,
+so every shipped script was `0644` and the documented `./install.sh` failed.
+`ci/make-release.sh` now sets modes explicitly (`0755` for anything with a
+shebang), refuses to finish if a program lacks the bit, and produces a
+byte-identical archive from the same inputs.
+
+### 46. The compliance scanner reported an unencrypted disk as encrypted (found in v12) — CA-2 / CA-7
+
+In the STIG VM, OpenSCAP passed `encrypt_partitions` on a plain ext4 root.
+Ubuntu's OpenSCAP 1.3.9 is built with PCRE2, and its partition probe counts
+only a return of 0 as a pattern match while PCRE2 returns 1, so no mount
+point ever matches; the cloud image's comment-only `/etc/crypttab` satisfied
+the rule's other test. `dir_perms_world_writable_sticky_bits` is emptied the
+same way and passes without searching. A gate that trusted the scanner would
+have certified encryption that was not there. `stig-harden.sh` now checks
+both rules itself after every scan, and the gate uses that result and fails a
+release result that lacks it (OSCAP_BUGS OSB-19, 13 gate tests).
+
+### 47. A trimmed kernel build could leave the host without a working firewall (found in v12) — SC-7 / CM-7
+
+Building with `SS_LOCALMOD` (localmodconfig) keeps only modules loaded at
+that moment. On a host whose firewall was not up yet, conntrack, `nft_compat`,
+the xt matches and `ip_tables` were left out, and in the VM `ufw enable` then
+failed half-way (and new SSH connections hung). `install.sh build-kernel` now
+always keeps that netfilter set with `SS_LOCALMOD` and stops if it does not
+stick (OSB-21). The default build, from the distro's config, was not
+affected. The fixed config was checked with Kconfig, not yet rebuilt and
+booted.
+
 ---
 
 ## Residual notes / assumptions
@@ -682,6 +854,8 @@ Full record: [OSCAP_BUGS.md](OSCAP_BUGS.md).
 * The home-write (#4) and TimeVault strict-mmap knobs stay **opt-in**: they are
   powerful enough to break a running system if enabled without the matching
   allowlists, which would itself be an availability problem.
-* Not yet exercised against a *booted* 6.12 kernel on real hardware — it
-  compiles clean against 6.11/6.14 header trees here and builds as part of
-  `install.sh`; a boot test on the target is the last mile.
+* Boot-tested on upstream 6.14 in QEMU (an initramfs run and a full Ubuntu
+  24.04 guest with GRUB, systemd and AppArmor). Not yet booted on 6.12 (only
+  compiled against its headers: kernel.org was not reachable from the build
+  environment), not under UEFI/Secure Boot, and not on real hardware. See
+  [ROADMAP_STATUS.md](ROADMAP_STATUS.md).

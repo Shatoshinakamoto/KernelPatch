@@ -76,6 +76,47 @@ documented with the manual step that makes it pass on a real target host:
 findings that failed at baseline now **pass** — SSSD cert mapping was fixed by
 setting `ldap_user_certificate` in `sssd.conf`.)
 
+### Release run in a VM (v12)
+
+On a real Ubuntu 24.04 guest with the secure_sudo kernel committed, the same
+profile after two remediation passes gave **206 pass / 11 fail / 0 error /
+8 not applicable / 5 not checked** (`docs/vm/results/07-distro-stig/`). Every
+one of those rules, its cause and what v12 changed is in
+[OSCAP_BUGS.md §5](OSCAP_BUGS.md#5-release-run-in-a-vm-v12-2026-10-26). The
+final rescan after those changes has **not** been run yet.
+
+Three things the VM showed that a container could not:
+
+* **The scanner cannot evaluate `encrypt_partitions` on Ubuntu 24.04**
+  (OSB-19): it reported pass on an unencrypted disk. `stig-harden.sh` now
+  checks that rule (and `dir_perms_world_writable_sticky_bits`, hit by the
+  same bug) itself after every scan, and the gate uses that result.
+* **Accepted exceptions** (Pheonix, 2026-10-26), listed in
+  `tests/oscap/ubuntu2404-stig.expect` so the gate shows them every time and
+  never counts them as passing:
+  * `is_fips_mode_enabled`: a self-built kernel cannot be FIPS 140-validated.
+  * `service_sssd_enabled`: sssd needs your directory. The STIG fix writes a
+    placeholder `[domain/example.com]` that sssd refuses to start with. On a
+    real host, give that section your domain's settings, at least
+    `id_provider = ldap` (or `ad`), `ldap_uri`, `ldap_search_base`, a CA
+    (`ldap_tls_cacert`) and `ldap_user_certificate = userCertificate;binary`,
+    and list it in `[sssd] domains =`; then `systemctl enable --now sssd`.
+* **Site steps** the STIG profile leaves to you (SSG has no fix for them):
+  turn on ufw with SSH rate-limited (`ufw limit 22/tcp; ufw --force enable`),
+  install a weekly `/etc/cron.weekly/audit-offload` that sends rotated audit
+  logs to another system, and name your own time servers in a tailoring file
+  (below). The secure_sudo kernel must include the netfilter modules ufw
+  needs; `install.sh` now makes sure of that when it builds with
+  `SS_LOCALMOD` (OSB-21).
+
+### Site values: tailoring
+
+Values such as the approved time servers are fixed by the STIG profile
+(`0.us.pool.ntp.mil`). Put your own in an XCCDF tailoring file and pass it
+with `--tailoring FILE`; scans and generated fixes then use its profile.
+`tests/vm/distro/stig-vm-tailoring.xml` is a complete example (one
+`set-value` for `var_multiple_time_servers`).
+
 ---
 
 ## 2. How secure_sudo's LSM maps onto STIG control families
@@ -142,7 +183,14 @@ sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate \
 
 # Re-apply just the known-issue patches (e.g. after big package changes):
 sudo /usr/libexec/secure-sudo/stig-harden.sh --post-patch-only
+
+# With your site's values (time servers, ...) from a tailoring file:
+sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate --tailoring /etc/secure_sudo/stig-tailoring.xml
 ```
+
+Each scan also writes `<result>.crosscheck` next to its result file: the
+independent checks of rules the scanner cannot evaluate here (OSB-19).
+`tests/oscap/stig-gate.sh RESULT.xml` picks it up from the same directory.
 
 **STIG profile availability by distro** (SSG 0.1.78): RHEL 8/9/10, Oracle
 Linux 9, SLE 15, Ubuntu 20.04/22.04/24.04 ship a real DISA STIG profile.

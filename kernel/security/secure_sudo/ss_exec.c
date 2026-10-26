@@ -122,7 +122,7 @@ static struct bl_entry *bl_parse(char *text, int *out_count)
 
 /* ---------------------------- enforcement -------------------------------- */
 
-static int ss_bprm_check_security(struct linux_binprm *bprm)
+int ss_exec_bprm(struct linux_binprm *bprm)
 {
 	struct inode *inode;
 	dev_t dev;
@@ -196,15 +196,7 @@ static int ss_bprm_check_security(struct linux_binprm *bprm)
 	return ret;
 }
 
-static struct security_hook_list ss_exec_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(bprm_check_security, ss_bprm_check_security),
-};
 
-void __init ss_exec_init(void)
-{
-	security_add_hooks(ss_exec_hooks, ARRAY_SIZE(ss_exec_hooks),
-			   &ss_lsmid);
-}
 
 /* ------------------------- securityfs: blacklist ------------------------- */
 

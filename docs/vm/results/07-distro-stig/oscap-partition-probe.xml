@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<oval_definitions xmlns="http://oval.mitre.org/XMLSchema/oval-definitions-5" xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns:linux="http://oval.mitre.org/XMLSchema/oval-definitions-5#linux">
+  <generator><oval:schema_version>5.11.2</oval:schema_version><oval:timestamp>2026-10-26T00:00:00</oval:timestamp></generator>
+  <definitions>
+    <definition id="oval:x:def:1" version="1" class="compliance">
+      <metadata><title>probe</title><description>partition probe</description></metadata>
+      <criteria><criterion test_ref="oval:x:tst:1"/></criteria>
+    </definition>
+  </definitions>
+  <tests>
+    <linux:partition_test comment="p" id="oval:x:tst:1" version="1" check="all" check_existence="at_least_one_exists">
+      <linux:object object_ref="oval:x:obj:1"/>
+    </linux:partition_test>
+  </tests>
+  <objects>
+    <linux:partition_object comment="p" id="oval:x:obj:1" version="1">
+      <linux:mount_point operation="pattern match">.*</linux:mount_point>
+    </linux:partition_object>
+  </objects>
+</oval_definitions>

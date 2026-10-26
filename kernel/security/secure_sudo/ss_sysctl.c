@@ -92,7 +92,7 @@ static bool is_protected(const char *p)
 	return false;
 }
 
-static int ss_sysctl_file_open(struct file *file)
+int ss_sysctl_file_open(struct file *file)
 {
 	unsigned long magic;
 	char *buf, *p;
@@ -132,15 +132,7 @@ static int ss_sysctl_file_open(struct file *file)
 	return ret;
 }
 
-static struct security_hook_list ss_sysctl_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(file_open, ss_sysctl_file_open),
-};
 
-void __init ss_sysctl_init(void)
-{
-	security_add_hooks(ss_sysctl_hooks, ARRAY_SIZE(ss_sysctl_hooks),
-			   &ss_lsmid);
-}
 
 /* ---------------------------- sysfs knob --------------------------------- */
 static ssize_t sysctl_guard_show(struct kobject *k, struct kobj_attribute *a,

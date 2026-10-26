@@ -51,6 +51,12 @@ means its denials run after the stacked majors have had their say.
 | `ss_driver.c`   | Protection #6: driver blacklist (SHA-256 / name); exports `ss_sha256_file()` |
 | `ss_timevault.c`| Protection #13: TimeVault exec allowlist + pkg-mgr deny |
 | `ss_home.c`     | Protection #4: confine non-sudo writes to home (file_open + path_*) |
+| `ss_binvault.c` | Protection #17: BinaryVault (freeze executables and libraries) |
+| `ss_radio.c`    | Protection #19: RadioGuard (Wi-Fi/Bluetooth modules, sockets, rfkill) |
+| `ss_prguard.c`  | Protection #20: Process Runtime Guard (ptrace, process_vm_writev, /proc/pid/mem, W^X) |
+| `ss_bpf.c`      | Protection #22: BPF and perf guard (hook signature chosen per kernel version) |
+| `ss_sysctl.c`   | Protection #23: SysctlGuard |
+| `ss_hooks.c`    | One registration per shared hook, dispatching to the protections in order. Since 6.9 each LSM gets one static-call slot per hook; registering a hook twice exhausts them and panics at boot (v11). `ci/check-lsm-hooks.sh` enforces this |
 
 All kernel-side protections from the feature map are present, plus the #1b
 privilege-gaining-exec gate added in the security review. The userspace
@@ -114,5 +120,6 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/sysctl_guard` | rw (0600) | #23 refuse writes to security-critical sysctls + binfmt_misc (all UIDs) |
 | `/sys/kernel/secure_sudo/audit_events` | rw (0600) | #9 also send events to the kernel audit subsystem (auditd) |
 | `/sys/kernel/secure_sudo/lock_confidentiality` | rw (0600) | #16 while locked, also refuse lockdown's confidentiality class |
+| `/sys/kernel/secure_sudo/events_dropped` | r (0400) | #9 events lost because the ring was full (whole events are dropped, never parts of lines) |
 
 All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `prguard`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.

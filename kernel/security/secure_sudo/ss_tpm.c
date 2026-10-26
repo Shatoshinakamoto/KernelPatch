@@ -5,10 +5,12 @@
  * The attack is a one-liner:
  *     echo 5 | sudo tee /sys/class/tpm/tpm0/ppi/request
  * which schedules a Physical Presence Interface "clear TPM" at the next boot,
- * wiping sealed keys (disk-encryption keys, measured-boot state, our own
- * TPM-sealed OTP secret). Because it is destructive even for a legitimate
- * admin who fat-fingers it, this block applies to *everyone, root included* -
- * it is not gated on sudo. The only way to allow it is to boot with
+ * wiping TPM-sealed keys (disk-encryption keys, measured-boot state).
+ * (secure_sudo's own OTP seed is not TPM-sealed: it is AES-256-GCM under a
+ * root-only key file, see userspace/otp/secure-sudo-otp.c.) Because it is
+ * destructive even for a legitimate admin who fat-fingers it, this block
+ * applies to *everyone, root included* - it is not gated on sudo. The only
+ * way to allow it is to boot with
  *
  *     secure_sudo.tpm_maint=1
  *
@@ -51,7 +53,7 @@ static bool is_tpm_ppi_request(const char *p)
 	return strstr(p, "/tpm") != NULL;
 }
 
-static int ss_tpm_file_open(struct file *file)
+int ss_tpm_file_open(struct file *file)
 {
 	unsigned long magic = file_inode(file)->i_sb->s_magic;
 	char *buf, *p;
@@ -79,11 +81,4 @@ static int ss_tpm_file_open(struct file *file)
 	return ret;
 }
 
-static struct security_hook_list ss_tpm_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(file_open, ss_tpm_file_open),
-};
 
-void __init ss_tpm_init(void)
-{
-	security_add_hooks(ss_tpm_hooks, ARRAY_SIZE(ss_tpm_hooks), &ss_lsmid);
-}

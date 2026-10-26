@@ -1,0 +1,427 @@
+# baseline: the installed policy on the real kernel
+#   secure-sudo lint: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 2 warning(s), 1 note(s)
+ok 1 - lint: the installed configuration has no errors
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 2 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 0               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 2 - load: succeeds
+ok 3 - load: every setting accepted by the kernel, none rejected
+ok 4 - the kernel holds the detected admin group (27)
+ok 5 - tester (sudo group) can sudo
+ok 6 - plain (no sudo) can run passwd
+# E1: admin_gid points at a group that does not exist, setid-exec gate on
+#   secure-sudo lint: /etc/secure_sudo
+#     ERROR  admin_gid                  GID 4242 does not exist on this machine
+#     WARN   block_setid_exec           setid_exec_allow.conf is empty: non-sudo users cannot run passwd, su, newgrp or any setuid program
+#     note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 1 error(s), 2 warning(s), 1 note(s)
+ok 7 - E1 lint fails
+ok 8 - E1 lint names the missing GID 4242
+#   secure-sudo load: /etc/secure_sudo
+#     ERROR  admin_gid                  GID 4242 does not exist on this machine
+#     WARN   block_setid_exec           setid_exec_allow.conf is empty: non-sudo users cannot run passwd, su, newgrp or any setuid program
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 1 error(s), 2 warning(s), 1 note(s)
+#   secure-sudo: load refused: fix the errors above (nothing was changed), or use `load --force`
+ok 9 - E1 load fails
+ok 10 - E1 load says it refused and changed nothing
+ok 11 - E1 the kernel still has the good admin group
+ok 12 - E1 tester can still sudo (nothing was applied)
+#   secure-sudo load: /etc/secure_sudo
+#     ERROR  admin_gid                  GID 4242 does not exist on this machine
+#     WARN   block_setid_exec           setid_exec_allow.conf is empty: non-sudo users cannot run passwd, su, newgrp or any setuid program
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 1 error(s), 2 warning(s), 1 note(s)
+#   secure-sudo: --force: loading despite the errors above
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 4242                   line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 1               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 13 - E1 forced through anyway: tester's sudo is denied by the setid-exec gate
+# E1 recovery: from the open root session, restore the config and load
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 2 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 0               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 14 - E1 recovery: load accepted
+ok 15 - E1 recovery: tester can sudo again
+# E2: setid-exec gate on, allowlist missing passwd
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     WARN   block_setid_exec           setid_exec_allow.conf is empty: non-sudo users cannot run passwd, su, newgrp or any setuid program
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 3 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 1               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 16 - E2 load accepted
+ok 17 - E2 tester (admin) is unaffected
+ok 18 - E2 plain cannot run passwd: the allowlist is incomplete
+# E2 recovery: allowlist the binary, load
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 2 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 1               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+ok 19 - E2 recovery: load accepted
+ok 20 - E2 recovery: plain can run passwd again
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#   lint: 0 error(s), 2 warning(s), 1 note(s)
+#     accepted  blacklist                          0 entries
+#     accepted  setid_exec_allow                   0 entries
+#     accepted  tmp_exec_allow                     0 entries
+#     accepted  node_allowed_children              0 entries
+#     accepted  node_sea_binaries                  0 entries
+#     accepted  driver_blacklist                   0 entries
+#     accepted  timevault_allow                    0 entries
+#     accepted  home_map                           0 entries
+#     accepted  home_write_allow                   0 entries
+#     accepted  binvault_allow                     0 entries
+#     accepted  prguard_allow                      0 entries
+#     accepted  admin_gid = 27,110                 line 10   
+#     accepted  block_setid = 1                    line 11   
+#     accepted  block_userns = 1                   line 12   
+#     accepted  block_setid_exec = 0               line 17   
+#     accepted  block_flash = 1                    line 20   
+#     accepted  ram_spike_enabled = 0              line 23   
+#     accepted  max_ram_percent = 90               line 24   
+#     accepted  check_interval_ms = 5000           line 25   
+#     accepted  drop_cooldown_ms = 2000            line 26   
+#     accepted  block_tmp_exec = 1                 line 29   
+#     accepted  block_tmpfs_exec = 0               line 31   
+#     accepted  block_home_write = 0               line 36   
+#     accepted  net_mode = monitor                 line 39   
+#     accepted  sudo_cooldown_enabled = 1          line 42   
+#     accepted  sudo_max_fails = 5                 line 43   
+#     accepted  sudo_window_sec = 60               line 44   
+#     accepted  sudo_block_time_sec = 300          line 45   
+#     accepted  timevault_strict_mmap = 0          line 53   
+#     accepted  lock_modules = 1                   line 58   
+#     accepted  binaryvault = 0                    line 71   
+#     accepted  block_wifi = 0                     line 86   
+#     accepted  block_bluetooth = 0                line 87   
+#     accepted  ethernet_only = 0                  line 90   
+#     accepted  timevault_allow_autoupdate = 1     line 97   
+#     accepted  timevault_max_entries = 16384      line 100  
+#     accepted  prguard_enabled = 0                line 107  
+#     accepted  prguard_observe = 0                line 110  
+#     accepted  bpf_guard = 1                      line 115  
+#     accepted  bpf_lock_tracing = 1               line 119  
+#     accepted  perf_guard = 1                     line 121  
+#     accepted  sysctl_guard = 1                   line 131  
+#     accepted  audit_events = 1                   line 137  
+#     accepted  lock_confidentiality = 0           line 143  
+#   load: 44 accepted, 0 rejected, 0 skipped
+# E3: OTP wired into sudo before any OTP is set up
+#   secure-sudo lint: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+#     WARN   pam.d/sudo                 sudo_cooldown_enabled = 1 but pam_secure_sudo.so is not in the sudo stack: no failure is ever reported, so the cooldown never triggers
+#     ERROR  pam.d/sudo                 pam_secure_otp.so is wired but no OTP is set up (/var/lib/secure_sudo/otp/secret.enc missing): every sudo login fails; run `secure-sudo otp setup` first
+#   lint: 1 error(s), 2 warning(s), 1 note(s)
+ok 21 - E3 lint fails
+ok 22 - E3 lint: OTP is wired but not set up
+ok 23 - E3 sudo now fails for tester
+# E3 recovery: from the open root session, take the line out
+ok 24 - E3 recovery: tester can sudo again
+# the documented cooldown feed line, kept for the uninstall test
+#   secure-sudo lint: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+#   lint: 0 error(s), 1 warning(s), 1 note(s)
+ok 25 - lint accepts the documented PAM wiring
+ok 26 - sudo works with the cooldown feed wired
+ok 27 - a wrong password is still refused
+# E4: the one-way lock engaged by accident, a policy change still pending
+#   
+ok 28 - E4 the lock engages
+#   secure-sudo lint: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     note   lock (one-way)             after `secure-sudo lock` no setting or list can change until reboot; kexec, ALL kernel module loads (load the drivers you need first) are refused
+#     ERROR  kernel                     the configuration is locked until reboot: load cannot change anything
+#   lint: 1 error(s), 1 warning(s), 1 note(s)
+ok 29 - E4 lint fails
+ok 30 - E4 lint: the kernel is locked until reboot
+#   secure-sudo load: /etc/secure_sudo
+#     WARN   admin_gid                  group admin (110) has no members
+#     ERROR  kernel                     the configuration is locked until reboot: load cannot change anything
+#   lint: 1 error(s), 1 warning(s), 1 note(s)
+#   secure-sudo: --force: loading despite the errors above
+#     rejected  blacklist                          Operation not permitted
+#     rejected  setid_exec_allow                   Operation not permitted
+#     rejected  tmp_exec_allow                     Operation not permitted
+#     rejected  node_allowed_children              Operation not permitted
+#     rejected  node_sea_binaries                  Operation not permitted
+#     rejected  driver_blacklist                   Operation not permitted
+#     rejected  timevault_allow                    Operation not permitted
+#     rejected  home_map                           Operation not permitted
+#     rejected  home_write_allow                   Operation not permitted
+#     rejected  binvault_allow                     Operation not permitted
+#     rejected  prguard_allow                      Operation not permitted
+#     rejected  admin_gid = 27,110                 line 10   Operation not permitted
+#     rejected  block_setid = 1                    line 11   Operation not permitted
+#     rejected  block_userns = 1                   line 12   Operation not permitted
+#     rejected  block_setid_exec = 0               line 17   Operation not permitted
+#     rejected  block_flash = 1                    line 20   Operation not permitted
+#     rejected  ram_spike_enabled = 0              line 23   Operation not permitted
+#     rejected  max_ram_percent = 90               line 24   Operation not permitted
+#     rejected  check_interval_ms = 5000           line 25   Operation not permitted
+#     rejected  drop_cooldown_ms = 2000            line 26   Operation not permitted
+#     rejected  block_tmp_exec = 1                 line 29   Operation not permitted
+#     rejected  block_tmpfs_exec = 0               line 31   Operation not permitted
+#     rejected  block_home_write = 0               line 36   Operation not permitted
+#     rejected  net_mode = monitor                 line 39   Operation not permitted
+#     rejected  sudo_cooldown_enabled = 1          line 42   Operation not permitted
+#     rejected  sudo_max_fails = 7                 line 43   Operation not permitted
+#     rejected  sudo_window_sec = 60               line 44   Operation not permitted
+#     rejected  sudo_block_time_sec = 300          line 45   Operation not permitted
+#     rejected  timevault_strict_mmap = 0          line 53   Operation not permitted
+#     rejected  lock_modules = 1                   line 58   Operation not permitted
+#     rejected  binaryvault = 0                    line 71   Operation not permitted
+#     rejected  block_wifi = 0                     line 86   Operation not permitted
+#     rejected  block_bluetooth = 0                line 87   Operation not permitted
+#     rejected  ethernet_only = 0                  line 90   Operation not permitted
+#     rejected  timevault_allow_autoupdate = 1     line 97   Operation not permitted
+#     rejected  timevault_max_entries = 16384      line 100  Operation not permitted
+#     rejected  prguard_enabled = 0                line 107  Operation not permitted
+#     rejected  prguard_observe = 0                line 110  Operation not permitted
+#     rejected  bpf_guard = 1                      line 115  Operation not permitted
+#     rejected  bpf_lock_tracing = 1               line 119  Operation not permitted
+#     rejected  perf_guard = 1                     line 121  Operation not permitted
+#     rejected  sysctl_guard = 1                   line 131  Operation not permitted
+#     rejected  audit_events = 1                   line 137  Operation not permitted
+#     rejected  lock_confidentiality = 0           line 143  Operation not permitted
+#   load: 0 accepted, 44 rejected, 0 skipped
+#   secure-sudo: load INCOMPLETE: the kernel is running a partial policy; fix the rejected lines and run load again
+ok 31 - E4 load while locked fails
+ok 32 - E4 load says INCOMPLETE, not success
+ok 33 - E4 the lock cannot be undone in place
+ok 34 - E4 the change has not reached the kernel
+ok 35 - E4 root can still fix the config file while locked
+# E4 recovery: reboot (the lock lasts until reboot; load runs at boot)
+1..35

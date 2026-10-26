@@ -1,0 +1,16 @@
+fail is_fips_mode_enabled
+fail banner_etc_issue_net
+fail banner_etc_profiled_ssh_confirm
+fail accounts_password_pam_retry
+notchecked account_temp_expire_date
+notchecked ensure_sudo_group_restricted
+fail check_ufw_active
+notchecked ufw_only_required_services
+fail ufw_rate_limit
+notchecked only_allow_dod_certs
+fail chronyd_specify_remote_server
+fail service_sssd_enabled
+fail sssd_enable_user_cert
+fail directory_permissions_var_log_audit
+notchecked auditd_audispd_configure_sufficiently_large_partition
+fail auditd_offload_logs

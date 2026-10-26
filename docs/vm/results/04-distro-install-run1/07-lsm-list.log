@@ -1,0 +1,2 @@
+lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm
+BOOT_IMAGE=/vmlinuz-6.14.0-secure-sudo root=UUID=59134bd0-a76f-4ea0-8e4a-770b2e1eafc2 ro console=tty1 console=ttyS0

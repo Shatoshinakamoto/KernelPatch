@@ -302,7 +302,7 @@ static int file_guard(struct file *file, const char *what)
 /* Opening a binary for writing (covers O_TRUNC/O_APPEND and creating over an
  * existing binary). Non-write opens are irrelevant - reading/executing a
  * binary is exactly what we want to keep working. */
-static int ss_binvault_file_open(struct file *file)
+int ss_binvault_file_open(struct file *file)
 {
 	if (!(file->f_mode & FMODE_WRITE))
 		return 0;
@@ -364,7 +364,7 @@ out:
 }
 
 /* Deleting a binary (first half of a delete-then-recreate swap). */
-static int ss_binvault_path_unlink(const struct path *dir, struct dentry *d)
+int ss_binvault_path_unlink(const struct path *dir, struct dentry *d)
 {
 	return dir_dentry_guard(dir, d, "unlink");
 }
@@ -376,7 +376,7 @@ static int ss_binvault_path_unlink(const struct path *dir, struct dentry *d)
  *     existing binary - the standard atomic "replace a binary" trick, and the
  *     one dpkg/rpm themselves use. If nd names an existing binary, block it.
  */
-static int ss_binvault_path_rename(const struct path *odir, struct dentry *od,
+int ss_binvault_path_rename(const struct path *odir, struct dentry *od,
 				   const struct path *ndir, struct dentry *nd,
 				   unsigned int flags)
 {
@@ -397,7 +397,7 @@ static int ss_binvault_path_rename(const struct path *odir, struct dentry *od,
  * by is_protected_binary() through any name regardless; this hook closes the
  * no-exec-bit library case.)
  */
-static int ss_binvault_path_link(struct dentry *old_dentry,
+int ss_binvault_path_link(struct dentry *old_dentry,
 				 const struct path *new_dir,
 				 struct dentry *new_dentry)
 {
@@ -429,7 +429,7 @@ static int ss_binvault_path_link(struct dentry *old_dentry,
  * execute bit (to slip a later rewrite past the classifier) or add setuid/
  * setgid. The path hook gives us the live path; resolve and gate it.
  */
-static int ss_binvault_path_chmod(const struct path *path, umode_t mode)
+int ss_binvault_path_chmod(const struct path *path, umode_t mode)
 {
 	char *buf, *p;
 	int ret = 0;
@@ -506,14 +506,7 @@ static int ss_binvault_inode_removexattr(struct mnt_idmap *idmap,
 /* ------------------------------ hook table ------------------------------- */
 
 static struct security_hook_list ss_binvault_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(file_open,         ss_binvault_file_open),
 	LSM_HOOK_INIT(file_truncate,     ss_binvault_file_truncate),
-#ifdef CONFIG_SECURITY_PATH
-	LSM_HOOK_INIT(path_unlink,       ss_binvault_path_unlink),
-	LSM_HOOK_INIT(path_rename,       ss_binvault_path_rename),
-	LSM_HOOK_INIT(path_link,         ss_binvault_path_link),
-	LSM_HOOK_INIT(path_chmod,        ss_binvault_path_chmod),
-#endif
 	LSM_HOOK_INIT(inode_setxattr,    ss_binvault_inode_setxattr),
 	LSM_HOOK_INIT(inode_removexattr, ss_binvault_inode_removexattr),
 };

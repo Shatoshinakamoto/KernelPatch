@@ -1,0 +1,123 @@
+# ss-functest on Linux 6.14.0
+# test module: /lib/modules/6.14.0/kernel/lib/test_module.ko
+# active LSMs: lockdown,capability,landlock,yama,secure_sudo
+ok 1 - secure_sudo is in the active LSM list
+ok 2 - stacks with landlock, lockdown and yama
+ok 3 - secure_sudo is ordered after yama (CONFIG_LSM order)
+ok 4 - knob directory /sys/kernel/secure_sudo/ exists
+ok 5 - all 38 knobs are root-only (no group/other bits)
+ok 6 - events file exists with mode 0400
+ok 7 - default block_setid = 1 (got 1)
+ok 8 - default block_userns = 1 (got 1)
+ok 9 - default block_flash = 1 (got 1)
+ok 10 - default lock = 0 (got 0)
+ok 11 - default lock_modules = 1 (got 1)
+ok 12 - default block_tmp_exec = 1 (got 1)
+ok 13 - default block_tmpfs_exec = 0 (got 0)
+ok 14 - default timevault = 0 (got 0)
+ok 15 - default prguard_enabled = 0 (got 0)
+ok 16 - default bpf_guard = 0 (got 0)
+ok 17 - default bpf_lock_tracing = 1 (got 1)
+ok 18 - default perf_guard = 0 (got 0)
+ok 19 - default sysctl_guard = 0 (got 0)
+ok 20 - default binaryvault = 0 (got 0)
+ok 21 - default audit_events = 0 (got 0)
+ok 22 - default admin_gid = unset (got unset)
+ok 23 - non-root cannot read a knob (got 13)
+ok 24 - block_setid=banana rejected with Invalid argument, value kept (got -22, now 1)
+ok 25 - max_ram_percent=101 rejected with Numerical result out of range, value kept (got -34, now 90)
+ok 26 - max_ram_percent=0 rejected with Numerical result out of range, value kept (got -34, now 90)
+ok 27 - max_ram_percent=-5 rejected with Invalid argument, value kept (got -22, now 90)
+ok 28 - max_ram_percent 90 accepted
+ok 29 - timevault_max_entries=0 rejected with Numerical result out of range, value kept (got -34, now 16384)
+ok 30 - timevault_max_entries=131073 rejected with Numerical result out of range, value kept (got -34, now 16384)
+ok 31 - admin_gid=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17 rejected with Argument list too long, value kept (got -7, now unset)
+ok 32 - admin_gid=27,abc rejected with Invalid argument, value kept (got -22, now unset)
+ok 33 - net_mode=bogus rejected with Invalid argument, value kept (got -22, now monitor)
+ok 34 - #1 non-sudo with CAP_SETUID cannot change UID (got 1)
+ok 35 - #1 non-sudo may make a no-op setresuid to its own UID (got 0)
+ok 36 - #1 non-sudo with CAP_SETGID cannot change GID (got 1)
+ok 37 - #1 non-sudo with CAP_SETGID cannot setgroups (got 1)
+ok 38 - #1 admin group not yet configured: still denied (got 1)
+ok 39 - set admin_gid=27
+ok 40 - #1 member of admin GID 27 may change UID (got 0)
+ok 41 - #1 root may change UID (got 0)
+ok 42 - block_setid=0
+ok 43 - #1 with block_setid=0 the ordinary capability rules apply (got 0)
+ok 44 - #1 non-sudo cannot create a user namespace (got 1)
+ok 45 - #1 root can create a user namespace (got 0)
+ok 46 - #1 with block_userns=0 non-sudo can create a user namespace (got 0)
+ok 47 - #1b non-sudo exec of an unlisted setuid binary denied (got 1)
+ok 48 - allowlist /bin/suidtest
+ok 49 - #1b allowlisted setuid binary runs (got 0)
+ok 50 - #1b root may exec setuid binaries (got 0)
+ok 51 - #2 blacklist /bin/bltest
+ok 52 - #2 non-sudo exec of a blacklisted binary denied (got 1)
+ok 53 - #2 other binaries still run (got 0)
+ok 54 - #2 a hard link to the blacklisted inode is denied too (got 1)
+ok 55 - #2 root may exec a blacklisted binary (got 0)
+ok 56 - #2 cleared blacklist: binary runs again (got 0)
+ok 57 - #12 non-sudo exec from /tmp denied (got 1)
+ok 58 - #12 non-sudo PROT_EXEC mmap of a /tmp file denied (got 1)
+ok 59 - #12 root may exec from /tmp (got 0)
+ok 60 - #12 allowlist /tmp/bb
+ok 61 - #12 allowlisted /tmp binary runs (got 0)
+ok 62 - #12 memfd exec allowed while block_tmpfs_exec=0 (got 0)
+ok 63 - #12 non-sudo fileless memfd exec denied with block_tmpfs_exec=1 (got 1)
+ok 64 - #12 root memfd exec still allowed (got 0)
+ok 65 - #3 non-sudo open of /dev/mem denied despite mode 0666 + CAP_SYS_RAWIO (got 1)
+ok 66 - #3 root may open /dev/mem (got 0)
+ok 67 - #3 with block_flash=0 only the kernel's own checks apply (got 0)
+ok 68 - #10 monitor mode: packet socket allowed with CAP_NET_RAW (got 0)
+ok 69 - #10 net_mode=host
+ok 70 - #10 host mode: packet socket denied (got 1)
+ok 71 - #10 host mode applies to root too (got 1)
+ok 72 - #22 perf_guard=0: non-sudo self-profiling allowed (got 0)
+ok 73 - #22 perf_guard=1: non-sudo perf_event_open denied (got 1)
+ok 74 - #22 perf_guard=1: root perf_event_open allowed (got 0)
+ok 75 - #22 bpf_guard=0: unprivileged bpf map allowed when the sysctl permits (got 0)
+ok 76 - #22 bpf_guard=1: non-sudo bpf(2) denied (got 1)
+ok 77 - #22 bpf_guard=1: root bpf(2) allowed (got 0)
+ok 78 - #22 before lock: root may load a tracepoint program (got 0)
+ok 79 - #23 sysctl_guard=0: root may write kptr_restrict (got 0)
+ok 80 - #23 sysctl_guard=1: root cannot write kptr_restrict (got 1)
+ok 81 - #23 unprotected sysctls stay writable (got 0)
+ok 82 - #23 binfmt_misc registration refused (got 1)
+ok 83 - #20 prguard off: same-user ptrace attach allowed (got 0)
+ok 84 - #20 prguard off: W+X anonymous mapping allowed (got 0)
+ok 85 - #20 ptrace attach denied (got 1)
+ok 86 - #20 process_vm_writev denied (got 1)
+ok 87 - #20 /proc/pid/mem write denied (got 13)
+ok 88 - #20 applies to root too (got 1)
+ok 89 - #20 W+X anonymous mapping denied (got 1)
+ok 90 - #20 exempt /ss-functest
+ok 91 - #20 exempt program may attach (got 0)
+ok 92 - #6 unlocked: finit_module of test_module loads (got 0)
+ok 93 - #6 unlocked: init_module of test_module loads (got 0)
+ok 94 - #6 blacklist module by name
+ok 95 - #6 name-blacklisted module refused via finit_module (got 1)
+ok 96 - #6 blacklist module by SHA-256
+ok 97 - #6 hash-blacklisted module refused via finit_module (got 1)
+ok 98 - #6 hash-blacklisted module refused via init_module (got 1)
+ok 99 - #6 cleared blacklist: module loads again (got 0)
+ok 100 - concurrent blacklist rewrites + execs: no errors (0 bad)
+ok 101 - #9 a denial produces an event line
+# read 65518 bytes / 799 lines after overflow
+ok 102 - #9 ring holds at most 64 KiB after overflow (65518)
+ok 103 - #9 after wrap every line read is a whole event (0 partial)
+ok 104 - #9 events_dropped counts the loss (2201)
+ok 105 - lock=0 before latching is harmless
+ok 106 - #16 lock=1 latches
+ok 107 - #16 lock reads 1
+ok 108 - #16 lock cannot be cleared
+ok 109 - #16 boolean knobs refuse writes when locked
+ok 110 - #16 admin_gid refuses writes when locked
+ok 111 - #16 numeric knobs refuse writes when locked
+ok 112 - #16 policy lists refuse writes when locked
+ok 113 - #16 enforcement stayed on
+ok 114 - #16 locked + lock_modules: finit_module refused (got 1)
+ok 115 - #16 locked + lock_modules: init_module refused (got 1)
+ok 116 - #22 locked: tracing BPF program refused for root (got 1)
+ok 117 - #22 locked: socket-filter BPF program still allowed (got 0)
+ok 118 - #16 normal exec still works after locking (got 0)
+1..118

@@ -1,0 +1,4 @@
+packages installed since: 
+differences ('<' only before, '>' only after or changed):
+< /boot/grub/grub.cfg
+> /boot/grub/grub.cfg

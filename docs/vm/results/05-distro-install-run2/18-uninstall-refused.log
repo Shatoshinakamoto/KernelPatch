@@ -1,0 +1,2 @@
+9:auth	optional	pam_secure_sudo.so
+[1;31m[secure_sudo][0m PAM still uses the secure_sudo modules (above); removing them now would break sudo/login. Remove those lines (keep a root shell open), or rerun with --remove-pam-lines. Nothing was changed.

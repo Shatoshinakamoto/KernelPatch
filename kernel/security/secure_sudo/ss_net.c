@@ -27,7 +27,7 @@
 #include "secure_sudo.h"
 
 #ifdef CONFIG_SECURITY_NETWORK
-static int ss_socket_create(int family, int type, int protocol, int kern)
+int ss_net_socket_create(int family, int type, int protocol, int kern)
 {
 	if (kern)
 		return 0;	/* kernel-internal socket */
@@ -42,19 +42,7 @@ static int ss_socket_create(int family, int type, int protocol, int kern)
 	return 0;
 }
 
-static struct security_hook_list ss_net_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(socket_create, ss_socket_create),
-};
 
-void __init ss_net_init(void)
-{
-	security_add_hooks(ss_net_hooks, ARRAY_SIZE(ss_net_hooks), &ss_lsmid);
-}
-#else
-void __init ss_net_init(void)
-{
-	pr_warn("CONFIG_SECURITY_NETWORK off: host-mode socket block unavailable\n");
-}
 #endif /* CONFIG_SECURITY_NETWORK */
 
 /* ---------------------------- sysfs knob --------------------------------- */

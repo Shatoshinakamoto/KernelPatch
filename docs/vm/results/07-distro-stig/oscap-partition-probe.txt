@@ -1,0 +1,32 @@
+OSB-19 evidence, collected in this guest (Ubuntu 24.04, openscap-scanner 1.3.9+dfsg-1.1ubuntu2,
+built with -DWITH_PCRE2=ON per debian/rules) after remediation pass 2:
+
+1. encrypt_partitions evaluated alone:
+     oscap xccdf eval --profile ..._stig --rule ..._encrypt_partitions --oval-results ...
+     Result  pass
+   The disk is NOT encrypted (lsblk: / on /dev/vda1 ext4, no crypt device; /etc/crypttab
+   holds only its comment header). OVAL results:
+     test_crypttab_partitions   true   (pattern ^\s*(\S+) captured "#" from the comment line)
+     test_encrypted_partitions  true   check_existence=none_exist; the object
+       obj_encrypted_partitions has flag="does not exist": the partition probe returned no items.
+
+2. oscap-partition-probe.xml (in this directory): a partition_object with
+   mount_point pattern ".*" and check_existence=at_least_one_exists.
+     oscap oval eval --results part-res.xml oscap-partition-probe.xml
+     Definition oval:x:def:1: false    (object flag="does not exist")
+   With --verbose DEVEL the probe matches every mount point ("pcre2_match_8: rc=1" for
+   /sys, /proc, /dev, /, ...) and then collects nothing ("Iterator count = 0").
+
+3. Cause, from the source (openscap-1.3.9 src/OVAL/probes/unix/linux/partition_probe.c):
+     rc = oscap_pcre_exec(re, mnt_entp->mnt_dir, strlen(...), 0, 0, NULL, 0);
+     if (rc == 0) { collect_item(...) }
+   oscap_pcre_exec() returns pcre2_match()'s value, which is 1 for a match with no
+   capture groups (the PCRE1 code path returned 0 here because ovecsize is 0). So no
+   mount point ever matches and every pattern-selected partition_object is empty.
+
+4. Affected rules in the Ubuntu 24.04 STIG profile (all partition_objects with a
+   mount_point pattern): encrypt_partitions (false pass), and
+   dir_perms_world_writable_sticky_bits (its list of filesystems to search is empty,
+   so it passes without searching). Independent check of the second one in this guest:
+     find / /boot /boot/efi -xdev -type d -perm -0002 ! -perm -1000   -> nothing found
+   so that rule's pass happens to be right here; encrypt_partitions' is not.

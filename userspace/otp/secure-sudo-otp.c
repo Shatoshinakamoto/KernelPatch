@@ -36,6 +36,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <time.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <crypt.h>
@@ -43,12 +44,20 @@
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
 
+/* OTP_DIR and OTP_NOW() can be overridden at build time, for the tests only
+ * (tests/userspace/test-otp.c); the installed helper never sets them. */
+#ifndef OTP_DIR
 #define OTP_DIR   "/var/lib/secure_sudo/otp"
+#endif
+#ifndef OTP_NOW
+#define OTP_NOW() time(NULL)
+#endif
 #define F_MASTER  OTP_DIR "/masterkey"
 #define F_SECRET  OTP_DIR "/secret.enc"
 #define F_PREFIX  OTP_DIR "/prefix.hash"
 #define F_META    OTP_DIR "/meta"
 #define F_QR      OTP_DIR "/qr.png"
+#define F_LAST    OTP_DIR "/last_step"
 
 #define SECRET_RAW_LEN 20	/* 160-bit seed, standard for TOTP */
 #define TOTP_STEP 30
@@ -268,10 +277,12 @@ static unsigned totp_at(const uint8_t *key, int keylen, uint64_t counter)
 	return bin % 1000000u;
 }
 
-/* True if @code (6-digit string) matches TOTP now within the window. */
-static int totp_check(const uint8_t *key, int keylen, const char *code)
+/* True if @code (6-digit string) matches TOTP now within the window; the
+ * time step it matched is stored in @step. */
+static int totp_check(const uint8_t *key, int keylen, const char *code,
+		      uint64_t *step)
 {
-	uint64_t t = (uint64_t)time(NULL) / TOTP_STEP;
+	uint64_t t = (uint64_t)OTP_NOW() / TOTP_STEP;
 	long w;
 	char buf[8];
 
@@ -279,17 +290,57 @@ static int totp_check(const uint8_t *key, int keylen, const char *code)
 		snprintf(buf, sizeof(buf), "%06u",
 			 totp_at(key, keylen, t + w));
 		if (strlen(code) == TOTP_DIGITS &&
-		    CRYPTO_memcmp(buf, code, TOTP_DIGITS) == 0)
+		    CRYPTO_memcmp(buf, code, TOTP_DIGITS) == 0) {
+			*step = t + w;
 			return 1;
+		}
 	}
 	return 0;
+}
+
+/*
+ * RFC 6238 section 5.2: a code must not be accepted a second time. Remember
+ * the last time step that verified and accept only later ones, under a lock
+ * so two concurrent sudo prompts cannot both use one code. Fails closed: if
+ * the record cannot be written, the code is not accepted. A clock stepped
+ * backwards therefore delays OTP logins until it passes the last used step
+ * (at most TOTP_WINDOW + 1 steps for a one-off correction).
+ */
+static int step_consume(uint64_t step)
+{
+	unsigned long long last = 0;
+	char buf[32];
+	int fd, ok = 0;
+	ssize_t n;
+
+	fd = open(F_LAST, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+	if (fd < 0)
+		return 0;
+	if (flock(fd, LOCK_EX) != 0)
+		goto out;
+	n = pread(fd, buf, sizeof(buf) - 1, 0);
+	if (n > 0) {
+		buf[n] = '\0';
+		last = strtoull(buf, NULL, 10);
+	}
+	if (n > 0 && step <= last)
+		goto out;			/* replay, or an older code */
+	n = snprintf(buf, sizeof(buf), "%llu\n", (unsigned long long)step);
+	if (ftruncate(fd, 0) == 0 && pwrite(fd, buf, n, 0) == n &&
+	    fsync(fd) == 0)
+		ok = 1;
+out:
+	close(fd);
+	return ok;
 }
 
 /* ------------------------------ prefix ---------------------------------- */
 
 static int prefix_set(const char *prefix)
 {
-	char salt[64], *hash;
+	/* libxcrypt refuses (ERANGE) any buffer smaller than this, so a fixed
+	 * 64-byte one made every "setup --prefix" fail. */
+	char salt[CRYPT_GENSALT_OUTPUT_SIZE], *hash;
 	uint8_t rnd[16];
 
 	if (!prefix || !*prefix) {
@@ -303,7 +354,7 @@ static int prefix_set(const char *prefix)
 		return -1;
 
 	hash = crypt(prefix, salt);		/* yescrypt */
-	if (!hash)
+	if (!hash || hash[0] == '*')		/* libxcrypt failure token */
 		return -1;
 	return write_file(F_PREFIX, hash, strlen(hash), 0600);
 }
@@ -398,7 +449,9 @@ static int read_line(char *buf, size_t n, int from_stdin, const char *prompt)
 
 /* ------------------------------ commands -------------------------------- */
 
-static int cmd_setup(int argc, char **argv)
+/* @keep_prefix: leave an existing prefix in place unless --prefix is given
+ * (reset); setup without --prefix removes it. */
+static int cmd_setup(int argc, char **argv, int keep_prefix)
 {
 	uint8_t raw[SECRET_RAW_LEN];
 	char b32[64], uri[512], prefix[128] = "";
@@ -429,7 +482,7 @@ static int cmd_setup(int argc, char **argv)
 			return 1;
 		}
 		OPENSSL_cleanse(prefix, sizeof(prefix));
-	} else {
+	} else if (!keep_prefix) {
 		unlink(F_PREFIX);
 	}
 
@@ -495,6 +548,7 @@ static int cmd_verify(int from_stdin)
 {
 	uint8_t *sec, keyraw[64];
 	int n, keylen, ok = 0;
+	uint64_t step = 0;
 	char line[256], *code_part;
 	size_t len;
 
@@ -526,7 +580,7 @@ static int cmd_verify(int from_stdin)
 	if (load_secret_mlocked(&sec, &n) != 0)
 		goto done;
 	keylen = base32_decode((char *)sec, keyraw, sizeof(keyraw));
-	ok = totp_check(keyraw, keylen, code_part);
+	ok = totp_check(keyraw, keylen, code_part, &step) && step_consume(step);
 	OPENSSL_cleanse(keyraw, sizeof(keyraw));
 	free_secret(sec);
 
@@ -547,13 +601,13 @@ static int cmd_reset(int argc, char **argv)
 		if (keep)
 			printf("(keeping existing prefix; pass --prefix to change it)\n");
 	}
-	return cmd_setup(argc, argv);
+	return cmd_setup(argc, argv, 1);
 }
 
 static int cmd_disable(void)
 {
 	/* Best-effort shred: overwrite then unlink the sensitive files. */
-	const char *files[] = { F_SECRET, F_PREFIX, F_QR, F_MASTER };
+	const char *files[] = { F_SECRET, F_PREFIX, F_QR, F_MASTER, F_LAST };
 	size_t i;
 
 	for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -725,7 +779,7 @@ int main(int argc, char **argv)
 		return 1;
 
 	if (!strcmp(argv[1], "setup"))
-		return cmd_setup(argc, argv);
+		return cmd_setup(argc, argv, 0);
 	if (!strcmp(argv[1], "show-key"))
 		return cmd_show_key();
 	if (!strcmp(argv[1], "show-qr"))

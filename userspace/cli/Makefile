@@ -6,7 +6,7 @@ BINDIR  ?= $(PREFIX)/bin
 
 all: secure-sudo
 
-SRCS    = secure-sudo.c vault_allow.c detect_admins.c
+SRCS    = secure-sudo.c policy.c vault_allow.c detect_admins.c
 LDLIBS  += -lcrypto
 
 secure-sudo: $(SRCS) cli.h

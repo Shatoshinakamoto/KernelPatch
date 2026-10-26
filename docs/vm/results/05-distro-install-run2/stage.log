@@ -1,0 +1,21 @@
+[1;32m[secure_sudo][0m distro family: debian (PAM dir /lib/x86_64-linux-gnu/security)
+[1;32m[secure_sudo][0m building userspace into /tmp/tmp.rYsF3VkKsm/stage
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/cli'
+install -D -m0755 secure-sudo /tmp/tmp.rYsF3VkKsm/stage/usr/bin/secure-sudo
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/cli'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/pam'
+install -D -m0644 pam_secure_sudo.so /tmp/tmp.rYsF3VkKsm/stage/lib/x86_64-linux-gnu/security/pam_secure_sudo.so
+install -D -m0644 pam_secure_otp.so  /tmp/tmp.rYsF3VkKsm/stage/lib/x86_64-linux-gnu/security/pam_secure_otp.so
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/pam'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/daemon'
+install -D -m0755 secure-sudod /tmp/tmp.rYsF3VkKsm/stage/usr/sbin/secure-sudod
+install -D -m0755 helpers/apply-net.sh  /tmp/tmp.rYsF3VkKsm/stage/usr/libexec/secure-sudo/apply-net.sh
+install -D -m0755 helpers/quarantine.sh /tmp/tmp.rYsF3VkKsm/stage/usr/libexec/secure-sudo/quarantine.sh
+install -D -m0644 secure-sudod.service  /tmp/tmp.rYsF3VkKsm/stage/lib/systemd/system/secure-sudod.service
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/daemon'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/otp'
+install -D -m0755 secure-sudo-otp /tmp/tmp.rYsF3VkKsm/stage/usr/bin/secure-sudo-otp
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/otp'
+make: Entering directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/pheonixbox'
+install -D -m0755 secure-sudo-pheonixbox /tmp/tmp.rYsF3VkKsm/stage/usr/bin/secure-sudo-pheonixbox
+make: Leaving directory '/tmp/claude-0/-home-claude/0f213443-a9d2-51ce-9ca9-6760812c3581/scratchpad/cloudvm/run2-src/KernelPatch-merged/userspace/pheonixbox'

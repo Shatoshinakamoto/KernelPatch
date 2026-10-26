@@ -27,7 +27,7 @@
 #
 # USAGE
 #   stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
-#                  [--list-profiles] [--outdir <dir>] [--yes]
+#                  [--tailoring <f>] [--list-profiles] [--outdir <dir>] [--yes]
 #                  [--passes <n>] [--skip-rules <regex>] [--post-patch-only]
 #
 #   --scan           scan only, produce reports (default if nothing given)
@@ -35,6 +35,9 @@
 #                    unless --yes)
 #   --profile <id>   force a specific XCCDF profile id (see --list-profiles)
 #   --datastream <f> force a specific SSG datastream file
+#   --tailoring <f>  XCCDF tailoring file with the site's values (time
+#                    servers, banner, ...); its profile is used unless
+#                    --profile names another one in it
 #   --list-profiles  list the profiles in the chosen datastream and exit
 #   --outdir <dir>   where to write reports (default /var/log/secure_sudo/stig)
 #   --yes            do not prompt before remediating
@@ -42,8 +45,11 @@
 #   --skip-rules <re> leave rules whose id matches this regex unremediated
 #                    (e.g. 'ufw|nftables|firewalld' when secure_sudo's own nft
 #                    network modes manage the firewall); they stay in the report
-#   --post-patch-only apply only the known-issue patches (OSB-03..07,
+#   --post-patch-only apply only the known-issue patches (OSB-03..07, OSB-20,
 #                    docs/OSCAP_BUGS.md), then rescan
+#
+# Every scan also writes <result>.crosscheck: independent checks of the rules
+# this platform's scanner cannot evaluate (OSB-19), read by the STIG gate.
 #
 set -euo pipefail
 
@@ -51,12 +57,17 @@ OUTDIR=/var/log/secure_sudo/stig
 MODE=scan
 FORCE_PROFILE=""
 FORCE_DS=""
+TAILORING=""
 LIST_ONLY=0
 ASSUME_YES=0
 PASSES=2
 SKIP_RULES=""
 
 die()  { echo "stig-harden: $*" >&2; exit 1; }
+# Result parsing lives in oscap-results.py (next to this script, in the
+# source tree and in /usr/libexec/secure-sudo), shared with the STIG gate.
+OSCAP_RESULTS="$(dirname "$(readlink -f "$0")")/oscap-results.py"
+results() { python3 -I "$OSCAP_RESULTS" "$@"; }
 info() { echo "stig-harden: $*"; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root"
@@ -67,13 +78,14 @@ while [ $# -gt 0 ]; do
 	--remediate)     MODE=remediate ;;
 	--profile)       FORCE_PROFILE="${2:?}"; shift ;;
 	--datastream)    FORCE_DS="${2:?}"; shift ;;
+	--tailoring)     TAILORING="$(readlink -f "${2:?}")"; shift ;;
 	--list-profiles) LIST_ONLY=1 ;;
 	--outdir)        OUTDIR="${2:?}"; shift ;;
 	--yes|-y)        ASSUME_YES=1 ;;
 	--passes)        PASSES="${2:?}"; shift ;;
 	--skip-rules)    SKIP_RULES="${2:?}"; shift ;;
 	--post-patch-only) MODE=postpatch ;;
-	-h|--help)       sed -n '2,50p' "$0"; exit 0 ;;
+	-h|--help)       sed -n '2,52p' "$0"; exit 0 ;;
 	*)               die "unknown option: $1" ;;
 	esac
 	shift
@@ -183,6 +195,15 @@ pick_profile() {
 	done
 }
 
+# A tailoring file carries the site's values; scans and fixes use its profile.
+TAIL=()
+if [ -n "$TAILORING" ]; then
+	[ -f "$TAILORING" ] || die "tailoring file $TAILORING not found"
+	TAIL=(--tailoring-file "$TAILORING")
+	[ -n "$FORCE_PROFILE" ] || FORCE_PROFILE="$(grep -o 'Profile id="[^"]*"' "$TAILORING" | head -1 | cut -d'"' -f2)"
+	[ -n "$FORCE_PROFILE" ] || die "no Profile in tailoring file $TAILORING"
+	info "tailoring: $TAILORING"
+fi
 PROFILE="${FORCE_PROFILE:-$(pick_profile)}"
 [ -n "$PROFILE" ] || die "no usable profile in $DS (try --list-profiles)"
 # OSB-18: only claim "no STIG for this distro" when we chose the fallback
@@ -209,18 +230,55 @@ scan() {
 	local rep="$OUTDIR/${tag}-report-${TS}.html"
 	info "scanning ($tag) -> $rep"
 	# oscap returns 2 when some rules fail; that is normal, not an error.
-	oscap xccdf eval --profile "$PROFILE" \
+	oscap xccdf eval "${TAIL[@]}" --profile "$PROFILE" \
 		--results "$res" --report "$rep" "$DS" || [ $? -eq 2 ]
 	SCAN_RESULT="$res"
-	# Print a one-line pass/fail tally to the console, parsed from the XML we
-	# just wrote (no second scan, no extra pipe to break).
-	local pass fail na nc err
-	pass=$(grep -c '<result>pass</result>'          "$res" || true)
-	fail=$(grep -c '<result>fail</result>'          "$res" || true)
-	na=$(  grep -c '<result>notapplicable</result>' "$res" || true)
-	nc=$(  grep -c '<result>notchecked</result>'    "$res" || true)
-	err=$( grep -c '<result>error</result>'         "$res" || true)
-	info "  pass=$pass fail=$fail notapplicable=$na notchecked=$nc error=$err"
+	# Print a one-line tally of every result kind, parsed from the XML we
+	# just wrote (no second scan).
+	info "  $(results tally "$res")"
+	crosscheck "${res%.xml}.crosscheck"
+}
+
+# -- OSB-19: independent checks of rules the scanner cannot evaluate --------
+# Ubuntu 24.04 builds OpenSCAP 1.3.9 with PCRE2. Its partition probe treats
+# only a return of 0 as a match, PCRE2 returns 1, so a partition_object
+# selected by a mount-point pattern never has any items. The two STIG rules
+# built on such objects then pass without looking at anything:
+# encrypt_partitions ("no unencrypted partition found") and
+# dir_perms_world_writable_sticky_bits (an empty list of filesystems to
+# search). Both are checked here, the way their OVAL describes, and written
+# as "<result> <rule> <evidence>"; tests/oscap/stig-gate.sh uses these
+# results instead of the scanner's for these rules.
+local_fs() { # mount points of filesystems on block devices (no bind mounts, no iso9660)
+	findmnt -rn -o TARGET,SOURCE,FSTYPE |
+		awk '$2 ~ /^\/dev\// && $2 !~ /\[/ && $3 != "iso9660" {print $1}' |
+		sed 's/\\x20/ /g' | sort -u
+}
+crosscheck() {
+	local out="$1" m src plain="" n=0 ww
+	while IFS= read -r m; do
+		case "$m" in /boot|/boot/efi) continue ;; esac
+		n=$((n + 1))
+		src="$(findmnt -rn -o SOURCE --mountpoint "$m" | head -1)" || true
+		lsblk -nso TYPE "$src" 2>/dev/null | grep -qx crypt || plain="$plain $m($src)"
+	done < <(local_fs)
+	{
+		if [ "$n" -eq 0 ]; then
+			echo "fail encrypt_partitions no filesystem on a block device to check, so none is shown to be encrypted"
+		elif [ -n "$plain" ]; then
+			echo "fail encrypt_partitions not on dm-crypt:$plain"
+		else
+			echo "pass encrypt_partitions all $n filesystem(s) outside /boot are on dm-crypt"
+		fi
+		ww="$({ echo /; local_fs; } | sort -u | while IFS= read -r m; do
+			find "$m" -xdev -type d -perm -0002 ! -perm -1000 -print 2>/dev/null; done | head -20 | tr '\n' ' ')" || true
+		if [ -n "$ww" ]; then
+			echo "fail dir_perms_world_writable_sticky_bits world-writable without sticky bit: $ww"
+		else
+			echo "pass dir_perms_world_writable_sticky_bits no world-writable directory without the sticky bit on / or any local filesystem"
+		fi
+	} > "$out"
+	info "  independent checks (OSB-19): $(cut -d' ' -f1,2 "$out" | tr '\n' ' ')-> $out"
 }
 
 # -- known-issue patches (see docs/OSCAP_BUGS.md) ---------------------------
@@ -231,20 +289,23 @@ scan() {
 post_patch() {
 	info "applying known-issue patches"
 
-	# OSB-03: SSG 0.1.78's fix for banner_etc_profiled_ssh_confirm writes the
-	# OVAL regex token "(?:[n]+|(?:n)+)" literally instead of newlines, leaving
-	# /etc/profile.d/ssh_confirm.sh as one broken line. Restore the newlines.
-	local f=/etc/profile.d/ssh_confirm.sh
-	if [ -f "$f" ] && grep -qF '(?:[n]+|(?:n)+)' "$f"; then
+	# OSB-03: SSG 0.1.78's banner fixes write the OVAL regex token
+	# "(?:[n]+|(?:n)+)" literally instead of newlines: in
+	# /etc/profile.d/ssh_confirm.sh (banner_etc_profiled_ssh_confirm, found in
+	# the container) and in /etc/issue.net and /etc/issue (banner_etc_issue_net,
+	# found in the VM, where those rules apply). Restore the newlines.
+	local f
+	for f in /etc/profile.d/ssh_confirm.sh /etc/issue.net /etc/issue; do
+		[ -f "$f" ] && grep -qF '(?:[n]+|(?:n)+)' "$f" || continue
 		cp -p "$f" "$f.pre-patch"
 		python3 -I -c 'import sys;p=sys.argv[1];s=open(p).read();open(p,"w").write(s.replace("(?:[n]+|(?:n)+)","\n"))' "$f"
-		if bash -n "$f"; then
+		if [ "${f##*.}" != sh ] || bash -n "$f"; then
 			info "  OSB-03 fixed: $f restored (backup $f.pre-patch)"
 		else
 			cp -p "$f.pre-patch" "$f"
 			info "  OSB-03: repaired $f failed a syntax check; original restored"
 		fi
-	fi
+	done
 
 	# OSB-04: pwquality `retry` is left commented out ("# retry = 3").
 	f=/etc/security/pwquality.conf
@@ -301,6 +362,22 @@ post_patch() {
 		done
 	fi
 
+	# OSB-20: file_group_ownership_var_log_audit_stig's fix sets
+	# "log_group = root" in auditd.conf. With log_group root,
+	# directory_permissions_var_log_audit wants the audit log directory at 0700
+	# instead of 0750, but that rule passed on the scan the fix was generated
+	# from, so nothing tightens the directory (seen in the VM after pass 2).
+	f=/etc/audit/auditd.conf
+	if [ -f "$f" ] && grep -qE '^[ ]*log_group[ ]+=[ ]+root[ ]*$' "$f"; then
+		local d
+		d="$(sed -n -E 's/^log_file\s*=\s*(.*)$/\1/p' "$f" | head -1)"
+		d="$(dirname "${d:-/var/log/audit/audit.log}")"
+		if [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 0 -perm /7077)" ]; then
+			chmod 0700 "$d"
+			info "  OSB-20 fixed: $d -> 0700 (auditd log_group is root)"
+		fi
+	fi
+
 	# OSB-07: log-file permission drift. Package installs (including the ones
 	# remediation itself performs) create new logs with wider modes, so this
 	# runs LAST, after every install, right before the final scan.
@@ -314,58 +391,30 @@ post_patch() {
 
 # Drop the fix blocks of rules matching $SKIP_RULES from a generated script.
 # oscap delimits each rule's fix with "# BEGIN fix ... for '<rule>'" and
-# "# END fix for '<rule>'", so whole blocks can be removed safely.
+# "# END fix for '<rule>'", so whole blocks can be removed safely; a block
+# without an END marker stops the run instead of silently dropping the rest.
 skip_rules() {
 	local fix="$1" n
-	python3 -I - "$fix" "$SKIP_RULES" <<'PY'
-import re, sys
-path, pat = sys.argv[1], re.compile(sys.argv[2])
-out, skip, dropped = [], False, []
-for line in open(path):
-    m = re.match(r"# BEGIN fix \(.*\) for '([^']+)'", line)
-    if m and pat.search(m.group(1)):
-        skip = True
-        dropped.append(m.group(1))
-    if not skip:
-        out.append(line)
-    if skip and line.startswith("# END fix for"):
-        skip = False
-open(path, "w").writelines(out)
-open(path + ".skipped", "w").write("\n".join(dropped) + ("\n" if dropped else ""))
-PY
-	n=$(wc -l <"$fix.skipped")
+	n="$(results skip-fix "$fix" "$SKIP_RULES")" || die "could not apply --skip-rules to $fix"
 	info "  --skip-rules: left $n rule(s) unremediated (list: $fix.skipped)"
 }
 
 # Write a Markdown summary: before/after tallies + every rule not at pass.
 summarize() {
 	local before="$1" after="$2" out="$OUTDIR/summary-${TS}.md"
-	tally() {
-		local r="$1" k
-		for k in pass fail notapplicable notchecked error; do
-			printf '%s=%s ' "$k" "$(grep -c "<result>$k</result>" "$r" || true)"
-		done
-	}
 	{
 		echo "# OpenSCAP summary ($TS)"
 		echo
 		echo "- Datastream: \`$DS\`"
-		echo "- Profile: \`$PROFILE\`"
-		echo "- Before: $(tally "$before")"
-		echo "- After:  $(tally "$after")"
+		echo "- Profile: \`$PROFILE\`${TAILORING:+ (tailoring \`$TAILORING\`)}"
+		echo "- Before: $(results tally "$before")"
+		echo "- After:  $(results tally "$after")"
 		echo
 		echo "## Rules not at pass after remediation"
 		echo
 		echo "| Result | Rule |"
 		echo "|--------|------|"
-		python3 -I - "$after" <<'PY'
-import sys, re
-s = open(sys.argv[1]).read()
-for m in re.finditer(r'<rule-result[^>]*idref="([^"]+)"[^>]*>.*?<result>([a-z]+)</result>', s, re.S):
-    rule, res = m.group(1), m.group(2)
-    if res not in ("pass", "notapplicable", "notselected"):
-        print("| %s | %s |" % (res, rule.replace("xccdf_org.ssgproject.content_rule_", "")))
-PY
+		results rules "$after" --not-pass | awk '{print "| " $1 " | " $2 " |"}'
 	} >"$out"
 	info "summary: $out"
 }
@@ -402,7 +451,7 @@ while [ "$pass_no" -le "$PASSES" ]; do
 	FIX="$OUTDIR/remediation-${TS}-pass${pass_no}.sh"
 	RID="$(grep -o 'TestResult id="[^"]*"' "$LAST_RES" | head -1 | cut -d'"' -f2)"
 	info "pass $pass_no/$PASSES: generating remediation from result $RID"
-	oscap xccdf generate fix --fix-type bash --result-id "$RID" \
+	oscap xccdf generate fix "${TAIL[@]}" --fix-type bash --result-id "$RID" \
 		--output "$FIX" "$LAST_RES"
 	[ -n "$SKIP_RULES" ] && skip_rules "$FIX"
 	info "applying $FIX"
