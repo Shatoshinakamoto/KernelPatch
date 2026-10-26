@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * secure-sudo-locus - Locus (v8 temporary add-on): the location allocator.
+ * secure-sudo-locus - Locus (runtime guard): the location allocator.
  *
  * The guards (ProcGuard, DriverGuard, BootGuard) store compressed quarantine /
  * backups in directories that ROTATE EVERY HOUR. To stop two components from

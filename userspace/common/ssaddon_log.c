@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * ssaddon_log - shared logging for the secure_sudo temporary/ add-ons.
+ * ssaddon_log - shared logging for the secure_sudo runtime guards.
  * See ssaddon_log.h for the interface and the design notes.
  */
 #define _GNU_SOURCE

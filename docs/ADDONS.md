@@ -1,27 +1,24 @@
-# secure_sudo — temporary/ add-ons (v8), in depth
+# secure_sudo — runtime guards (ProcGuard, DriverGuard, BootGuard, Locus)
 
-The `temporary/` tree is an **opt-in** set of add-ons that sit beside the core
-secure_sudo stack. They are not built or installed by the core `install.sh`;
-you add them deliberately with `temporary/install-temporary.sh`, and the name
-reflects that they are a staging area for extra ideas (more will be added here
-over time). Installing them **enables nothing and kills nothing** — every
-enforcing behaviour is opt-in and starts in a safe mode.
+A set of userspace runtime guards ships in the main tree and is built and
+installed by the core `install.sh` alongside the rest of the userspace. They are
+installed **but not enabled** — each is opt-in and starts in a safe mode until
+you deliberately turn it on. Everything here is local; nothing is pushed.
 
-Everything here is local. Nothing is pushed anywhere.
+Source layout (under `userspace/`): `common/` (shared libraries),
+`procguard/`, `driverguard/`, `bootguard/`, `locus/`, with config templates in
+`userspace/config/addons/` and systemd units in `userspace/systemd/`.
 
-The add-ons:
-
-| Add-on | Purpose | Enforcing? |
-|--------|---------|-----------|
+| Guard | Purpose | Enforcing? |
+|-------|---------|-----------|
 | **ProcGuard** | kill non-allowlisted processes; remove respawning infections; quarantine them compressed | monitor by default |
 | **DriverGuard** | detect driver-file tampering; repair from hourly-rotated compressed backups | monitor by default |
-| **BiosGuard** | detect firmware (BIOS/UEFI) tampering; **detect-and-stage** a restore | detection; reflash operator-only |
 | **BootGuard** | detect boot-partition tampering; restore **at next boot** | staged, never live |
 | **Locus** | hand out the hourly-rotating storage locations over the LAN; read-only GUI | n/a (allocator) |
 
 Two things are shared by all of them:
 
-* **Logging** (`ssaddon_log`): every add-on writes timestamped, leveled lines to
+* **Logging** (`ssaddon_log`): every guard writes timestamped, leveled lines to
   a root-only local log under `/var/log/secure_sudo/addons/<feature>.log` (rotated
   at a size cap) and, if you enable it, ships every line to an **external log
   server** (UDP or TCP syslog, RFC 5424) so a compromised host cannot erase the
@@ -89,30 +86,7 @@ newest backup that has it. (This protects the files the kernel loads; a module
 *already loaded* is the core LSM's job — #6 driver-BYOVD hashes the loaded
 bytes.) Config `/etc/secure_sudo/addons/driverguard.conf`.
 
-## 3. BiosGuard — firmware tamper detection (detect-and-stage)
-
-**Honesty note.** You cannot safely reflash a running machine's firmware from
-generic Linux userspace — it needs vendor/chipset tooling and a bad write
-bricks the board. So BiosGuard is **detect-and-stage**:
-
-```sh
-secure-sudo-biosguard baseline   # fingerprint DMI + ACPI tables (+ store a known-good image if configured)
-secure-sudo-biosguard scan       # detect tamper; STAGE the known-good image (flashes nothing)
-secure-sudo-biosguard status
-secure-sudo-biosguard apply --i-understand-the-risk   # operator-only reflash
-```
-
-`baseline` hashes the firmware identity (`/sys/class/dmi/id/*`) and the ACPI
-tables the firmware exposes (`/sys/firmware/acpi/tables/*`), and — if you set
-`good_image` to a verified full flash dump — stores it compressed as the restore
-source. `scan` recomputes and, on a mismatch, logs CRITICAL and **stages** the
-good image into `…/biosguard/staged/` with instructions; it never flashes.
-`apply` is the only path that writes firmware, refuses without
-`--i-understand-the-risk`, requires `flashrom` + a configured programmer, and is
-operator-invoked — never a timer or daemon. Config
-`/etc/secure_sudo/addons/biosguard.conf`.
-
-## 4. BootGuard — boot-partition tamper detection (restore at next boot)
+## 3. BootGuard — boot-partition tamper detection (restore at next boot)
 
 **Honesty note.** Rewriting the live `/boot` (or ESP) under a running kernel can
 leave the machine unbootable. So BootGuard **stages** a restore that is applied
@@ -141,7 +115,7 @@ reported, not deleted (a kernel update legitimately adds files — re-run
 > wire `restore-staged` into the initramfs; the systemd unit is the practical
 > default.
 
-## 5. Locus — the rotating-location allocator
+## 4. Locus — the rotating-location allocator
 
 The guards store things in directories that rotate every hour. Locus is the
 single authority that hands out those locations, so two components never race on
@@ -190,19 +164,36 @@ remote_port = 514
 
 With `remote_enabled = 1`, every line is also sent as RFC 5424 syslog to your
 collector (rsyslog/syslog-ng, a SIEM, or a LAN log box) — the off-box backup, so
-evidence survives a compromised host. The core PheonixBox feature also logs its
+evidence survives a compromised host. The PheonixBox feature also logs its
 tamper/repair and enable/disable events via `syslog(3)`, which your system
 syslog can forward the same way.
 
-## Install (opt-in)
+## Enabling the guards (opt-in)
+
+The core `install.sh` builds and installs all four guards, drops config
+templates under `/etc/secure_sudo/addons/`, and installs the systemd units —
+**enabling none of them**. Turn on only what you want, in a safe order:
 
 ```sh
-sudo bash temporary/install-temporary.sh
+# ProcGuard — prove the allowlist in monitor FIRST, then enforce:
+sudoedit /etc/secure_sudo/addons/procguard_allow.conf
+secure-sudo-procguard scan                         # monitor: logs would-kill
+#   then set mode=enforce in procguard.conf and:
+systemctl enable --now secure-sudo-procguard
+
+# DriverGuard:
+secure-sudo-driverguard baseline
+systemctl enable --now secure-sudo-driverguard.timer   # hourly scan
+
+# BootGuard:
+secure-sudo-bootguard baseline
+systemctl enable secure-sudo-bootguard-restore         # apply staged restore at boot
+systemctl enable --now secure-sudo-bootguard.timer
+
+# Locus (optional — centralises the rotating locations):
+sudoedit /etc/secure_sudo/addons/locus.conf            # keep GUI on 127.0.0.1
+systemctl enable --now secure-sudo-locus
 ```
 
-Builds and installs the five binaries, drops config **templates** (never
-overwriting your edits), installs the systemd units, and creates the state/log
-dirs — enabling nothing. Follow the printed next-steps (and §1–§5 above) to turn
-on only what you want, in a safe order (ProcGuard in monitor first, baselines
-before scans). Second-pass security review of the whole suite is in
-[SECURITY_REVIEW.md](SECURITY_REVIEW.md) (findings #21–#25).
+Second-pass security review of the guards is in
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md) (findings #21–#24).

@@ -435,7 +435,7 @@ an inline *blocking* one; pair it with BinaryVault (#17) / TimeVault (#13) for
 inline immutability of executables. If the store itself is deleted there is
 nothing to restore from, so keep `/var/lib/secure_sudo` on protected storage.
 
-### 21. ProcGuard review (v8 add-on) — AC-3 / SI-4 / SC-28
+### 21. ProcGuard review (runtime guard) — AC-3 / SI-4 / SC-28
 
 Allowlist process enforcer. The dangerous property is "kill everything not
 listed", reviewed accordingly:
@@ -465,7 +465,7 @@ process can run to completion between scans; it is an allowlist *enforcer/
 remover*, complementary to the kernel's exec-time controls (#2/#1b/#12/#13),
 not a replacement for them.
 
-### 22. DriverGuard review (v8 add-on) — SI-7 / CM-5
+### 22. DriverGuard review (runtime guard) — SI-7 / CM-5
 
 Driver-file integrity + repair. `baseline` pins each module by SHA-256 and keeps
 an hourly-rotated compressed backup; `scan` restores a changed/missing module
@@ -477,19 +477,7 @@ bytes hashing), noted so the two are not confused. New modules added by a
 legitimate kernel update are not in the manifest and are simply not protected
 until the next `baseline` — they are never deleted.
 
-### 23. BiosGuard review (v8 add-on) — SI-7 / CM-5 (detect-and-stage)
-
-The central decision is to **not** auto-reflash. A generic userspace firmware
-write bricks boards; so detection (DMI + ACPI-table hashes) and staging are the
-default, and the only write path (`apply`) refuses without an explicit
-`--i-understand-the-risk`, requires `flashrom` + a configured programmer, and is
-operator-invoked — never a timer/daemon. This is a deliberate safety boundary,
-documented rather than papered over. Residual/honest limits: ACPI+DMI hashing
-detects a large class of firmware tamper but is **not** a full SPI-flash
-measurement (that needs `flashrom -r` or a TPM event log); without a configured
-`good_image` BiosGuard is detection-only. Stated plainly to the user.
-
-### 24. BootGuard review (v8 add-on) — SI-7 / CM-5 (stage-at-boot)
+### 23. BootGuard review (runtime guard) — SI-7 / CM-5 (stage-at-boot)
 
 Same safety stance for `/boot`: a live rewrite under a running kernel is unsafe,
 so tamper is **staged** (restore list + `PENDING` flag, 0600) and applied at the
@@ -501,7 +489,7 @@ it); restoring before *anything* reads `/boot` needs an initramfs hook — the
 unit is the practical default, the initramfs hook the stronger option. New boot
 files are reported, never deleted (kernel updates add files).
 
-### 25. Locus + shared libs review (v8 add-on) — SC-39 / SC-28 / AC-4
+### 24. Locus + shared libs review (runtime guard) — SC-39 / SC-28 / AC-4
 
 The allocator is a minimal attack surface by design: a fixed `ALLOC <purpose>`
 → `OK <path>` protocol that only names a directory and touches nothing else.

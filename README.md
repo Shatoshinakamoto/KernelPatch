@@ -65,19 +65,19 @@ is aggressive.)
 #14/#15 (rotating OTP sudo password with a locally-rendered QR, AES-256-GCM
 sealed secret, yescrypt prefix) are in `userspace/otp` + `pam_secure_otp`.
 
-### Opt-in add-ons — `temporary/` (v8)
+### Runtime guards (built + installed by `install.sh`)
 
-A separate, **opt-in** suite lives under `temporary/` (not built or installed by
-the core `install.sh`; add it with `sudo bash temporary/install-temporary.sh`,
-which enables nothing by default). It shares one logging mechanism (local +
-optional off-box syslog) and an hourly-rotating compressed storage format:
+A set of userspace runtime guards ships in the main tree
+(`userspace/{procguard,driverguard,bootguard,locus,common}`) and is built and
+installed by the core `install.sh`. They are installed **but not enabled** — each
+is opt-in and starts in a safe mode (ProcGuard in monitor, no timers running)
+until you turn it on. They share one logging mechanism (local + optional off-box
+syslog) and an hourly-rotating compressed storage format:
 
 * **ProcGuard** — kill non-allowlisted processes; quarantine (compressed,
   hourly-rotated) and remove respawning infections; optional off-box sync.
 * **DriverGuard** — driver-file integrity + repair from hourly-rotated
   compressed backups.
-* **BiosGuard** — firmware tamper **detection + detect-and-stage** (reflash is
-  operator-only, never automatic — a live reflash can brick the board).
 * **BootGuard** — boot-partition tamper detection + restore **at next boot**
   (never a live rewrite of `/boot`).
 * **Locus** — LAN request-only allocator for the rotating locations, with a

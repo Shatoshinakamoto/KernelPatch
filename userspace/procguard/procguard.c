@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * secure-sudo-procguard - ProcGuard (v8 temporary add-on).
+ * secure-sudo-procguard - ProcGuard (runtime guard).
  *
  * Watches every running process and compares its on-disk executable against an
  * allowlist. A process whose executable is NOT allowed is treated as an

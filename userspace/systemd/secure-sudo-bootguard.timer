@@ -1,5 +1,5 @@
 [Unit]
-Description=Run secure_sudo BootGuard scan hourly (v8 add-on)
+Description=Run secure_sudo BootGuard scan hourly (runtime guard)
 
 [Timer]
 OnBootSec=9min

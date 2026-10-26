@@ -1,5 +1,5 @@
 [Unit]
-Description=Run secure_sudo DriverGuard scan hourly (v8 add-on)
+Description=Run secure_sudo DriverGuard scan hourly (runtime guard)
 
 [Timer]
 OnBootSec=5min

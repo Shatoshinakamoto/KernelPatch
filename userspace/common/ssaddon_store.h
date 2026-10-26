@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * ssaddon_store - shared hourly-rotating compressed storage + Locus client for
- * the secure_sudo temporary/ add-ons.
+ * the secure_sudo runtime guards.
  *
  * Several add-ons keep compressed copies of things in a location that ROTATES
  * EVERY HOUR: ProcGuard's infected-process quarantine (so a fixed path can't be

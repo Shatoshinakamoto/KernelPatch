@@ -1,5 +1,5 @@
 [Unit]
-Description=secure_sudo Locus rotating-location allocator (v8 add-on)
+Description=secure_sudo Locus rotating-location allocator (runtime guard)
 After=network.target
 
 [Service]

@@ -1,5 +1,5 @@
 [Unit]
-Description=secure_sudo BootGuard scan (v8 add-on)
+Description=secure_sudo BootGuard scan (runtime guard)
 
 [Service]
 Type=oneshot

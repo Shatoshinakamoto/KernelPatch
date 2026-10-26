@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * secure-sudo-driverguard - DriverGuard (v8 temporary add-on).
+ * secure-sudo-driverguard - DriverGuard (runtime guard).
  *
  * Watches the kernel's on-disk driver (module) files for tampering and can
  * repair a damaged or swapped driver from a failsafe backup.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * secure-sudo-bootguard - BootGuard (v8 temporary add-on).
+ * secure-sudo-bootguard - BootGuard (runtime guard).
  *
  * Detects tampering of the boot partition (/boot, and the ESP if included) and
  * restores it from a known-good backup - but the restore is APPLIED AT THE NEXT

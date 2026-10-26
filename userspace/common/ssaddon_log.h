@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * ssaddon_log - shared logging for the secure_sudo temporary/ add-ons.
+ * ssaddon_log - shared logging for the secure_sudo runtime guards.
  *
- * Every add-on (ProcGuard, DriverGuard, BiosGuard, BootGuard, Locus) logs
+ * Every add-on (ProcGuard, DriverGuard, BootGuard, Locus) logs
  * through this one helper so logging behaves identically everywhere and so
  * there is a single place that implements:
  *
@@ -13,7 +13,7 @@
  *     cannot erase the evidence that something happened.
  *
  * Configuration is read once from /etc/secure_sudo/addons/logging.conf (see
- * temporary/config/logging.conf for the documented template). Missing file or
+ * userspace/config/addons/logging.conf for the documented template). Missing file or
  * keys fall back to safe local-only defaults.
  */
 #ifndef SSADDON_LOG_H

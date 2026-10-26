@@ -1,5 +1,5 @@
 [Unit]
-Description=secure_sudo ProcGuard process allowlist enforcer (v8 add-on)
+Description=secure_sudo ProcGuard process allowlist enforcer (runtime guard)
 After=network.target
 
 [Service]
