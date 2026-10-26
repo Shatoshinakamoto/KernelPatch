@@ -80,7 +80,7 @@ static bool is_hex64(const char *s)
  * module-load hook) and nothing that can fail except the reads. */
 int ss_sha256_file(struct file *file, char *hex)
 {
-	struct sha256_state st;
+	ss_sha256_ctx st;
 	u8 digest[SHA256_DIGEST_SIZE];
 	loff_t pos = 0, size;
 	void *buf;

@@ -91,7 +91,7 @@ if [ "$MODE" = "lan-only" ]; then
 else # public-only
   KEEP="udp sport { 67, 68 } udp dport { 67, 68 } accept
         udp sport { 546, 547 } udp dport { 546, 547 } accept
-        meta l4proto ipv6-icmp accept"
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect, mld-listener-query, mld-listener-report, mld2-listener-report } accept"
   OUT_RULES="$KEEP"
   IN_RULES="$KEEP"
   if [ -n "$GW4" ]; then

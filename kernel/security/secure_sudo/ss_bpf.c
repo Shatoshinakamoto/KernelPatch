@@ -49,7 +49,7 @@
 
 #ifdef CONFIG_BPF_SYSCALL
 /* Step 1 (every bpf(2) command): non-sudo users get nothing when bpf_guard. */
-static int ss_bpf_cmd(int cmd, union bpf_attr *attr, unsigned int size)
+static int ss_bpf_check_cmd(int cmd)
 {
 	if (!READ_ONCE(ss_cfg.bpf_guard) || ss_is_sudo_user())
 		return 0;
@@ -83,8 +83,7 @@ static bool tracing_type(enum bpf_prog_type t)
  * refused for everyone. prog->type is set before this hook runs and before
  * the verifier, so a refused program never touches the kernel.
  */
-static int ss_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
-			    struct bpf_token *token)
+static int ss_bpf_check_prog(struct bpf_prog *prog)
 {
 	if (!ss_locked() || !READ_ONCE(ss_cfg.bpf_lock_tracing))
 		return 0;
@@ -97,6 +96,52 @@ static int ss_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 		 from_kuid(&init_user_ns, current_uid()));
 	return -EPERM;
 }
+
+/*
+ * Since 6.16 the bpf and bpf_prog_load hooks also say whether the kernel
+ * itself made the call (light skeletons, BPF preload). Those are not a
+ * user's request and are left alone. The hook signature is picked at
+ * compile time, as for perf_event_open below.
+ */
+static int __maybe_unused ss_bpf_cmd_user(int cmd, union bpf_attr *attr,
+					  unsigned int size)
+{
+	return ss_bpf_check_cmd(cmd);
+}
+
+static int __maybe_unused ss_bpf_cmd_kern(int cmd, union bpf_attr *attr,
+					  unsigned int size, bool kernel)
+{
+	return kernel ? 0 : ss_bpf_check_cmd(cmd);
+}
+
+static int __maybe_unused ss_bpf_prog_user(struct bpf_prog *prog,
+					   union bpf_attr *attr,
+					   struct bpf_token *token)
+{
+	return ss_bpf_check_prog(prog);
+}
+
+static int __maybe_unused ss_bpf_prog_kern(struct bpf_prog *prog,
+					   union bpf_attr *attr,
+					   struct bpf_token *token, bool kernel)
+{
+	return kernel ? 0 : ss_bpf_check_prog(prog);
+}
+
+#define SS_BPF_CMD_HOOK							\
+	__builtin_choose_expr(						\
+		__builtin_types_compatible_p(				\
+			typeof(security_bpf),				\
+			int (int, union bpf_attr *, unsigned int, bool)), \
+		ss_bpf_cmd_kern, ss_bpf_cmd_user)
+#define SS_BPF_PROG_HOOK						\
+	__builtin_choose_expr(						\
+		__builtin_types_compatible_p(				\
+			typeof(security_bpf_prog_load),			\
+			int (struct bpf_prog *, union bpf_attr *,	\
+			     struct bpf_token *, bool)),		\
+		ss_bpf_prog_kern, ss_bpf_prog_user)
 #endif /* CONFIG_BPF_SYSCALL */
 
 #ifdef CONFIG_PERF_EVENTS
@@ -142,8 +187,8 @@ static int __maybe_unused ss_perf_open_class(int type)
 
 static struct security_hook_list ss_bpf_hooks[] __ro_after_init = {
 #ifdef CONFIG_BPF_SYSCALL
-	LSM_HOOK_INIT(bpf,           ss_bpf_cmd),
-	LSM_HOOK_INIT(bpf_prog_load, ss_bpf_prog_load),
+	LSM_HOOK_INIT(bpf,           SS_BPF_CMD_HOOK),
+	LSM_HOOK_INIT(bpf_prog_load, SS_BPF_PROG_HOOK),
 #endif
 #ifdef CONFIG_PERF_EVENTS
 	LSM_HOOK_INIT(perf_event_open, SS_PERF_HOOK),

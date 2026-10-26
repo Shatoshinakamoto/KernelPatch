@@ -1,0 +1,14 @@
+secure_sudo build gate record
+date=2026-10-26T21:21:36Z
+version=0.12.0
+source_tree_sha256=08dc2efa2b19acc8e9506e36e7b4eea7383bae43b8fb148abafdaf52d004eca3
+host=ubuntu 24.04 x86_64
+cc=gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+make=GNU Make 4.3
+shellcheck=0.9.0
+lsm_headers={"tool":"lsm-compile-check","date":"2026-10-26T21:20:57Z","cc":"gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0","results":[{"tree":"/usr/src/linux-headers-6.17.0-42-generic","release":"6.17.0-42-generic","mode":"kbuild","files":20,"passed":20,"failed":""}]}
+stage_lint=pass (33 shell scripts)
+stage_userspace=pass (5 components, -Werror)
+stage_lsm-headers=pass (1 trees (1 kbuild, 0 direct))
+stage_tests=pass (424 checks)
+overall=pass

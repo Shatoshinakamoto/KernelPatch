@@ -80,7 +80,8 @@ check "net: public-only keeps DHCP" rules_have "udp sport { 67, 68 } udp dport {
 check "net: public-only keeps DHCPv6" rules_have "udp sport { 546, 547 } udp dport { 546, 547 } accept"
 check "net: public-only keeps DNS to the IPv4 gateway" rules_have "ip daddr 192.168.1.1 meta l4proto { tcp, udp } th dport 53 accept"
 check "net: public-only keeps DNS to the IPv6 gateway" rules_have "ip6 daddr fe80::1 meta l4proto { tcp, udp } th dport 53 accept"
-check "net: public-only keeps ICMPv6" rules_have "meta l4proto ipv6-icmp accept"
+check "net: public-only keeps neighbour discovery (ICMPv6 nd-*)" rules_have "nd-neighbor-solicit, nd-neighbor-advert"
+refute "net: public-only no longer passes every ICMPv6 type (echo reached the LAN)" rules_have "meta l4proto ipv6-icmp accept"
 first_line() { grep -nF -- "$1" "$T/rules" | head -1 | cut -d: -f1; }
 check "net: exemptions come before the LAN drop" \
 	test "$(first_line 'dport 53 accept')" -lt "$(first_line 'ip daddr @lan drop')"
@@ -198,7 +199,9 @@ inG sh -c 'sysctl -qw net.ipv4.ip_forward=1; sysctl -qw net.ipv6.conf.all.forwar
 # TCP listeners on the gateway: 53 (DNS) and 8080 (any other LAN service)
 # (nsenter execs nc, so $! is the listener itself and cleanup can kill it;
 # its output must not hold this script's stdout open)
-for l in "10.99.0.1 53" "10.99.0.1 8080" "198.51.100.1 443"; do
+LISTEN=("10.99.0.1 53" "10.99.0.1 8080" "198.51.100.1 443")
+[ "$V6" = 1 ] && LISTEN+=("2001:db8:99::1 8080")
+for l in "${LISTEN[@]}"; do
 	# shellcheck disable=SC2086 # "addr port" split on purpose
 	nsenter -t "$G" -n nc -lk $l </dev/null >/dev/null 2>&1 & PIDS+=($!)
 done
@@ -208,6 +211,7 @@ treach() { inC nc -z -w2 "$1" "$2" >/dev/null 2>&1; }
 apply()  { inC sh "$NET" "$1" >/dev/null 2>&1; }
 
 check "before: LAN gateway reachable" reach 10.99.0.1
+v6check "before: LAN service over IPv6 (tcp/8080) reachable" treach 2001:db8:99::1 8080
 check "before: internet reachable" reach 198.51.100.1
 
 apply lan-only; rc=$?
@@ -230,7 +234,8 @@ check  "public-only: DNS on the gateway (tcp/53) still reachable" treach 10.99.0
 check  "public-only: internet (IPv4) reachable" reach 198.51.100.1
 check  "public-only: internet TCP reachable" treach 198.51.100.1 443
 v6check  "public-only: internet (IPv6) reachable" reach 2001:db8:ff::1
-v6refute "public-only: LAN (IPv6) blocked" reach 2001:db8:99::1
+v6refute "public-only: LAN (IPv6) ping blocked (only neighbour discovery and errors pass)" reach 2001:db8:99::1
+v6refute "public-only: LAN service over IPv6 (tcp/8080) blocked" treach 2001:db8:99::1 8080
 
 inC ip route del default
 apply lan-only; rc=$?
