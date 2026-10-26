@@ -1,5 +1,10 @@
 # secure_sudo — STIG / OpenSCAP compliance
 
+> **Every oscap bug met so far, its cause, its patch and the before/after
+> numbers (STIG and CIS Level 2) are in [OSCAP_BUGS.md](OSCAP_BUGS.md).** The
+> known-issue patches are now built into `stig-harden.sh` and run automatically
+> after remediation.
+
 This document covers the DISA STIG (Security Technical Implementation Guide)
 tooling shipped with secure_sudo: what was actually run, the real results, how
 the kernel LSM maps onto STIG control families, and exactly which controls can
@@ -91,12 +96,24 @@ guarantee (a config can be edited back; a locked LSM cannot). This is the
 | **Audit / accountability** (SRG-OS-000037, CCI-000130 audit records) | #9 in-kernel event ring drained to rotated logs by the daemon; control-char-scrubbed (no log injection). |
 | **Firmware / hardware integrity** | #3 block non-sudo firmware/flash/raw-mem; #5 block TPM clear (boot-param gated). |
 | **Multifactor for privileged access** (SRG-OS-000105, CCI-000765 MFA) | #14/#15 rotating OTP (TOTP) PAM helper for sudo. |
+| **Configuration settings stay as configured** (SRG-OS-000480, CM-6) | #23 SysctlGuard freezes the hardening sysctls STIG sets (kptr_restrict, dmesg_restrict, ptrace_scope, randomize_va_space, fs.protected_*, ...) so root cannot quietly revert them. |
+| **Least functionality / kernel attack surface** (SRG-OS-000480, CM-7) | #22 BPF & perf guard: no bpf(2)/perf for non-sudo users, and no tracing-class BPF programs for anyone once locked. |
+| **Audit record content and generation** (SRG-OS-000037/000062, AU-3, AU-12) | #9 `audit_events` sends every secure_sudo kernel event to auditd as `AUDIT_KERNEL_OTHER`, with field-injection-safe encoding. |
 
 The authoritative, machine-checkable mapping is the SSG XCCDF itself (each rule
 carries its CCI/SRG references); the table above is the LSM's contribution on
 top of the scanner's userspace coverage.
 
 ---
+
+### CIS Level 2 Server results (v11)
+
+The same tooling was also run against the **CIS Ubuntu 24.04 Level 2 Server**
+profile: **163 pass / 44 fail → 190 pass / 17 fail** after remediation. The 17
+are 6 partition rules and 3 `/dev/shm` mount rules (container limits), 3
+AppArmor rules (no AppArmor in the container), and 5 nftables rules left alone
+on purpose so CIS does not fight secure_sudo's own nft network modes. Details
+and reports: [OSCAP_BUGS.md §4](OSCAP_BUGS.md) and `docs/stig/results/cis/`.
 
 ## 3. Running a scan / remediation yourself
 
@@ -115,8 +132,16 @@ sudo /usr/libexec/secure-sudo/stig-harden.sh --scan
 # See which profiles your distro's content offers:
 sudo /usr/libexec/secure-sudo/stig-harden.sh --list-profiles
 
-# Scan, apply the generated fixes, then re-scan (maintenance window!):
+# Scan, two remediation passes, known-issue patches, re-scan (maintenance window!):
 sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate
+
+# CIS Level 2 instead, leaving the firewall to secure_sudo's nft modes:
+sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate \
+  --profile xccdf_org.ssgproject.content_profile_cis_level2_server \
+  --skip-rules 'ufw|nftables|iptables|firewalld|firewall'
+
+# Re-apply just the known-issue patches (e.g. after big package changes):
+sudo /usr/libexec/secure-sudo/stig-harden.sh --post-patch-only
 ```
 
 **STIG profile availability by distro** (SSG 0.1.78): RHEL 8/9/10, Oracle

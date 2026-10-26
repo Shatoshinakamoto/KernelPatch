@@ -66,6 +66,12 @@ static const struct knob knobs[] = {
 	{ "timevault_max_entries", "timevault_max_entries" },
 	{ "prguard_enabled",      "prguard_enabled" },
 	{ "prguard_observe",      "prguard_observe" },
+	{ "bpf_guard",            "bpf_guard" },
+	{ "bpf_lock_tracing",     "bpf_lock_tracing" },
+	{ "perf_guard",           "perf_guard" },
+	{ "sysctl_guard",         "sysctl_guard" },
+	{ "audit_events",         "audit_events" },
+	{ "lock_confidentiality", "lock_confidentiality" },
 };
 
 /* policy list  config file  ->  securityfs file */

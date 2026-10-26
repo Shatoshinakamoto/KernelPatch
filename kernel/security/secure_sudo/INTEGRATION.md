@@ -107,5 +107,12 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/timevault_max_entries` | rw (0600) | #13 configurable allowlist cap (1..131072) |
 | `/sys/kernel/secure_sudo/prguard_enabled` | rw (0600) | #20 Process Runtime Guard on/off |
 | `/sys/kernel/security/secure_sudo/prguard_allow` | rw (root) | #20 exempt exe paths; whole list per write |
+| `/sys/kernel/secure_sudo/prguard_observe` | rw (0600) | #20 emit a mem-access event per cross-process read/write |
+| `/sys/kernel/secure_sudo/bpf_guard` | rw (0600) | #22 deny bpf(2) to non-sudo users |
+| `/sys/kernel/secure_sudo/bpf_lock_tracing` | rw (0600) | #22 once locked, refuse tracing-class BPF programs (all UIDs); default 1 |
+| `/sys/kernel/secure_sudo/perf_guard` | rw (0600) | #22 deny perf_event_open(2) to non-sudo users |
+| `/sys/kernel/secure_sudo/sysctl_guard` | rw (0600) | #23 refuse writes to security-critical sysctls + binfmt_misc (all UIDs) |
+| `/sys/kernel/secure_sudo/audit_events` | rw (0600) | #9 also send events to the kernel audit subsystem (auditd) |
+| `/sys/kernel/secure_sudo/lock_confidentiality` | rw (0600) | #16 while locked, also refuse lockdown's confidentiality class |
 
 All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `prguard`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.

@@ -18,12 +18,16 @@
 #   - auto-detect helpers (driver tree, seed the ProcGuard allowlist).
 #
 # SECURITY / ATTACK SURFACE. Root-only. Binds 127.0.0.1 by default (configure
-# in gui.conf). State-changing requests (POST) require a per-install token that
-# the server injects into the page it serves, so a page from another origin
-# cannot read it (CSRF defense); the server also checks the Host header. Keep
-# the bind on loopback unless you front it with your own authenticated proxy -
-# this console can change config and quarantine processes.
-import json, os, re, secrets, shutil, signal, subprocess, sys, time, gzip, html
+# in gui.conf). EVERY /api request (read or write) needs the per-install token
+# in the X-SS-Token header. The token lives only in a root-only 0600 file and is
+# never embedded in the page, so reaching the port is not enough: any local
+# user can connect to loopback, but only someone who can read the token file
+# (i.e. root) can use the console. The operator pastes the token into the
+# login screen once per browser session. Tokens are compared in constant time,
+# and the Host header is checked on every API call (DNS-rebinding defense).
+# Keep the bind on loopback unless you front it with your own authenticated
+# proxy - this console can change config and quarantine processes.
+import hmac, json, os, re, secrets, shutil, signal, subprocess, sys, time, gzip, html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -73,6 +77,9 @@ def load_conf():
 
 def get_token():
     os.makedirs(STATE, 0o700, exist_ok=True)
+    os.chmod(STATE, 0o700)
+    if os.path.exists(TOKEN_FILE):
+        os.chmod(TOKEN_FILE, 0o600)   # never leave a pre-existing token readable
     try:
         with open(TOKEN_FILE) as f:
             t = f.read().strip()
@@ -149,12 +156,17 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/" or u.path == "/index.html":
+            # The page is static and holds no secret.
             try:
                 with open(os.path.join(HERE, "index.html")) as f:
-                    page = f.read().replace("__TOKEN__", TOKEN)
+                    page = f.read()
             except OSError:
                 page = "<h1>secure-sudo-gui</h1><p>index.html missing</p>"
             return self._send(200, page, "text/html; charset=utf-8")
+        if u.path.startswith("/api/"):
+            err = self._auth()
+            if err:
+                return self._send(*err)
         if u.path == "/api/status":
             return self._send(200, self.api_status())
         if u.path == "/api/logs":
@@ -166,12 +178,22 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     # ---- POST (token + same-host required) ----
-    def do_POST(self):
-        if self.headers.get("X-SS-Token") != TOKEN:
-            return self._send(403, {"error": "bad or missing token"})
+    def _auth(self):
+        """Token + Host check for every API call. Returns (code, body) on failure."""
         host = (self.headers.get("Host") or "").split(":")[0]
         if host not in ("127.0.0.1", "localhost", CFG["bind"]):
-            return self._send(403, {"error": "host not allowed"})
+            return 403, {"error": "host not allowed"}
+        given = (self.headers.get("X-SS-Token") or "").encode()
+        if not hmac.compare_digest(given, TOKEN.encode()):
+            sys.stderr.write(f"secure-sudo-gui: rejected API call {self.path.split('?')[0]} "
+                             f"from {self.client_address[0]} (bad token)\n")
+            return 401, {"error": "bad or missing token"}
+        return None
+
+    def do_POST(self):
+        err = self._auth()
+        if err:
+            return self._send(*err)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(n) or b"{}")

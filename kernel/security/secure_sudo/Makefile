@@ -23,4 +23,6 @@ secure_sudo-y := ss_core.o \
 		 ss_home.o \
 		 ss_binvault.o \
 		 ss_radio.o \
-		 ss_prguard.o
+		 ss_prguard.o \
+		 ss_bpf.o \
+		 ss_sysctl.o

@@ -204,6 +204,7 @@ detail is in the `ss_radio.c` header and [SECURITY_REVIEW.md](SECURITY_REVIEW.md
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `prguard_enabled` | `0` | Guard the **runtime memory** of every process (except whitelisted ones). When on, the kernel denies cross-process memory tampering and writable-and-executable memory. Opt-in. |
+| `prguard_observe` | `0` | Emit one event per cross-process memory access (`prguard: mem-access READ\|WRITE by pid N (comm) -> pid M (comm)`), shown on the GUI's Memory access tab. Observation only; enforcement is unchanged. Verbose, opt-in. |
 
 With the guard on, for every process whose executable is **not** listed in
 `prguard_allow.conf` the kernel denies:
@@ -225,6 +226,45 @@ process is matched by the path of its main executable. Manage it with
 Both the toggle and the list are root-only (`0600`) and frozen once the config
 is locked, so the guard cannot be weakened on a locked box. Second-pass review:
 [SECURITY_REVIEW.md](SECURITY_REVIEW.md) (#19).
+
+### BPF & perf guard (#22)
+
+| Key | Kernel default | Template | Meaning |
+|-----|---------------:|---------:|---------|
+| `bpf_guard` | `0` | `1` | Deny every `bpf(2)` command to non-sudo users. Backs up `kernel.unprivileged_bpf_disabled`, which root can flip back. |
+| `bpf_lock_tracing` | `1` | `1` | Once the #16 lock latches, refuse to **load** tracing-class BPF programs for every user, root included: kprobe, tracepoint, raw tracepoint (incl. writable), perf_event, fentry/fexit (`TRACING`), BPF-LSM and freplace (`EXT`). These are the program types BPF rootkits use. Networking and cgroup BPF (systemd, firewalls, container runtimes) is untouched. |
+| `perf_guard` | `0` | `1` | Deny `perf_event_open(2)` to non-sudo users. Backs up `kernel.perf_event_paranoid`. |
+
+Limits: `bpf_lock_tracing` acts at program load, so a tracing program loaded
+before the lock latched keeps running (the daemon latches early in boot).
+BPF `struct_ops` (TCP congestion control, sched_ext) is deliberately allowed.
+
+### SysctlGuard (#23)
+
+| Key | Kernel default | Template | Meaning |
+|-----|---------------:|---------:|---------|
+| `sysctl_guard` | `0` | `1` | Refuse **write-opens** of the security-critical sysctls below for every user, root included, and refuse all `binfmt_misc` writes (no new interpreter registrations). Reads are unaffected. |
+
+Protected set (fixed): `kernel.kptr_restrict`, `dmesg_restrict`,
+`perf_event_paranoid`, `yama.ptrace_scope`, `sysrq`, `kexec_load_disabled`,
+`modules_disabled`, `unprivileged_bpf_disabled`, `io_uring_disabled`,
+`core_pattern`, `modprobe`, `usermodehelper.bset`, `usermodehelper.inheritable`,
+`randomize_va_space`, `unprivileged_userns_clone`,
+`apparmor_restrict_unprivileged_userns`; `net.core.bpf_jit_harden`,
+`bpf_jit_kallsyms`; `vm.mmap_min_addr`, `unprivileged_userfaultfd`;
+`fs.protected_symlinks`, `protected_hardlinks`, `protected_fifos`,
+`protected_regular`, `suid_dumpable`; `user.max_user_namespaces`;
+`dev.tty.ldisc_autoload`.
+
+`core_pattern` and `modprobe` matter most: each names a program the kernel runs
+as root, so changing them is a classic persistence trick. The match uses the
+file's path inside procfs (not the mount path), so mounting a second procfs
+elsewhere does not get around it. Order at boot: `systemd-sysctl` applies your
+`sysctl.d` values, then `secure-sudo load` engages the guard, then the lock
+freezes the knob itself. To retune a value on an unlocked box: set
+`sysctl_guard 0`, change it, set it back to `1`. Per-network-namespace sysctls
+(`net.ipv4.*`) are deliberately not frozen, because container runtimes set them
+inside their own namespaces.
 
 ### PheonixBox (#21) — userspace, not a kernel knob
 
@@ -251,12 +291,19 @@ and is **not** what restores — the compressed snapshot store is. Full detail i
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `lock_modules` | `1` | When the lock engages, also refuse **all** kernel module loads (not only blacklisted ones), so a locked box loads no new code. |
+| `lock_confidentiality` | `0` | While locked, also refuse kernel lockdown's **confidentiality** class: reading kernel memory via `/proc/kcore`, kprobes, `bpf_probe_read_kernel`, perf and tracefs kernel reads. Opt-in, because it also stops legitimate tracing and profiling tools (`perf`, `bpftrace`). The integrity class is always refused while locked. |
 
 The lock itself is engaged with `secure-sudo lock` or automatically by
 TimeVault; it is one-way until reboot. `lock_modules` is read at the moment the
 lock engages.
 
-### Logging / retention (#9) — daemon only
+### Logging / retention (#9)
+
+| Key | Kernel default | Template | Meaning |
+|-----|---------------:|---------:|---------|
+| `audit_events` | `0` | `1` | Also send every secure_sudo kernel event to the kernel **audit** subsystem as an `AUDIT_KERNEL_OTHER` record (`lsm=secure_sudo msg=...`), so `auditd`, `ausearch -m KERNEL_OTHER` and SIEM pipelines see them. The message is hex-encoded when it contains spaces or quotes, so a crafted file name cannot forge audit fields. Needs `CONFIG_AUDIT`. |
+
+The daemon-side settings:
 
 | Key | Default | Meaning |
 |-----|---------|---------|

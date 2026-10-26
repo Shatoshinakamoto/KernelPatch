@@ -54,6 +54,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
 {
 	int i;
 
+	(void)flags;	/* fixed PAM signature; no flags are used */
 	for (i = 0; i < argc; i++) {
 		if (!strcmp(argv[i], "authfail"))
 			report(pamh, "fail");
@@ -67,5 +68,6 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc,
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
+	(void)pamh; (void)flags; (void)argc; (void)argv;	/* fixed PAM signature */
 	return PAM_IGNORE;
 }

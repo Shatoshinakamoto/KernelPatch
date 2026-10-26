@@ -116,6 +116,21 @@ struct ss_cfg {
 	bool block_wifi;	/* keep Wi-Fi off */
 	bool block_bluetooth;	/* keep Bluetooth off */
 	bool ethernet_only;	/* master switch: keep BOTH off */
+
+	/* ---- #22 BPF & perf guard ---- */
+	bool bpf_guard;		/* deny bpf(2) to non-sudo users */
+	bool bpf_lock_tracing;	/* once locked: refuse tracing-class BPF progs (all UIDs) */
+	bool perf_guard;	/* deny perf_event_open(2) to non-sudo users */
+
+	/* ---- #23 SysctlGuard ---- */
+	bool sysctl_guard;	/* refuse writes to security-critical sysctls (all UIDs) */
+
+	/* ---- #9 event log: also feed the kernel audit subsystem (auditd) ---- */
+	bool audit_events;
+
+	/* ---- #16 lock: also refuse lockdown's CONFIDENTIALITY class ---- */
+	bool lock_confidentiality;	/* /proc/kcore, kprobes, bpf_probe_read_kernel,
+					 * perf/tracefs kernel reads while locked */
 };
 
 extern struct ss_cfg ss_cfg;
@@ -298,5 +313,13 @@ int  ss_radio_sysfs(struct kobject *kobj);
 void ss_prguard_init(void);
 int  ss_prguard_sysfs(struct kobject *kobj);
 int  ss_prguard_secfs(struct dentry *dir);
+
+/* #22 BPF & perf guard: bpf/bpf_prog_load/perf_event_open hooks early; knobs late. */
+void ss_bpf_init(void);
+int  ss_bpf_sysfs(struct kobject *kobj);
+
+/* #23 SysctlGuard: file_open hook early; knob late. */
+void ss_sysctl_init(void);
+int  ss_sysctl_sysfs(struct kobject *kobj);
 
 #endif /* _SECURITY_SECURE_SUDO_H */

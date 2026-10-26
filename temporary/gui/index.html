@@ -1,8 +1,10 @@
 <!DOCTYPE html>
 <!-- SPDX-License-Identifier: GPL-2.0
-     secure-sudo-gui frontend. Served by secure-sudo-gui, which substitutes the
-     per-install token into __TOKEN__ below. Vanilla JS, no third-party deps,
-     no outbound requests - everything talks only to this local server. -->
+     secure-sudo-gui frontend. Served by secure-sudo-gui. The page holds no
+     secret: the operator pastes the root-only access token into the login
+     screen, it is kept in sessionStorage for this tab only, and sent as the
+     X-SS-Token header on every API call. Vanilla JS, no third-party deps, no
+     outbound requests - everything talks only to this local server. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -75,6 +77,11 @@
   .muted { color: var(--dim); font-size: 12px; }
   .mono { font-family: var(--mono); }
   .guard-name { font-weight: 600; text-transform: capitalize; }
+  #login { position: fixed; inset: 0; background: var(--bg); z-index: 20;
+    display: none; align-items: center; justify-content: center; padding: 16px; }
+  #login.show { display: flex; }
+  #login .card { max-width: 460px; width: 100%; }
+  #login input { width: 100%; margin: 8px 0 10px; font-family: var(--mono); }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px;
     font-family: var(--mono); }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
@@ -82,12 +89,28 @@
 </style>
 </head>
 <body>
+<div id="login">
+  <div class="card">
+    <h2>secure_sudo console: sign in</h2>
+    <p class="muted">Paste the access token. Only root can read it:</p>
+    <pre>sudo cat /var/lib/secure_sudo/addons/gui/token</pre>
+    <input type="password" id="login-token" autocomplete="off"
+      placeholder="access token" onkeydown="if(event.key==='Enter')login()">
+    <div class="row">
+      <button onclick="login()">Sign in</button>
+      <span id="login-err" class="muted"></span>
+    </div>
+    <p class="muted">The token stays in this browser tab only and is cleared when
+      the tab closes.</p>
+  </div>
+</div>
 <header>
   <h1>secure_sudo</h1>
   <span class="lock">local console · root</span>
   <span class="spacer"></span>
   <span id="clock" class="muted mono"></span>
   <button onclick="refreshAll()">Refresh</button>
+  <button onclick="logout()">Sign out</button>
 </header>
 <nav>
   <button data-view="status" class="active">Status</button>
@@ -220,8 +243,31 @@
 <div id="toast" class="toast"></div>
 
 <script>
-const TOKEN = "__TOKEN__";
 const $ = (id) => document.getElementById(id);
+
+// ---- auth: token lives in sessionStorage (this tab only), never in the page ----
+let TOKEN = "";
+try { TOKEN = sessionStorage.getItem("ss_token") || ""; } catch (e) { TOKEN = ""; }
+function showLogin(msg) {
+  $("login").classList.add("show");
+  $("login-err").textContent = msg || "";
+  $("login-token").focus();
+}
+async function login() {
+  TOKEN = $("login-token").value.trim();
+  $("login-token").value = "";
+  const r = await fetch("/api/status", { headers: { "X-SS-Token": TOKEN } });
+  if (r.status === 401) { TOKEN = ""; showLogin("That token was not accepted."); return; }
+  try { sessionStorage.setItem("ss_token", TOKEN); } catch (e) { /* tab-only fallback */ }
+  $("login").classList.remove("show");
+  loadStatus(); loadConfig();
+}
+function logout() {
+  TOKEN = "";
+  try { sessionStorage.removeItem("ss_token"); } catch (e) {}
+  showLogin("Signed out.");
+}
+class AuthError extends Error {}
 
 // ---- tabs ----
 document.querySelectorAll("nav button").forEach(b => {
@@ -242,7 +288,8 @@ function toast(msg, err) {
 }
 
 async function apiGet(path) {
-  const r = await fetch(path);
+  const r = await fetch(path, { headers: { "X-SS-Token": TOKEN } });
+  if (r.status === 401) { showLogin("Session expired: sign in again."); throw new AuthError("signed out"); }
   if (!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
@@ -252,6 +299,7 @@ async function apiPost(path, body) {
     headers: { "Content-Type": "application/json", "X-SS-Token": TOKEN },
     body: JSON.stringify(body),
   });
+  if (r.status === 401) { showLogin("Session expired: sign in again."); throw new AuthError("signed out"); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
   return j;
@@ -431,8 +479,7 @@ function refreshAll() {
 }
 setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
 $("clock").textContent = new Date().toLocaleTimeString();
-loadStatus();
-loadConfig();
+if (TOKEN) { loadStatus(); loadConfig(); } else { showLogin(); }
 </script>
 </body>
 </html>

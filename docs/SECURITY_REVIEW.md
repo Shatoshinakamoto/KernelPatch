@@ -542,6 +542,9 @@ mode). Reviewed:
 
 ### 27. Management GUI review (v10 add-on) — AC-3 / AC-4 / SC-8 / CSRF
 
+> **Superseded in part by #29.** The token-in-page design described below
+> stopped other *origins* but not other *local users*; v11 fixes that.
+
 This is the one add-on that both *changes config* and *kills processes* from a
 network listener, so it got the closest look:
 
@@ -574,6 +577,94 @@ access (`current->pid != child->pid`) to avoid self-noise. It can be chatty on a
 busy box — it is off by default and toggled deliberately; the event ring's
 existing overwrite semantics bound memory. Honest limit: the kernel change is
 reviewed by hand, not recompiled here (no 6.12 headers in the build container).
+
+
+### 29. Management GUI: the access token was handed to any local user (v10 bug, fixed in v11) — AC-3 / IA-2 / CWE-306
+
+**Finding (high).** The v10 console injected its access token into the page it
+served. The page was served on loopback with no authentication, so **any local
+user** could `curl http://127.0.0.1:8790/`, read the token out of the HTML, and
+then drive a root-run console: rewrite guard configs, flip kernel knobs through
+the `secure-sudo` CLI (which the server runs as root, so `ss_may_admin` passes),
+and kill or quarantine arbitrary processes. Finding #27's CSRF reasoning was
+right about other *origins* but missed other *users* on the same host: a
+loopback bind does not separate local users. That made it a local privilege
+escalation.
+
+**Fix.**
+* The page is now static and holds no secret.
+* **Every** `/api/*` request, reads included (logs can leak information),
+  needs the token in `X-SS-Token`. Missing or wrong gets `401`, and the attempt
+  is logged.
+* The token lives only in `/var/lib/secure_sudo/addons/gui/token` (0600 in a
+  0700 dir; tightened on start if an older install left it wider). Reading it
+  needs root, so possession of the token is proof of root. The operator pastes
+  it into a sign-in screen; the page keeps it in `sessionStorage` for that tab
+  only.
+* The token is compared with `hmac.compare_digest` (constant time), and the
+  Host check now covers every API call, not just POST (DNS rebinding).
+
+**Verified.** The attack was replayed as the unprivileged user `nobody`: the
+page contains no token, the token file gives `Permission denied`, and every API
+call without the right token returns `401` (wrong Host: `403`). The sign-in
+flow was driven in headless Chromium: the wrong token is rejected, the right
+one loads the dashboard, it survives a reload in the same tab, and sign-out
+returns to the login screen, with no page errors.
+
+### 30. BPF & perf guard (#22) — SI-4 / CM-7 / SC-39
+
+Reviewed: the `bpf` hook only gates non-sudo callers, which is what
+`bpf_guard` promises; root still needs `bpf_lock_tracing` to be refused, and
+that hook (`bpf_prog_load`) reads `prog->type`, which the kernel sets before
+the hook and before the verifier, so a refused program never runs. Hooks are
+compiled only under `CONFIG_BPF_SYSCALL` / `CONFIG_PERF_EVENTS`, matching the
+hook definitions; both were confirmed enabled in the 6.11 and 6.14 header
+configs used for the compile check, so the code is really compiled, not
+skipped. Honest limits: programs loaded before the lock keep running;
+`struct_ops` is allowed on purpose.
+
+### 31. SysctlGuard (#23) — CM-6 / CM-5 / SI-7
+
+The match is on `dentry_path_raw()` within a `PROC_SUPER_MAGIC` superblock, so
+a second procfs mounted elsewhere resolves to the same protected names; a
+resolution failure on a procfs write-open is a deny (fail closed); an
+allocation failure returns `-ENOMEM` (normal open semantics), never allow.
+binfmt_misc is matched by `BINFMTFS_MAGIC`, so its mount point does not
+matter. The protected list is fixed and global-only; per-netns sysctls are
+excluded on purpose (containers). Interaction: STIG/CIS remediation writes
+these sysctls, so run remediation **before** engaging the guard (or with the
+guard off), then turn it on.
+
+### 32. Audit feed (#9 `audit_events`) — AU-3 / AU-12 / CWE-117
+
+Events reach auditd as `AUDIT_KERNEL_OTHER` with `lsm=secure_sudo msg=`. The
+message is passed through `audit_log_untrustedstring()`, which hex-encodes it
+when it contains spaces, quotes or control characters, so an attacker-chosen
+file name in an event cannot inject fake `key=value` fields into the audit
+record. This is on top of the existing control-character scrubbing for the
+ring (#8). `GFP_ATOMIC` keeps it safe from any hook context and never waits on
+the audit backlog, at the cost that records can be dropped under audit
+backpressure; the ring and the daemon's log remain the primary record.
+
+### 33. Lock: confidentiality class (`lock_confidentiality`) — SC-39 / AC-6
+
+Extends `locked_down` from the integrity class to lockdown's confidentiality
+class (`/proc/kcore`, kprobes, `bpf_probe_read_kernel`, perf, tracefs, xfrm
+secrets) while locked. Opt-in and documented as such, because it also disables
+legitimate tracing tools. Only reachable once locked, and the knob itself is
+frozen by the lock like every other.
+
+### 34. STIG / CIS tooling (#18) second pass — CM-6 / RA-5
+
+Building the earlier manual oscap fixes into `stig-harden.sh` was reviewed for
+safety: every patch checks that its problem is present before acting, keeps a
+`.pre-patch` backup of files it edits (`ssh_confirm.sh`, `sssd.conf`), and the
+banner repair restores the original if the result fails `bash -n`. The
+AppArmor mismatch (OSB-15) is **detect-and-advise only**, because enforcing
+every profile automatically can break applications. `--skip-rules` removes
+whole fix blocks by oscap's own BEGIN/END delimiters and records what it
+skipped; skipped rules still show as fail in the report, so nothing is hidden.
+Full record: [OSCAP_BUGS.md](OSCAP_BUGS.md).
 
 
 ---

@@ -43,6 +43,16 @@ config SECURITY_SECURE_SUDO
 	      package managers always denied and denied attempts counted.
 	    * Confine non-sudo users' writes to their home directory plus the
 	      normal scratch/device trees and a configured allowlist (opt-in).
+	    * A BPF & perf guard: deny bpf(2) and perf_event_open(2) to
+	      non-sudo users, and once the config lock latches refuse
+	      tracing-class BPF programs (kprobe, tracepoint, fentry, BPF-LSM,
+	      freplace) for every user, root included.
+	    * SysctlGuard: refuse writes to security-critical sysctls
+	      (core_pattern, modprobe, kptr_restrict, ptrace_scope, ...) and
+	      binfmt_misc registration for every user, root included.
+	    * An optional feed of every secure_sudo event into the kernel
+	      audit subsystem (auditd), and an optional extension of the lock
+	      to lockdown's confidentiality class.
 
 	  A "sudo user" is root, or a member of the admin GID configured at
 	  runtime via /sys/kernel/secure_sudo/admin_gid (the installer sets this

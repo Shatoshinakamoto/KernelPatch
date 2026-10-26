@@ -27,6 +27,8 @@ docs/
   CONFIGURATION.md                every config file and option
   SCRIPTS.md                      every script, with flags and usage
   SECURITY_REVIEW.md              NIST-framed review: findings + fixes
+  STIG.md                         STIG/CIS tooling, control map, results
+  OSCAP_BUGS.md                   every oscap bug, root cause, patch, before/after
   FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
 install/
   install.sh                      per-distro build+install (Debian/Fedora/Arch/openSUSE)
@@ -35,35 +37,35 @@ install/
   encrypted/deploy-encrypted.yml  Ansible wrapper for the encrypted variant
 ```
 
-## What the LSM enforces
+## What secure_sudo enforces
 
-| # | Protection |
-|---|------------|
-| 1 | Block non-sudo UID/GID switching (setuid/setgid/setgroups) + unprivileged userns; **1b** deny non-sudo exec of setuid/file-cap binaries unless allowlisted |
-| 2 | Command blacklist (matched by device+inode and path, not basename) |
-| 3 | Block non-sudo firmware/flash: /dev/mem, /dev/port, /dev/mtd*, /dev/mei*, /sys/firmware writes |
-| 4 | Confine non-sudo writes to home + scratch/device trees + allowlist (opt-in) |
-| 5 | Block TPM clear (ppi/request) for everyone unless booted `secure_sudo.tpm_maint=1` |
-| 6 | Driver blacklist / anti-BYOVD (SHA-256 + name at module load) |
-| 7 | RAM-spike detection → drop caches (si_mem_available, kernel worker) |
-| 8 | Sudo brute-force cooldown (PAM-fed; kernel blocks, daemon kills offender) |
-| 9 | Security event ring → daemon writes dated, rotated, retained logs |
-| 10 | Network host mode: deny raw/AF_PACKET sockets; nft for lan/public modes |
-| 11 | NodeJS child-process guard (LSM task blob + allowlist) |
-| 12 | Restrict exec/PROT_EXEC mmap from /tmp, /var/tmp, /dev/shm |
-| 13 | TimeVault hash-based anti-tamper exec gate: allowlist (+ auto-update entries), configurable size cap, package-manager deny, and quarantine of any binary blocked for a hash mismatch / not being listed |
-| 16 | One-way config lock until reboot (TimeVault latches it); blocks module loads / kexec / kernel-memory patching while locked |
-| 17 | **BinaryVault**: freeze every executable + shared library against write/truncate/unlink/rename/hardlink/chmod/xattr — for all UIDs incl. root (anti-tamper/anti-persistence). Effective at boot; updates via a `secure_sudo.binvault_maint=1` maintenance reboot |
-| 19 | **RadioGuard**: Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch. Refuses the wireless/BT core modules at load, denies AF_BLUETOOTH sockets, and denies `/dev/rfkill` writes. Drive with `secure-sudo radio …` |
-| 20 | **Process Runtime Guard**: protects running-process memory — denies cross-process ptrace/`process_vm_writev`/`/proc/pid/mem` tampering and W^X (writable+executable) mappings, for all processes except a CLI-managed exemption list. Drive with `secure-sudo prguard …` |
-| 21 | **PheonixBox**: snapshot-based tamper protection + auto-repair for chosen files/dirs. On enable: SHA-256 manifest + root-only zlib-compressed snapshot of the originals, captures owner/mode/ACLs (PermissionsSnapshot), locks files read-only, scans on a timer and restores any tampered/deleted file; on disable restores the original permissions. Userspace (`secure-sudo pheonixbox …`). A SHA-256 hash is one-way — the compressed snapshot store, not the hash, is what restores. See [docs/PHEONIXBOX.md](docs/PHEONIXBOX.md) |
+**K** = in the kernel LSM, **U** = userspace (CLI, PAM, daemon, tools).
 
-(#4 is implemented with `file_open` + the `path_*` hooks — both source versions
-had built it on a non-existent `path_permission` hook. It is opt-in because it
-is aggressive.)
-
-#14/#15 (rotating OTP sudo password with a locally-rendered QR, AES-256-GCM
-sealed secret, yescrypt prefix) are in `userspace/otp` + `pam_secure_otp`.
+| # | Where | Protection |
+|---|-------|------------|
+| 1 | K | Block non-sudo UID/GID switching (setuid/setgid/setgroups) and unprivileged user namespaces. **1b:** deny non-sudo exec of setuid/file-cap binaries unless allowlisted. |
+| 2 | K | Command blacklist, matched by device + inode and path (not basename). |
+| 3 | K | Block non-sudo firmware/flash access: `/dev/mem`, `/dev/port`, `/dev/mtd*`, `/dev/mei*`, and `/sys/firmware` writes. |
+| 4 | K | Confine non-sudo writes to home + scratch/device trees + an allowlist. Opt-in (aggressive). Built on `file_open` + the `path_*` hooks; both source versions used a `path_permission` hook that does not exist. |
+| 5 | K | Block TPM clear (`ppi/request`) for everyone unless booted with `secure_sudo.tpm_maint=1`. |
+| 6 | K | Driver blacklist / anti-BYOVD: SHA-256 + name checked at module load. |
+| 7 | K | RAM-spike detection drops caches (`si_mem_available`, kernel worker). |
+| 8 | K + U | Sudo brute-force cooldown: PAM feeds failures, the kernel blocks, the daemon kills the offender. |
+| 9 | K + U | Security event ring; the daemon writes dated, rotated, retained logs. |
+| 10 | K + U | Network host mode denies raw/`AF_PACKET` sockets; nft rules for LAN/public modes. |
+| 11 | K | NodeJS child-process guard (LSM task blob + allowlist). |
+| 12 | K | Restrict exec and `PROT_EXEC` mmap from `/tmp`, `/var/tmp`, `/dev/shm`. |
+| 13 | K + U | **TimeVault:** hash-based exec gate with allowlist (+ auto-update entries), size cap, package-manager deny, and quarantine of blocked binaries. |
+| 14 | U | **Rotating OTP sudo password:** prefix + 6-digit TOTP, verified by `pam_secure_otp`; QR rendered locally (`userspace/otp`). |
+| 15 | U | **Sealed OTP secret:** AES-256-GCM (TPM2 or root-only key), `mlock`ed at runtime, prefix stored as a yescrypt hash. |
+| 16 | K | One-way config lock until reboot (TimeVault latches it); blocks module loads, kexec and kernel-memory patching while locked. |
+| 17 | K | **BinaryVault:** freeze every executable + shared library (write/truncate/unlink/rename/hardlink/chmod/xattr) for all UIDs incl. root. Updates via a `secure_sudo.binvault_maint=1` maintenance reboot. See [docs/BINARYVAULT.md](docs/BINARYVAULT.md). |
+| 18 | U | **STIG / OpenSCAP:** `scripts/stig-harden.sh` scan + two-pass remediate + known-issue patches; real results: DISA Ubuntu 24.04 STIG 61 pass / 1 fail, CIS L2 Server 190 / 17. See [docs/STIG.md](docs/STIG.md) and [docs/OSCAP_BUGS.md](docs/OSCAP_BUGS.md). |
+| 19 | K | **RadioGuard:** Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch (refuses wireless/BT core modules, `AF_BLUETOOTH` sockets, `/dev/rfkill` writes). `secure-sudo radio ...` |
+| 20 | K | **Process Runtime Guard:** denies cross-process ptrace / `process_vm_writev` / `/proc/pid/mem` tampering and W^X mappings, with a CLI-managed exemption list; optional `prguard_observe` memory-access feed. `secure-sudo prguard ...` |
+| 21 | U | **PheonixBox:** snapshot tamper protection + auto-repair for chosen files/dirs (SHA-256 manifest detects, compressed snapshot restores, permissions snapshot). See [docs/PHEONIXBOX.md](docs/PHEONIXBOX.md). |
+| 22 | K | **BPF & perf guard:** `bpf_guard` / `perf_guard` deny bpf(2) and perf_event_open to non-sudo users; `bpf_lock_tracing` (default on) refuses tracing-class BPF programs (kprobe, tracepoint, fentry, BPF-LSM, freplace) for everyone once the lock latches. |
+| 23 | K | **SysctlGuard:** freezes the security-critical sysctls (`core_pattern`, `modprobe`, `kptr_restrict`, `ptrace_scope`, `randomize_va_space`, `fs.protected_*`, ...) and binfmt_misc registration for every user, root included. Plus: `audit_events` feeds every kernel event to auditd, and `lock_confidentiality` extends the lock to kernel-memory reads. |
 
 ### Opt-in add-ons — `temporary/` (v10)
 

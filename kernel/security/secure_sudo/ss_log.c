@@ -31,6 +31,7 @@
 #include <linux/time64.h>
 #include <linux/stdarg.h>
 #include <linux/security.h>
+#include <linux/audit.h>
 
 #include "secure_sudo.h"
 
@@ -42,12 +43,36 @@ static DEFINE_SPINLOCK(ss_ring_lock);
 static DECLARE_WAIT_QUEUE_HEAD(ss_ring_wq);
 static bool ss_ring_ready;
 
+/*
+ * Optional second sink: the kernel audit subsystem, so auditd / ausearch /
+ * SIEM pipelines get every secure_sudo event as an AUDIT_KERNEL_OTHER record
+ * (STIG AU family). The message goes through audit_log_untrustedstring(),
+ * which hex-encodes it if it contains spaces or quotes, so an attacker-chosen
+ * file name cannot forge extra key=value fields in the audit record. GFP_ATOMIC
+ * never waits on the audit backlog, so this is safe from any hook.
+ */
+static void ss_audit_event(const char *msg)
+{
+#ifdef CONFIG_AUDIT
+	struct audit_buffer *ab;
+
+	if (!READ_ONCE(ss_cfg.audit_events))
+		return;
+	ab = audit_log_start(audit_context(), GFP_ATOMIC, AUDIT_KERNEL_OTHER);
+	if (!ab)
+		return;
+	audit_log_format(ab, "lsm=secure_sudo msg=");
+	audit_log_untrustedstring(ab, msg);
+	audit_log_end(ab);
+#endif
+}
+
 void ss_event(const char *fmt, ...)
 {
 	char line[SS_LINE_MAX];
 	struct timespec64 ts;
 	va_list args;
-	int n, i;
+	int n, i, msg_off;
 	unsigned long flags;
 
 	if (!READ_ONCE(ss_ring_ready))
@@ -56,6 +81,7 @@ void ss_event(const char *fmt, ...)
 	ktime_get_real_ts64(&ts);
 	n = scnprintf(line, sizeof(line), "%lld.%03ld ",
 		      (long long)ts.tv_sec, ts.tv_nsec / NSEC_PER_MSEC);
+	msg_off = n;
 
 	va_start(args, fmt);
 	n += vscnprintf(line + n, sizeof(line) - n - 1, fmt, args);
@@ -70,6 +96,10 @@ void ss_event(const char *fmt, ...)
 	for (i = 0; i < n; i++)
 		if ((unsigned char)line[i] < 0x20 || line[i] == 0x7f)
 			line[i] = '?';
+	line[n] = '\0';
+
+	ss_audit_event(line + msg_off);
+
 	line[n++] = '\n';
 
 	spin_lock_irqsave(&ss_ring_lock, flags);

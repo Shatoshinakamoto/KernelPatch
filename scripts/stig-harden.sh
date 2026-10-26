@@ -28,6 +28,7 @@
 # USAGE
 #   stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
 #                  [--list-profiles] [--outdir <dir>] [--yes]
+#                  [--passes <n>] [--skip-rules <regex>] [--post-patch-only]
 #
 #   --scan           scan only, produce reports (default if nothing given)
 #   --remediate      scan, apply the generated fixes, then re-scan (asks first
@@ -37,6 +38,12 @@
 #   --list-profiles  list the profiles in the chosen datastream and exit
 #   --outdir <dir>   where to write reports (default /var/log/secure_sudo/stig)
 #   --yes            do not prompt before remediating
+#   --passes <n>     remediation passes before the final scan (default 2)
+#   --skip-rules <re> leave rules whose id matches this regex unremediated
+#                    (e.g. 'ufw|nftables|firewalld' when secure_sudo's own nft
+#                    network modes manage the firewall); they stay in the report
+#   --post-patch-only apply only the known-issue patches (OSB-03..07,
+#                    docs/OSCAP_BUGS.md), then rescan
 #
 set -euo pipefail
 
@@ -46,6 +53,8 @@ FORCE_PROFILE=""
 FORCE_DS=""
 LIST_ONLY=0
 ASSUME_YES=0
+PASSES=2
+SKIP_RULES=""
 
 die()  { echo "stig-harden: $*" >&2; exit 1; }
 info() { echo "stig-harden: $*"; }
@@ -61,7 +70,10 @@ while [ $# -gt 0 ]; do
 	--list-profiles) LIST_ONLY=1 ;;
 	--outdir)        OUTDIR="${2:?}"; shift ;;
 	--yes|-y)        ASSUME_YES=1 ;;
-	-h|--help)       sed -n '2,40p' "$0"; exit 0 ;;
+	--passes)        PASSES="${2:?}"; shift ;;
+	--skip-rules)    SKIP_RULES="${2:?}"; shift ;;
+	--post-patch-only) MODE=postpatch ;;
+	-h|--help)       sed -n '2,50p' "$0"; exit 0 ;;
 	*)               die "unknown option: $1" ;;
 	esac
 	shift
@@ -173,9 +185,15 @@ pick_profile() {
 
 PROFILE="${FORCE_PROFILE:-$(pick_profile)}"
 [ -n "$PROFILE" ] || die "no usable profile in $DS (try --list-profiles)"
+# OSB-18: only claim "no STIG for this distro" when we chose the fallback
+# ourselves; a profile forced with --profile is just reported as chosen.
 case "$PROFILE" in
 *_stig*) info "profile: $PROFILE (DISA STIG)" ;;
-*)       info "profile: $PROFILE (no DISA STIG for this distro; using closest hardening baseline)" ;;
+*) if [ -n "$FORCE_PROFILE" ]; then
+	info "profile: $PROFILE (chosen with --profile)"
+   else
+	info "profile: $PROFILE (no DISA STIG for this distro; using closest hardening baseline)"
+   fi ;;
 esac
 
 # -- 4. scan ---------------------------------------------------------------
@@ -205,6 +223,159 @@ scan() {
 	info "  pass=$pass fail=$fail notapplicable=$na notchecked=$nc error=$err"
 }
 
+# -- known-issue patches (see docs/OSCAP_BUGS.md) ---------------------------
+# Each of these is a problem the generated remediation either causes or leaves
+# behind, found during the real Ubuntu 24.04 STIG runs. They are applied after
+# the remediation passes and before the final scan. Every patch checks that its
+# problem is actually present first, so running it on a clean host is a no-op.
+post_patch() {
+	info "applying known-issue patches"
+
+	# OSB-03: SSG 0.1.78's fix for banner_etc_profiled_ssh_confirm writes the
+	# OVAL regex token "(?:[n]+|(?:n)+)" literally instead of newlines, leaving
+	# /etc/profile.d/ssh_confirm.sh as one broken line. Restore the newlines.
+	local f=/etc/profile.d/ssh_confirm.sh
+	if [ -f "$f" ] && grep -qF '(?:[n]+|(?:n)+)' "$f"; then
+		cp -p "$f" "$f.pre-patch"
+		python3 -I -c 'import sys;p=sys.argv[1];s=open(p).read();open(p,"w").write(s.replace("(?:[n]+|(?:n)+)","\n"))' "$f"
+		if bash -n "$f"; then
+			info "  OSB-03 fixed: $f restored (backup $f.pre-patch)"
+		else
+			cp -p "$f.pre-patch" "$f"
+			info "  OSB-03: repaired $f failed a syntax check; original restored"
+		fi
+	fi
+
+	# OSB-04: pwquality `retry` is left commented out ("# retry = 3").
+	f=/etc/security/pwquality.conf
+	if [ -f "$f" ] && ! grep -qE '^\s*retry\s*=' "$f"; then
+		if grep -qE '^\s*#\s*retry\s*=' "$f"; then
+			sed -i -E 's/^\s*#\s*retry\s*=.*/retry = 3/' "$f"
+		else
+			echo "retry = 3" >>"$f"
+		fi
+		info "  OSB-04 fixed: retry = 3 in $f"
+	fi
+
+	# OSB-05: SSSD certificate mapping. The generated fix sets pam_cert_auth,
+	# but the rule's OVAL check looks for ldap_user_certificate in the domain
+	# section. Only touched when sssd.conf already has a [domain/...] section.
+	f=/etc/sssd/sssd.conf
+	if [ -f "$f" ] && grep -qE '^\[domain/' "$f" && \
+	   ! grep -qE '^\s*ldap_user_certificate\s*=' "$f"; then
+		cp -p "$f" "$f.pre-patch"
+		sed -i -E '/^\[domain\/[^]]*\]/a ldap_user_certificate = userCertificate;binary' "$f"
+		chmod 600 "$f"
+		info "  OSB-05 fixed: ldap_user_certificate mapping added to $f (backup $f.pre-patch)"
+	fi
+
+	# OSB-06: /var/log must be group-owned by syslog; the rule's fix silently
+	# does nothing when the syslog group does not exist yet (no rsyslog).
+	if ! getent group syslog >/dev/null 2>&1 && command -v apt-get >/dev/null; then
+		info "  OSB-06: syslog group missing; installing rsyslog (STIG requires it)"
+		pkg_install rsyslog >/dev/null 2>&1 || info "  OSB-06: rsyslog install failed"
+	fi
+	if getent group syslog >/dev/null 2>&1 && \
+	   [ "$(stat -c %G /var/log)" != "syslog" ]; then
+		chgrp syslog /var/log
+		info "  OSB-06 fixed: /var/log group -> syslog"
+	fi
+
+	# OSB-15: the AppArmor tools (aa-enforce, aa-complain) are Python and use
+	# python3-libapparmor, which Ubuntu builds for its own python3 only. If
+	# /usr/bin/python3 was switched to another version (alternatives), every
+	# aa-* call in the remediation crashes on import and the AppArmor rules
+	# stay failed. Enforcing every profile can break applications, so this is
+	# detect-and-advise only: it prints the exact command to run by hand.
+	if command -v aa-enforce >/dev/null && \
+	   ! python3 -c 'import LibAppArmor' >/dev/null 2>&1; then
+		local py
+		for py in /usr/bin/python3.[0-9]*; do
+			case "$py" in *-config) continue ;; esac
+			if "$py" -c 'import LibAppArmor' >/dev/null 2>&1; then
+				info "  OSB-15: aa-* tools cannot import LibAppArmor under $(python3 --version 2>&1);"
+				info "          they work under $py. Review, then run by hand:"
+				info "          $py $(command -v aa-enforce) /etc/apparmor.d/*"
+				break
+			fi
+		done
+	fi
+
+	# OSB-07: log-file permission drift. Package installs (including the ones
+	# remediation itself performs) create new logs with wider modes, so this
+	# runs LAST, after every install, right before the final scan.
+	local n
+	n=$(find /var/log -type f -perm /0137 2>/dev/null | wc -l)
+	if [ "$n" -gt 0 ]; then
+		find /var/log -type f -perm /0137 -exec chmod u-x,g-wx,o-rwx {} + 2>/dev/null || true
+		info "  OSB-07 fixed: tightened $n log file(s) under /var/log"
+	fi
+}
+
+# Drop the fix blocks of rules matching $SKIP_RULES from a generated script.
+# oscap delimits each rule's fix with "# BEGIN fix ... for '<rule>'" and
+# "# END fix for '<rule>'", so whole blocks can be removed safely.
+skip_rules() {
+	local fix="$1" n
+	python3 -I - "$fix" "$SKIP_RULES" <<'PY'
+import re, sys
+path, pat = sys.argv[1], re.compile(sys.argv[2])
+out, skip, dropped = [], False, []
+for line in open(path):
+    m = re.match(r"# BEGIN fix \(.*\) for '([^']+)'", line)
+    if m and pat.search(m.group(1)):
+        skip = True
+        dropped.append(m.group(1))
+    if not skip:
+        out.append(line)
+    if skip and line.startswith("# END fix for"):
+        skip = False
+open(path, "w").writelines(out)
+open(path + ".skipped", "w").write("\n".join(dropped) + ("\n" if dropped else ""))
+PY
+	n=$(wc -l <"$fix.skipped")
+	info "  --skip-rules: left $n rule(s) unremediated (list: $fix.skipped)"
+}
+
+# Write a Markdown summary: before/after tallies + every rule not at pass.
+summarize() {
+	local before="$1" after="$2" out="$OUTDIR/summary-${TS}.md"
+	tally() {
+		local r="$1" k
+		for k in pass fail notapplicable notchecked error; do
+			printf '%s=%s ' "$k" "$(grep -c "<result>$k</result>" "$r" || true)"
+		done
+	}
+	{
+		echo "# OpenSCAP summary ($TS)"
+		echo
+		echo "- Datastream: \`$DS\`"
+		echo "- Profile: \`$PROFILE\`"
+		echo "- Before: $(tally "$before")"
+		echo "- After:  $(tally "$after")"
+		echo
+		echo "## Rules not at pass after remediation"
+		echo
+		echo "| Result | Rule |"
+		echo "|--------|------|"
+		python3 -I - "$after" <<'PY'
+import sys, re
+s = open(sys.argv[1]).read()
+for m in re.finditer(r'<rule-result[^>]*idref="([^"]+)"[^>]*>.*?<result>([a-z]+)</result>', s, re.S):
+    rule, res = m.group(1), m.group(2)
+    if res not in ("pass", "notapplicable", "notselected"):
+        print("| %s | %s |" % (res, rule.replace("xccdf_org.ssgproject.content_rule_", "")))
+PY
+	} >"$out"
+	info "summary: $out"
+}
+
+if [ "$MODE" = "postpatch" ]; then
+	post_patch
+	scan after
+	exit 0
+fi
+
 scan baseline
 BEFORE_RES="$SCAN_RESULT"
 info "baseline report in $OUTDIR"
@@ -221,15 +392,30 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 	[ "$ans" = "yes" ] || die "aborted"
 fi
 
-FIX="$OUTDIR/remediation-${TS}.sh"
-RID="$(grep -o 'TestResult id="[^"]*"' "$BEFORE_RES" | head -1 | cut -d'"' -f2)"
-info "generating remediation from result $RID"
-oscap xccdf generate fix --fix-type bash --result-id "$RID" \
-	--output "$FIX" "$BEFORE_RES"
-info "applying $FIX"
-bash "$FIX" || info "remediation script returned non-zero (some fixes are environment-specific)"
+# Remediation runs in PASSES. Pass 1 installs packages and creates files that
+# some rules only configure on the next pass (seen on Ubuntu 24.04: every
+# pwquality rule stayed "fail" after pass 1 and passed after pass 2), so each
+# pass regenerates the fix from the latest result and applies it again.
+LAST_RES="$BEFORE_RES"
+pass_no=1
+while [ "$pass_no" -le "$PASSES" ]; do
+	FIX="$OUTDIR/remediation-${TS}-pass${pass_no}.sh"
+	RID="$(grep -o 'TestResult id="[^"]*"' "$LAST_RES" | head -1 | cut -d'"' -f2)"
+	info "pass $pass_no/$PASSES: generating remediation from result $RID"
+	oscap xccdf generate fix --fix-type bash --result-id "$RID" \
+		--output "$FIX" "$LAST_RES"
+	[ -n "$SKIP_RULES" ] && skip_rules "$FIX"
+	info "applying $FIX"
+	bash "$FIX" >"$FIX.log" 2>&1 || \
+		info "remediation returned non-zero (some fixes are environment-specific); log: $FIX.log"
+	scan "pass${pass_no}"
+	LAST_RES="$SCAN_RESULT"
+	pass_no=$((pass_no + 1))
+done
 
+post_patch
 scan after
-info "remediation complete; before/after reports in $OUTDIR"
-info "review remaining fails in the 'after' report - some STIG controls need"
-info "manual steps (see docs/STIG.md)."
+summarize "$BEFORE_RES" "$SCAN_RESULT"
+info "remediation complete; before/after reports + summary in $OUTDIR"
+info "review remaining fails in the 'after' report - some controls need manual"
+info "steps on the target (see docs/STIG.md and docs/OSCAP_BUGS.md)."

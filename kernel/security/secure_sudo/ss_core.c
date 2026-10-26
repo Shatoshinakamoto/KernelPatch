@@ -299,6 +299,30 @@ static ssize_t lock_modules_store(struct kobject *kobj,
 	return count;
 }
 
+/* Two more boolean core knobs, same rules: root-only, refused once locked. */
+#define CORE_BOOL(field)						\
+static ssize_t field##_show(struct kobject *k, struct kobj_attribute *a,\
+			    char *buf)					\
+{									\
+	return sysfs_emit(buf, "%d\n", READ_ONCE(ss_cfg.field));		\
+}									\
+static ssize_t field##_store(struct kobject *k, struct kobj_attribute *a,\
+			     const char *buf, size_t count)		\
+{									\
+	bool v;								\
+	if (!ss_may_admin(NULL) || ss_locked())				\
+		return -EPERM;						\
+	if (kstrtobool(buf, &v))					\
+		return -EINVAL;						\
+	WRITE_ONCE(ss_cfg.field, v);					\
+	return count;							\
+}									\
+static struct kobj_attribute field##_attr =				\
+	__ATTR(field, 0600, field##_show, field##_store)
+
+CORE_BOOL(audit_events);
+CORE_BOOL(lock_confidentiality);
+
 static struct kobj_attribute lock_attr =
 	__ATTR(lock, 0600, lock_show, lock_store);
 static struct kobj_attribute lock_modules_attr =
@@ -307,6 +331,8 @@ static struct kobj_attribute lock_modules_attr =
 static struct attribute *ss_core_attrs[] = {
 	&lock_attr.attr,
 	&lock_modules_attr.attr,
+	&audit_events_attr.attr,
+	&lock_confidentiality_attr.attr,
 	NULL,
 };
 
@@ -330,6 +356,17 @@ static int ss_lock_locked_down(enum lockdown_reason what)
 		return 0;
 	if (what > LOCKDOWN_NONE && what < LOCKDOWN_INTEGRITY_MAX) {
 		pr_warn_ratelimited("locked: denied %s\n", lockdown_reasons[what]);
+		return -EPERM;
+	}
+	/*
+	 * Opt-in: also the confidentiality class - reading kernel memory via
+	 * /proc/kcore, kprobes, bpf_probe_read_kernel, perf and tracefs. Off by
+	 * default because it also stops legitimate kernel tracing tools.
+	 */
+	if (READ_ONCE(ss_cfg.lock_confidentiality) &&
+	    what > LOCKDOWN_INTEGRITY_MAX && what < LOCKDOWN_CONFIDENTIALITY_MAX) {
+		pr_warn_ratelimited("locked: denied %s\n", lockdown_reasons[what]);
+		ss_event("lock: denied %s", lockdown_reasons[what]);
 		return -EPERM;
 	}
 	return 0;
@@ -423,6 +460,13 @@ static int __init ss_lsm_init(void)
 	ss_cfg.block_bluetooth = false;
 	ss_cfg.ethernet_only = false;
 
+	ss_cfg.bpf_guard = false;		/* #22: conf turns it on */
+	ss_cfg.bpf_lock_tracing = true;		/* #22: only acts once locked */
+	ss_cfg.perf_guard = false;		/* #22: conf turns it on */
+	ss_cfg.sysctl_guard = false;		/* #23: conf turns it on after sysctl.d */
+	ss_cfg.audit_events = false;		/* #9: conf turns the auditd feed on */
+	ss_cfg.lock_confidentiality = false;	/* #16: opt-in, stops kernel tracing */
+
 	/* Register each protection's hooks. */
 	ss_lock_init();
 	ss_creds_init();
@@ -439,6 +483,8 @@ static int __init ss_lsm_init(void)
 	ss_binvault_init();
 	ss_radio_init();
 	ss_prguard_init();
+	ss_bpf_init();
+	ss_sysctl_init();
 
 	pr_info("LSM initialised (id=0x%llx)\n", (unsigned long long)ss_lsmid.id);
 	return 0;
@@ -485,6 +531,10 @@ static int __init ss_sysfs_init(void)
 		ret = ss_radio_sysfs(ss_kobj);
 	if (!ret)
 		ret = ss_prguard_sysfs(ss_kobj);
+	if (!ret)
+		ret = ss_bpf_sysfs(ss_kobj);
+	if (!ret)
+		ret = ss_sysctl_sysfs(ss_kobj);
 	if (ret) {
 		pr_err("failed to create sysfs knobs (%d)\n", ret);
 		kobject_put(ss_kobj);

@@ -245,13 +245,24 @@ secure-sudo-gui                       # run (systemd unit: secure-sudo-gui)
 # then open http://127.0.0.1:8790/ ON THIS HOST
 ```
 
-**Attack surface.** Root-only. Binds `127.0.0.1` by default (`gui.conf`).
-State-changing requests (POST) require a per-install **token** the server
-injects into the page it serves — a page from another origin cannot read it
-(CSRF defense) — and the server also checks the `Host` header. The token is
-stored `0600` at `/var/lib/secure_sudo/addons/gui/token` and printed on start.
-Keep the bind on loopback unless you front it with your own authenticated TLS
-proxy — this console can change config and kill processes.
+**Signing in.** Open the page and paste the access token:
+
+```sh
+sudo cat /var/lib/secure_sudo/addons/gui/token
+```
+
+The token stays in that browser tab only (cleared when the tab closes); **Sign
+out** forgets it.
+
+**Attack surface.** Root-only service, bound to `127.0.0.1` by default
+(`gui.conf`). The page itself holds no secret. **Every** API call, reads
+included, needs the token, which lives only in a root-only `0600` file, so
+being able to reach the port is not enough: only someone who can read that
+file (root) can use the console. Tokens are compared in constant time, failed
+attempts are logged, and the `Host` header is checked on every call. (v10 put
+the token in the page, which let any local user read it; fixed in v11, see
+SECURITY_REVIEW #29.) Keep the bind on loopback unless you front it with your
+own authenticated TLS proxy: this console can change config and kill processes.
 
 ---
 
