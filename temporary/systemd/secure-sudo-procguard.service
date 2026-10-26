@@ -1,0 +1,15 @@
+[Unit]
+Description=secure_sudo ProcGuard process allowlist enforcer (v8 add-on)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/secure-sudo-procguard daemon
+Restart=on-failure
+RestartSec=3
+# ProcGuard must send signals to arbitrary processes, so it cannot be heavily
+# sandboxed; it still drops new-privilege acquisition.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

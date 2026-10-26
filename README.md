@@ -65,23 +65,32 @@ is aggressive.)
 #14/#15 (rotating OTP sudo password with a locally-rendered QR, AES-256-GCM
 sealed secret, yescrypt prefix) are in `userspace/otp` + `pam_secure_otp`.
 
-### Runtime guards (built + installed by `install.sh`)
+### Opt-in add-ons — `temporary/` (v10)
 
-A set of userspace runtime guards ships in the main tree
-(`userspace/{procguard,driverguard,bootguard,locus,common}`) and is built and
-installed by the core `install.sh`. They are installed **but not enabled** — each
-is opt-in and starts in a safe mode (ProcGuard in monitor, no timers running)
-until you turn it on. They share one logging mechanism (local + optional off-box
-syslog) and an hourly-rotating compressed storage format:
+A separate, **opt-in** suite lives under `temporary/` (not built or installed by
+the core `install.sh`; add it with `sudo bash temporary/install-temporary.sh`,
+which enables nothing by default). It shares one logging mechanism (local +
+optional off-box syslog + `notify_cmd`) and a compressed storage format whose
+location rotates hourly or, per the `rotate` toggle, stays fixed:
 
 * **ProcGuard** — kill non-allowlisted processes; quarantine (compressed,
-  hourly-rotated) and remove respawning infections; optional off-box sync.
-* **DriverGuard** — driver-file integrity + repair from hourly-rotated
-  compressed backups.
+  rotated) and remove respawning infections; optional off-box sync.
+* **DriverGuard** — driver-file integrity + repair from rotated compressed
+  backups.
+* **BiosGuard** — firmware tamper **detection only** (logs + notifies; never
+  writes firmware — a live reflash can brick the board).
 * **BootGuard** — boot-partition tamper detection + restore **at next boot**
   (never a live rewrite of `/boot`).
 * **Locus** — LAN request-only allocator for the rotating locations, with a
   read-only status GUI and configurable root dirs.
+* **tamperwatch** — real-time attribution of *which process* tampered a
+  protected file (fanotify), with optional kill + quarantine.
+* **Management GUI** — one local (loopback, token-protected) web console to view
+  status/logs/the memory-access feed and configure everything, including the
+  rotating↔fixed quarantine toggle and per-PID quarantine.
+
+The kernel LSM also gains an opt-in **`prguard_observe`** knob that logs every
+cross-process memory read/write (source → target) for the GUI's memory feed.
 
 Full write-up, honesty notes, commands, and settings: [docs/ADDONS.md](docs/ADDONS.md).
 

@@ -1,0 +1,318 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * secure-sudo-tamperwatch - real-time tamper ATTRIBUTION (temporary add-on).
+ *
+ * PheonixBox (the kernel-adjacent snapshot feature) detects *that* a protected
+ * file changed, on a timer - but not *who* changed it. tamperwatch fills that
+ * gap: it uses fanotify to watch the protected files in real time and, the
+ * moment one is modified, records WHICH process did it (pid + on-disk exe),
+ * logs it, and can quarantine that process by pinpointing its executable on the
+ * filesystem - exactly the "pinpoint what tampered it and quarantine it" need.
+ *
+ *   - Watches every regular file under the PheonixBox protected set
+ *     (/etc/secure_sudo/pheonixbox.conf) plus any extra paths in
+ *     /etc/secure_sudo/addons/tamperwatch.conf.
+ *   - On a modify/close-write event it resolves the writer's pid -> exe and
+ *     logs CRITICAL (shippable off-box via the shared logger, and visible in
+ *     the GUI).
+ *   - mode = quarantine (opt-in) additionally compresses the offender's exe
+ *     into the hourly-rotated quarantine and kills it; mode = log (default)
+ *     only records.
+ *
+ * Needs fanotify (CONFIG_FANOTIFY) and root (CAP_SYS_ADMIN). Honest limits: it
+ * marks regular files that exist when it starts / rescans; a brand-new file
+ * created after start under a protected dir is covered on the next rescan.
+ */
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <limits.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/fanotify.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include "ssaddon_log.h"
+#include "ssaddon_store.h"
+
+#define PBOX_CONF	"/etc/secure_sudo/pheonixbox.conf"
+#define CONF		"/etc/secure_sudo/addons/tamperwatch.conf"
+#define DEF_QROOT	"/var/lib/secure_sudo/addons/tamperwatch/quarantine"
+#define LOCUS_PURPOSE	"tamperwatch-quarantine"
+
+struct cfg {
+	int quarantine;			/* 0 = log only, 1 = quarantine+kill */
+	int rotate;
+	char quarantine_root[PATH_MAX];
+};
+
+static void trim(char *s)
+{
+	size_t n = strlen(s);
+	while (n && isspace((unsigned char)s[n - 1]))
+		s[--n] = '\0';
+}
+
+static void load_cfg(struct cfg *c)
+{
+	FILE *f;
+	char line[PATH_MAX + 64];
+
+	c->quarantine = 0;
+	c->rotate = 1;
+	snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", DEF_QROOT);
+
+	f = fopen(CONF, "re");
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		char *eq, *k, *v;
+
+		trim(line);
+		if (line[0] == '#' || line[0] == '\0')
+			continue;
+		eq = strchr(line, '=');
+		if (!eq)
+			continue;
+		*eq = '\0';
+		k = line; v = eq + 1;
+		while (*k == ' ' || *k == '\t') k++;
+		trim(k);
+		while (*v == ' ' || *v == '\t') v++;
+		if (!strcmp(k, "mode"))
+			c->quarantine = !strcmp(v, "quarantine");
+		else if (!strcmp(k, "rotate"))
+			c->rotate = atoi(v);
+		else if (!strcmp(k, "quarantine_root"))
+			snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", v);
+	}
+	fclose(f);
+}
+
+/* ---- marking the protected set ---- */
+
+static int g_fan = -1;
+static size_t g_marked;
+
+static void mark_file(const char *path)
+{
+	/* FAN_CLOSE_WRITE + FAN_MODIFY on each regular file; pid comes with the
+	 * event in the classic (non-FID) fanotify mode. */
+	if (fanotify_mark(g_fan, FAN_MARK_ADD,
+			  FAN_CLOSE_WRITE | FAN_MODIFY, AT_FDCWD, path) == 0)
+		g_marked++;
+}
+
+static void walk_mark(const char *path, int depth)
+{
+	struct stat st;
+	DIR *d;
+	struct dirent *de;
+
+	if (depth > 24 || lstat(path, &st) != 0)
+		return;
+	if (S_ISREG(st.st_mode)) {
+		mark_file(path);
+		return;
+	}
+	if (!S_ISDIR(st.st_mode))
+		return;
+	d = opendir(path);
+	if (!d)
+		return;
+	while ((de = readdir(d))) {
+		char child[PATH_MAX];
+
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+			continue;
+		if (snprintf(child, sizeof(child), "%s/%s", path, de->d_name) >=
+		    (int)sizeof(child))
+			continue;
+		walk_mark(child, depth + 1);
+	}
+	closedir(d);
+}
+
+/* Read absolute paths (one per line) from a config file and mark each. */
+static void mark_from(const char *conf)
+{
+	FILE *f = fopen(conf, "re");
+	char line[PATH_MAX];
+
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f)) {
+		char *p = line;
+
+		trim(line);
+		while (*p == ' ' || *p == '\t') p++;
+		if (*p == '/')
+			walk_mark(p, 0);
+	}
+	fclose(f);
+}
+
+/* ---- offender handling ---- */
+
+static int pid_exe(pid_t pid, char *out, size_t n)
+{
+	char link[64];
+	ssize_t r;
+
+	snprintf(link, sizeof(link), "/proc/%d/exe", pid);
+	r = readlink(link, out, n - 1);
+	if (r < 0)
+		return -1;
+	out[r] = '\0';
+	return 0;
+}
+
+static void quarantine_offender(const struct cfg *c, pid_t pid, const char *exe)
+{
+	char root[PATH_MAX], bucket[PATH_MAX], sample[PATH_MAX];
+
+	if (c->rotate && locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) == 0)
+		;
+	else
+		snprintf(root, sizeof(root), "%s", c->quarantine_root);
+	if (store_bucket(root, c->rotate, bucket, sizeof(bucket)) != 0) {
+		ssl_err("cannot create quarantine bucket under %s", root);
+		return;
+	}
+	if (store_put_compressed(exe, bucket, "tamper", sample, sizeof(sample)) == 0)
+		ssl_crit("quarantined tamperer exe %s -> %s", exe, sample);
+	else
+		ssl_err("failed to quarantine exe %s", exe);
+	if (kill(pid, SIGKILL) == 0)
+		ssl_crit("killed tamperer pid %d (%s)", pid, exe);
+}
+
+/* Resolve the path the event refers to from its fd. */
+static void fd_path(int fd, char *out, size_t n)
+{
+	char link[64];
+	ssize_t r;
+
+	snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+	r = readlink(link, out, n - 1);
+	if (r < 0)
+		snprintf(out, n, "(unknown)");
+	else
+		out[r] = '\0';
+}
+
+static volatile sig_atomic_t stop;
+static void on_sig(int s) { (void)s; stop = 1; }
+
+static int run_daemon(void)
+{
+	struct cfg c;
+	struct pollfd pfd;
+
+	load_cfg(&c);
+	g_fan = fanotify_init(FAN_CLASS_NOTIF | FAN_NONBLOCK, O_RDONLY | O_CLOEXEC);
+	if (g_fan < 0) {
+		ssl_err("fanotify_init failed: %s (need root + CONFIG_FANOTIFY)",
+			strerror(errno));
+		fprintf(stderr, "tamperwatch: fanotify_init: %s\n", strerror(errno));
+		return 1;
+	}
+	mark_from(PBOX_CONF);		/* the PheonixBox protected set */
+	mark_from(CONF);		/* any extra absolute paths listed here */
+	if (g_marked == 0) {
+		ssl_warn("tamperwatch: no files marked (empty protected set) - idle");
+		fprintf(stderr, "tamperwatch: nothing to watch; configure "
+			PBOX_CONF " or " CONF "\n");
+	}
+	ssl_info("tamperwatch started: %zu files watched, mode=%s", g_marked,
+		 c.quarantine ? "quarantine" : "log");
+
+	signal(SIGINT, on_sig);
+	signal(SIGTERM, on_sig);
+	pfd.fd = g_fan;
+	pfd.events = POLLIN;
+
+	while (!stop) {
+		char buf[8192];
+		ssize_t len;
+		struct fanotify_event_metadata *m;
+
+		if (poll(&pfd, 1, 1000) <= 0)
+			continue;
+		len = read(g_fan, buf, sizeof(buf));
+		if (len <= 0)
+			continue;
+		m = (struct fanotify_event_metadata *)buf;
+		while (FAN_EVENT_OK(m, len)) {
+			char fpath[PATH_MAX], exe[PATH_MAX];
+
+			if (m->vers == FANOTIFY_METADATA_VERSION && m->fd >= 0) {
+				fd_path(m->fd, fpath, sizeof(fpath));
+				if (pid_exe(m->pid, exe, sizeof(exe)) != 0)
+					snprintf(exe, sizeof(exe), "(exited pid %d)",
+						 m->pid);
+				ssl_crit("TAMPER: %s modified by pid %d (%s)",
+					 fpath, m->pid, exe);
+				if (c.quarantine && exe[0] == '/')
+					quarantine_offender(&c, m->pid, exe);
+				close(m->fd);
+			}
+			m = FAN_EVENT_NEXT(m, len);
+		}
+	}
+	ssl_info("tamperwatch stopping");
+	close(g_fan);
+	return 0;
+}
+
+static int cmd_status(void)
+{
+	struct cfg c;
+
+	load_cfg(&c);
+	printf("tamperwatch\n");
+	printf("mode:            %s\n", c.quarantine ? "quarantine (kill + compress exe)" :
+	       "log (attribute only)");
+	printf("watched set:     " PBOX_CONF " + " CONF "\n");
+	printf("quarantine root: %s%s\n", c.quarantine_root,
+	       c.rotate ? " (hourly)" : " (fixed)");
+	return 0;
+}
+
+static void usage(void)
+{
+	fprintf(stderr,
+"usage: secure-sudo-tamperwatch <daemon|status>\n"
+"  daemon   watch the protected set and attribute (and optionally quarantine) tampering\n"
+"  status   show configuration\n"
+"\nNeeds root + CONFIG_FANOTIFY. Config: " CONF "\n");
+}
+
+int main(int argc, char **argv)
+{
+	if (geteuid() != 0) {
+		fprintf(stderr, "tamperwatch: must run as root\n");
+		return 1;
+	}
+	if (argc < 2) {
+		usage();
+		return 2;
+	}
+	ssl_init("tamperwatch");
+
+	if (!strcmp(argv[1], "daemon"))
+		return run_daemon();
+	if (!strcmp(argv[1], "status"))
+		return cmd_status();
+
+	usage();
+	ssl_close();
+	return 2;
+}

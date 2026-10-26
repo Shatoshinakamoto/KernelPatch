@@ -1,0 +1,6 @@
+[Unit]
+Description=secure_sudo BootGuard scan (v8 add-on)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/secure-sudo-bootguard scan

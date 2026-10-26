@@ -65,6 +65,7 @@ static const struct knob knobs[] = {
 	{ "timevault_allow_autoupdate", "timevault_allow_autoupdate" },
 	{ "timevault_max_entries", "timevault_max_entries" },
 	{ "prguard_enabled",      "prguard_enabled" },
+	{ "prguard_observe",      "prguard_observe" },
 };
 
 /* policy list  config file  ->  securityfs file */

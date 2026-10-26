@@ -102,6 +102,9 @@ struct ss_cfg {
 
 	/* ---- #20 Process Runtime Guard ---- */
 	bool prguard_enabled;		/* memory-tamper guard for all processes */
+	bool prguard_observe;		/* emit an event per cross-process mem access
+					 * (read/write + source->target) for the GUI;
+					 * verbose, opt-in, independent of enforce */
 
 	/* ---- #4 home write-restriction ---- */
 	bool block_home_write;		/* confine non-sudo writes to home + allow */

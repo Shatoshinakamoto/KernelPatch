@@ -1,0 +1,15 @@
+[Unit]
+Description=secure_sudo BootGuard - apply staged boot restore at boot (v8 add-on)
+DefaultDependencies=no
+# Run after the boot partition is mounted but before normal services use it.
+After=local-fs.target
+Before=sysinit.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+# No-op unless a restore is PENDING (staged by a previous `bootguard scan`).
+ExecStart=/usr/bin/secure-sudo-bootguard restore-staged
+
+[Install]
+WantedBy=sysinit.target

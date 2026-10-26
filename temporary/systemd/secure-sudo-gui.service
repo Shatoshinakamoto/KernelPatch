@@ -1,0 +1,14 @@
+[Unit]
+Description=secure_sudo management console (local web GUI)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/share/secure-sudo-gui/secure-sudo-gui
+Restart=on-failure
+RestartSec=3
+# Loopback console; no new privileges needed beyond root for config/quarantine.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

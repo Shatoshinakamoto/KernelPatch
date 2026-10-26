@@ -136,6 +136,15 @@ static bool current_exempt(void)
 
 static int ss_pg_ptrace_access(struct task_struct *child, unsigned int mode)
 {
+	/* Observability feed (opt-in, independent of enforcement): emit one event
+	 * per cross-process memory access check, classified read vs write, with
+	 * the source and target pid/comm, so the GUI can show "who accessed whose
+	 * memory". Rate-limited and verbose; off by default. */
+	if (READ_ONCE(ss_cfg.prguard_observe) && current->pid != child->pid)
+		ss_event("prguard: mem-access %s by pid %d (%s) -> pid %d (%s)",
+			 (mode & PTRACE_MODE_ATTACH) ? "WRITE" : "READ",
+			 current->pid, current->comm, child->pid, child->comm);
+
 	/* Only ATTACH mode can WRITE another process (and gates
 	 * process_vm_writev + /proc/pid/mem). Read-only inspection is allowed. */
 	if (!READ_ONCE(ss_cfg.prguard_enabled))
@@ -263,8 +272,31 @@ static ssize_t prguard_store(struct kobject *k, struct kobj_attribute *a,
 static struct kobj_attribute prguard_attr =
 	__ATTR(prguard_enabled, 0600, prguard_show, prguard_store);
 
+static ssize_t observe_show(struct kobject *k, struct kobj_attribute *a,
+			    char *buf)
+{
+	return sysfs_emit(buf, "%d\n", READ_ONCE(ss_cfg.prguard_observe));
+}
+static ssize_t observe_store(struct kobject *k, struct kobj_attribute *a,
+			     const char *buf, size_t count)
+{
+	bool v;
+
+	if (!ss_may_admin(NULL))
+		return -EPERM;
+	if (ss_locked())
+		return -EPERM;
+	if (kstrtobool(buf, &v))
+		return -EINVAL;
+	WRITE_ONCE(ss_cfg.prguard_observe, v);
+	return count;
+}
+static struct kobj_attribute prguard_observe_attr =
+	__ATTR(prguard_observe, 0600, observe_show, observe_store);
+
 static struct attribute *ss_pg_attrs[] = {
 	&prguard_attr.attr,
+	&prguard_observe_attr.attr,
 	NULL,
 };
 static const struct attribute_group ss_pg_group = {

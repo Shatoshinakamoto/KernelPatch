@@ -1,0 +1,13 @@
+[Unit]
+Description=secure_sudo tamperwatch - real-time tamper attribution (runtime guard)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/secure-sudo-tamperwatch daemon
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

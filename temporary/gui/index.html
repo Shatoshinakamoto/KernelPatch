@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: GPL-2.0
+     secure-sudo-gui frontend. Served by secure-sudo-gui, which substitutes the
+     per-install token into __TOKEN__ below. Vanilla JS, no third-party deps,
+     no outbound requests - everything talks only to this local server. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secure_sudo console</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --line: #30363d;
+    --fg: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --ok: #3fb950;
+    --warn: #d29922; --crit: #f85149; --mono: ui-monospace, "SF Mono", Menlo,
+    Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .lock { font-size: 12px; color: var(--dim); }
+  header .spacer { flex: 1; }
+  button, select { font: inherit; color: var(--fg); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px;
+    cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.danger { border-color: #5a2327; color: #ff9a92; }
+  button.danger:hover { border-color: var(--crit); }
+  nav { display: flex; gap: 4px; padding: 8px 18px 0; background: var(--panel);
+    border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav button { background: transparent; border: none; border-bottom: 2px solid
+    transparent; border-radius: 0; padding: 8px 12px; color: var(--dim); }
+  nav button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  main { padding: 18px; max-width: 1100px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill,
+    minmax(260px, 1fr)); gap: 10px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px;
+    padding: 4px 0; border-bottom: 1px solid var(--line); font-family: var(--mono);
+    font-size: 13px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--dim); }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); }
+  .pill.on { color: var(--ok); border-color: #1f3d28; }
+  .pill.off { color: var(--dim); }
+  pre { font-family: var(--mono); font-size: 12.5px; background: #010409;
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+    overflow: auto; max-height: 60vh; white-space: pre-wrap; word-break: break-word;
+    margin: 0; }
+  pre .crit { color: var(--crit); } pre .warn { color: var(--warn); }
+  pre .ok { color: var(--ok); }
+  textarea { width: 100%; min-height: 320px; font-family: var(--mono);
+    font-size: 12.5px; background: #010409; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 10px; resize: vertical; }
+  label { font-size: 12px; color: var(--dim); }
+  input[type=text], input[type=number] { font: inherit; color: var(--fg);
+    background: #010409; border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 8px; }
+  .toast { position: fixed; right: 16px; bottom: 16px; background: var(--panel2);
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    padding: 10px 14px; border-radius: 6px; max-width: 420px; font-size: 13px;
+    opacity: 0; transform: translateY(8px); transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.err { border-left-color: var(--crit); }
+  .muted { color: var(--dim); font-size: 12px; }
+  .mono { font-family: var(--mono); }
+  .guard-name { font-weight: 600; text-transform: capitalize; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px;
+    font-family: var(--mono); }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; }
+</style>
+</head>
+<body>
+<header>
+  <h1>secure_sudo</h1>
+  <span class="lock">local console · root</span>
+  <span class="spacer"></span>
+  <span id="clock" class="muted mono"></span>
+  <button onclick="refreshAll()">Refresh</button>
+</header>
+<nav>
+  <button data-view="status" class="active">Status</button>
+  <button data-view="logs">Kernel logs</button>
+  <button data-view="mem">Memory access</button>
+  <button data-view="pbox">PheonixBox &amp; tamper</button>
+  <button data-view="config">Config</button>
+</nav>
+<main>
+  <!-- STATUS -->
+  <section id="view-status" class="view active">
+    <div class="card">
+      <h2>Kernel knobs <span class="muted">(/sys/kernel/secure_sudo)</span></h2>
+      <div id="knobs" class="grid"></div>
+      <p class="muted" id="knobs-empty" style="display:none">
+        No sysfs knobs readable — is the secure_sudo LSM loaded?</p>
+    </div>
+    <div class="card">
+      <h2>Guards</h2>
+      <div id="guards" class="grid"></div>
+    </div>
+  </section>
+
+  <!-- LOGS -->
+  <section id="view-logs" class="view">
+    <div class="card">
+      <h2>Logs from this kernel patch and its guards</h2>
+      <div class="row" style="margin-bottom:10px">
+        <label>Source</label>
+        <select id="log-src">
+          <option value="kernel">kernel (daemon events)</option>
+          <option value="procguard">procguard</option>
+          <option value="driverguard">driverguard</option>
+          <option value="bootguard">bootguard</option>
+          <option value="biosguard">biosguard</option>
+          <option value="locus">locus</option>
+          <option value="tamperwatch">tamperwatch</option>
+          <option value="pheonixbox">pheonixbox</option>
+        </select>
+        <label>Lines</label>
+        <input type="number" id="log-n" value="200" min="1" max="2000"
+          style="width:80px">
+        <button onclick="loadLogs()">Load</button>
+      </div>
+      <p class="muted mono" id="log-path"></p>
+      <pre id="log-body">Select a source and press Load.</pre>
+    </div>
+  </section>
+
+  <!-- MEMORY ACCESS -->
+  <section id="view-mem" class="view">
+    <div class="card">
+      <h2>Process memory access feed</h2>
+      <p class="muted">Read/write memory-access attempts seen by the Process
+        Runtime Guard, with the source and target process. Needs the observe
+        feed enabled.</p>
+      <div class="row" style="margin-bottom:10px">
+        <button onclick="setKnob('prguard_observe=1')">Enable feed</button>
+        <button onclick="setKnob('prguard_observe=0')">Disable feed</button>
+        <label>Lines</label>
+        <input type="number" id="mem-n" value="200" min="1" max="2000"
+          style="width:80px">
+        <button onclick="loadMem()">Load</button>
+      </div>
+      <p class="muted" id="mem-hint"></p>
+      <pre id="mem-body">Press Load.</pre>
+    </div>
+  </section>
+
+  <!-- PHEONIXBOX & TAMPER -->
+  <section id="view-pbox" class="view">
+    <div class="card">
+      <h2>PheonixBox</h2>
+      <pre id="pbox-status">Loading…</pre>
+    </div>
+    <div class="card">
+      <h2>tamperwatch <span class="muted">(who tampered, in real time)</span></h2>
+      <pre id="tw-status">Loading…</pre>
+      <p class="muted">Attributed tamper events appear in the tamperwatch log:</p>
+      <pre id="tw-log" style="max-height:30vh">—</pre>
+    </div>
+    <div class="card">
+      <h2>Quarantine a process</h2>
+      <p class="muted">Pinpoints the process's executable on disk, compresses a
+        copy into the GUI quarantine, then kills it. Use the PID reported in a
+        TAMPER line above.</p>
+      <div class="row">
+        <label>PID</label>
+        <input type="text" id="q-pid" placeholder="e.g. 4821" style="width:120px">
+        <button class="danger" onclick="quarantinePid()">Quarantine &amp; kill</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONFIG -->
+  <section id="view-config" class="view">
+    <div class="card">
+      <h2>Configuration</h2>
+      <div class="row" style="margin-bottom:10px">
+        <label>File</label>
+        <select id="cfg-name" onchange="loadConfig()">
+          <option value="procguard">procguard.conf</option>
+          <option value="procguard_allow">procguard_allow.conf</option>
+          <option value="driverguard">driverguard.conf</option>
+          <option value="bootguard">bootguard.conf</option>
+          <option value="biosguard">biosguard.conf</option>
+          <option value="locus">locus.conf</option>
+          <option value="tamperwatch">tamperwatch.conf</option>
+          <option value="logging">logging.conf</option>
+        </select>
+        <button onclick="loadConfig()">Reload</button>
+        <button onclick="saveConfig()">Save</button>
+      </div>
+      <div class="row" id="quick-toggles" style="margin-bottom:10px"></div>
+      <p class="muted mono" id="cfg-path"></p>
+      <textarea id="cfg-body" spellcheck="false"></textarea>
+    </div>
+    <div class="card">
+      <h2>Auto-detect helpers</h2>
+      <div class="row">
+        <button onclick="action('autodetect_driverdir')">Detect driver tree</button>
+        <button onclick="action('autodetect_procallow')">Seed ProcGuard allowlist
+          from running processes</button>
+      </div>
+      <p class="muted">Auto-detect writes into the relevant config file. Review it
+        afterward before relying on enforcement.</p>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+
+// ---- tabs ----
+document.querySelectorAll("nav button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    $("view-" + b.dataset.view).classList.add("active");
+    if (b.dataset.view === "pbox") loadPbox();
+  };
+});
+
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (err ? " err" : "");
+  setTimeout(() => t.className = "toast", 3200);
+}
+
+async function apiGet(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+async function apiPost(path, body) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-SS-Token": TOKEN },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+function colorLog(lines) {
+  return lines.map(l => {
+    const e = l.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    if (/crit|CRIT|TAMPER|infect|INFECT|killed/i.test(l))
+      return '<span class="crit">' + e + "</span>";
+    if (/warn|WARN/i.test(l)) return '<span class="warn">' + e + "</span>";
+    if (/started|baseline|ok\b/i.test(l)) return '<span class="ok">' + e + "</span>";
+    return e;
+  }).join("");
+}
+
+// ---- status ----
+async function loadStatus() {
+  let d;
+  try { d = await apiGet("/api/status"); }
+  catch (e) { toast("status: " + e.message, true); return; }
+  const knobs = d.knobs || {};
+  const keys = Object.keys(knobs);
+  $("knobs-empty").style.display = keys.length ? "none" : "block";
+  $("knobs").innerHTML = keys.map(k => {
+    const v = knobs[k];
+    const on = /^(1|y|yes|on|true|enabled|locked)$/i.test(v);
+    const isbool = /^(0|1|y|n|yes|no|on|off|true|false|enabled|disabled|locked|unlocked)$/i.test(v);
+    const badge = isbool
+      ? `<span class="pill ${on ? "on" : "off"}">${v}</span>`
+      : `<span class="mono">${v}</span>`;
+    return `<div class="kv"><span class="k">${k}</span>${badge}</div>`;
+  }).join("");
+
+  const g = d.guards || {};
+  $("guards").innerHTML = Object.keys(g).map(feat => {
+    const s = g[feat];
+    const badge = s.installed
+      ? '<span class="pill on">installed</span>'
+      : '<span class="pill off">absent</span>';
+    const body = s.installed
+      ? `<pre style="max-height:160px;margin-top:8px">${
+          (s.status || "").replace(/[<>&]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</pre>`
+      : "";
+    const actions = s.installed && ["procguard","driverguard","bootguard","biosguard","locus","tamperwatch"].includes(feat)
+      ? `<div class="row" style="margin-top:8px">
+           <button onclick="action('scan','${feat}')">Scan</button>
+           ${["driverguard","bootguard","biosguard"].includes(feat)
+             ? `<button onclick="action('baseline','${feat}')">Baseline</button>` : ""}
+         </div>` : "";
+    return `<div class="card" style="margin:0">
+       <div class="row"><span class="guard-name">${feat}</span>${badge}</div>
+       ${body}${actions}</div>`;
+  }).join("");
+}
+
+// ---- logs ----
+async function loadLogs() {
+  const src = $("log-src").value, n = $("log-n").value || 200;
+  try {
+    const d = await apiGet(`/api/logs?src=${encodeURIComponent(src)}&n=${n}`);
+    $("log-path").textContent = d.path || "(no log file)";
+    $("log-body").innerHTML = d.lines && d.lines.length
+      ? colorLog(d.lines) : "(empty)";
+  } catch (e) { toast("logs: " + e.message, true); }
+}
+
+// ---- memory access ----
+async function loadMem() {
+  const n = $("mem-n").value || 200;
+  try {
+    const d = await apiGet("/api/memaccess?n=" + n);
+    $("mem-hint").textContent = d.hint || "";
+    $("mem-body").innerHTML = d.rows && d.rows.length
+      ? colorLog(d.rows) : "(no memory-access events — enable the feed)";
+  } catch (e) { toast("memaccess: " + e.message, true); }
+}
+
+// ---- pheonixbox & tamper ----
+async function loadPbox() {
+  try {
+    const d = await apiGet("/api/status");
+    const g = d.guards || {};
+    $("pbox-status").textContent =
+      g.pheonixbox && g.pheonixbox.installed ? g.pheonixbox.status
+      : "PheonixBox not installed.";
+    $("tw-status").textContent =
+      g.tamperwatch && g.tamperwatch.installed ? g.tamperwatch.status
+      : "tamperwatch not installed.";
+  } catch (e) { toast("pbox: " + e.message, true); }
+  try {
+    const l = await apiGet("/api/logs?src=tamperwatch&n=120");
+    $("tw-log").innerHTML = l.lines && l.lines.length
+      ? colorLog(l.lines) : "(no tamperwatch events yet)";
+  } catch (e) { /* log may not exist yet */ }
+}
+
+async function quarantinePid() {
+  const pid = $("q-pid").value.trim();
+  if (!/^\d+$/.test(pid)) { toast("enter a numeric PID", true); return; }
+  if (!confirm(`Compress and KILL process ${pid}? This cannot be undone.`)) return;
+  try {
+    const d = await apiPost("/api/action", { action: "quarantine_pid", arg: pid });
+    toast(`killed ${d.killed}; exe stored at ${d.stored}`);
+    loadPbox();
+  } catch (e) { toast("quarantine: " + e.message, true); }
+}
+
+// ---- config ----
+const QUICK = {
+  procguard:   [["rotate","Rotating quarantine"],["enabled","Enabled"]],
+  driverguard: [["rotate","Rotating backups"],["enabled","Enabled"]],
+  bootguard:   [["rotate","Rotating backups"],["enabled","Enabled"]],
+  tamperwatch: [["rotate","Rotating quarantine"]],
+};
+async function loadConfig() {
+  const name = $("cfg-name").value;
+  try {
+    const d = await apiGet("/api/config?name=" + encodeURIComponent(name));
+    $("cfg-path").textContent = d.path || "";
+    $("cfg-body").value = d.content || "";
+    renderToggles(name, d.content || "");
+  } catch (e) { toast("config: " + e.message, true); }
+}
+function readKey(text, key) {
+  const m = text.match(new RegExp("^\\s*" + key + "\\s*=\\s*(.+)$", "m"));
+  return m ? m[1].trim() : "";
+}
+function renderToggles(name, content) {
+  const spec = QUICK[name] || [];
+  $("quick-toggles").innerHTML = spec.map(([k, label]) => {
+    const v = readKey(content, k);
+    const on = /^(1|y|yes|on|true)$/i.test(v);
+    return `<button onclick="toggleKey('${name}','${k}',${on ? 0 : 1})">
+      ${label}: <span class="pill ${on ? "on" : "off"}">${on ? "on" : "off"}</span>
+    </button>`;
+  }).join("");
+}
+async function toggleKey(name, key, val) {
+  try {
+    await apiPost("/api/setkey", { name, key, value: String(val) });
+    toast(`${key} = ${val}`);
+    loadConfig();
+  } catch (e) { toast("setkey: " + e.message, true); }
+}
+async function saveConfig() {
+  const name = $("cfg-name").value, content = $("cfg-body").value;
+  try {
+    await apiPost("/api/config", { name, content });
+    toast("saved " + name);
+    renderToggles(name, content);
+  } catch (e) { toast("save: " + e.message, true); }
+}
+
+// ---- generic actions ----
+async function action(act, arg) {
+  try {
+    const d = await apiPost("/api/action", { action: act, arg: arg || "" });
+    if (d.out !== undefined) toast(`${act} ${arg || ""}: rc=${d.rc}`);
+    else toast(`${act}: ok`);
+    if (act.startsWith("autodetect")) { if ($("view-config").classList.contains("active")) loadConfig(); }
+    loadStatus();
+  } catch (e) { toast(act + ": " + e.message, true); }
+}
+async function setKnob(kv) {
+  try {
+    await apiPost("/api/action", { action: "set_knob", arg: kv });
+    toast("set " + kv);
+    loadStatus();
+  } catch (e) { toast("set_knob: " + e.message, true); }
+}
+
+// ---- boot ----
+function refreshAll() {
+  loadStatus();
+  if ($("view-pbox").classList.contains("active")) loadPbox();
+}
+setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString(); }, 1000);
+$("clock").textContent = new Date().toLocaleTimeString();
+loadStatus();
+loadConfig();
+</script>
+</body>
+</html>

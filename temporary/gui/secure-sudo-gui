@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+#
+# secure-sudo-gui - local web management console for the secure_sudo stack.
+#
+# One dependency-free (Python stdlib) HTTP service that lets an operator view
+# and configure the whole stack from a browser:
+#   - status of every guard (ProcGuard/DriverGuard/BiosGuard/BootGuard/Locus/
+#     tamperwatch) and PheonixBox, plus the live kernel knobs;
+#   - the logs coming specifically from this kernel patch (the daemon's dated
+#     event logs) and from each guard;
+#   - the process memory-access feed (read/write + source process) from the
+#     Process Runtime Guard's observe events;
+#   - PheonixBox status, its tamper/repair events, and the attributed tampering
+#     process from tamperwatch, with a one-click quarantine;
+#   - editing each guard's config, including toggling the rotating quarantine
+#     zones on/off (fixed) and enabling/disabling guards;
+#   - auto-detect helpers (driver tree, seed the ProcGuard allowlist).
+#
+# SECURITY / ATTACK SURFACE. Root-only. Binds 127.0.0.1 by default (configure
+# in gui.conf). State-changing requests (POST) require a per-install token that
+# the server injects into the page it serves, so a page from another origin
+# cannot read it (CSRF defense); the server also checks the Host header. Keep
+# the bind on loopback unless you front it with your own authenticated proxy -
+# this console can change config and quarantine processes.
+import json, os, re, secrets, shutil, signal, subprocess, sys, time, gzip, html
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+
+CONF       = "/etc/secure_sudo/addons/gui.conf"
+ADDON_CONF = "/etc/secure_sudo/addons"
+KLOG_DIR   = "/var/log/secure_sudo"            # daemon kernel-event logs
+ALOG_DIR   = "/var/log/secure_sudo/addons"     # guard logs (ssaddon_log)
+SYSFS      = "/sys/kernel/secure_sudo"
+STATE      = "/var/lib/secure_sudo/addons/gui"
+TOKEN_FILE = STATE + "/token"
+HERE       = os.path.dirname(os.path.abspath(__file__))
+
+# conf name -> file; the only files the GUI will read/write.
+CONF_FILES = {
+    "procguard": "procguard.conf", "procguard_allow": "procguard_allow.conf",
+    "driverguard": "driverguard.conf", "bootguard": "bootguard.conf",
+    "biosguard": "biosguard.conf", "locus": "locus.conf",
+    "tamperwatch": "tamperwatch.conf", "logging": "logging.conf",
+}
+# feature -> CLI binary for status/scan/baseline
+GUARD_BIN = {
+    "procguard": "secure-sudo-procguard", "driverguard": "secure-sudo-driverguard",
+    "bootguard": "secure-sudo-bootguard", "biosguard": "secure-sudo-biosguard",
+    "locus": "secure-sudo-locus", "tamperwatch": "secure-sudo-tamperwatch",
+    "pheonixbox": "secure-sudo-pheonixbox",
+}
+
+
+def load_conf():
+    cfg = {"bind": "127.0.0.1", "port": 8790}
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if k == "bind":
+                    cfg["bind"] = v
+                elif k == "port":
+                    cfg["port"] = int(v or 8790)
+    except OSError:
+        pass
+    return cfg
+
+
+def get_token():
+    os.makedirs(STATE, 0o700, exist_ok=True)
+    try:
+        with open(TOKEN_FILE) as f:
+            t = f.read().strip()
+            if t:
+                return t
+    except OSError:
+        pass
+    t = secrets.token_hex(24)
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.write(fd, t.encode())
+    os.close(fd)
+    return t
+
+
+def run(args, timeout=15):
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout + p.stderr
+    except Exception as e:  # noqa: BLE001 - surfaced to the operator
+        return 1, f"error: {e}"
+
+
+def read_sysfs():
+    knobs = {}
+    try:
+        for name in sorted(os.listdir(SYSFS)):
+            path = os.path.join(SYSFS, name)
+            try:
+                with open(path) as f:
+                    knobs[name] = f.read().strip()
+            except OSError:
+                knobs[name] = "(unreadable)"
+    except OSError:
+        pass
+    return knobs
+
+
+def latest_klog():
+    try:
+        logs = sorted(x for x in os.listdir(KLOG_DIR) if x.endswith(".log"))
+        return os.path.join(KLOG_DIR, logs[-1]) if logs else None
+    except OSError:
+        return None
+
+
+def tail(path, n):
+    try:
+        with open(path, errors="replace") as f:
+            return f.readlines()[-n:]
+    except OSError:
+        return []
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "secure-sudo-gui"
+
+    def _send(self, code, body, ctype="application/json"):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body).encode()
+        elif isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass  # quiet
+
+    # ---- GET ----
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/" or u.path == "/index.html":
+            try:
+                with open(os.path.join(HERE, "index.html")) as f:
+                    page = f.read().replace("__TOKEN__", TOKEN)
+            except OSError:
+                page = "<h1>secure-sudo-gui</h1><p>index.html missing</p>"
+            return self._send(200, page, "text/html; charset=utf-8")
+        if u.path == "/api/status":
+            return self._send(200, self.api_status())
+        if u.path == "/api/logs":
+            return self._send(200, self.api_logs(q))
+        if u.path == "/api/memaccess":
+            return self._send(200, self.api_memaccess(q))
+        if u.path == "/api/config":
+            return self._send(200, self.api_config_get(q))
+        return self._send(404, {"error": "not found"})
+
+    # ---- POST (token + same-host required) ----
+    def do_POST(self):
+        if self.headers.get("X-SS-Token") != TOKEN:
+            return self._send(403, {"error": "bad or missing token"})
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if host not in ("127.0.0.1", "localhost", CFG["bind"]):
+            return self._send(403, {"error": "host not allowed"})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            return self._send(400, {"error": "bad json"})
+        u = urlparse(self.path)
+        if u.path == "/api/config":
+            return self._send(200, self.api_config_set(data))
+        if u.path == "/api/setkey":
+            return self._send(200, self.api_setkey(data))
+        if u.path == "/api/action":
+            return self._send(200, self.api_action(data))
+        return self._send(404, {"error": "not found"})
+
+    # ---- handlers ----
+    def api_status(self):
+        out = {"knobs": read_sysfs(), "guards": {}}
+        for feat, binname in GUARD_BIN.items():
+            if shutil.which(binname):
+                rc, txt = run([binname, "status"])
+                out["guards"][feat] = {"installed": True, "status": txt.strip()}
+            else:
+                out["guards"][feat] = {"installed": False, "status": "not installed"}
+        return out
+
+    def api_logs(self, q):
+        src = (q.get("src", ["kernel"])[0])
+        n = min(int(q.get("n", ["200"])[0] or 200), 2000)
+        if src == "kernel":
+            path = latest_klog()
+            lines = tail(path, n) if path else []
+            return {"src": src, "path": path, "lines": lines}
+        # guard log
+        fname = re.sub(r"[^a-z0-9_]", "", src)
+        path = os.path.join(ALOG_DIR, fname + ".log")
+        return {"src": src, "path": path, "lines": tail(path, n)}
+
+    def api_memaccess(self, q):
+        n = min(int(q.get("n", ["200"])[0] or 200), 2000)
+        path = latest_klog()
+        rows = []
+        if path:
+            for ln in tail(path, 4000):
+                if "prguard: mem-access" in ln:
+                    rows.append(ln.rstrip())
+        return {"rows": rows[-n:], "hint":
+                "enable the feed with: secure-sudo set prguard_observe 1"}
+
+    def api_config_get(self, q):
+        name = q.get("name", [""])[0]
+        if name not in CONF_FILES:
+            return {"error": "unknown config"}
+        path = os.path.join(ADDON_CONF, CONF_FILES[name])
+        try:
+            with open(path) as f:
+                return {"name": name, "path": path, "content": f.read()}
+        except OSError as e:
+            return {"name": name, "path": path, "content": "", "error": str(e)}
+
+    def api_config_set(self, data):
+        name = data.get("name")
+        if name not in CONF_FILES:
+            return {"error": "unknown config"}
+        content = data.get("content", "")
+        if len(content) > 256 * 1024:
+            return {"error": "too large"}
+        path = os.path.join(ADDON_CONF, CONF_FILES[name])
+        os.makedirs(ADDON_CONF, 0o755, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        return {"ok": True, "path": path}
+
+    def api_setkey(self, data):
+        name, key, val = data.get("name"), data.get("key"), str(data.get("value", ""))
+        if name not in CONF_FILES or not re.fullmatch(r"[a-z_]+", key or ""):
+            return {"error": "bad name/key"}
+        if not re.fullmatch(r"[\w./:\- ]*", val):
+            return {"error": "bad value"}
+        path = os.path.join(ADDON_CONF, CONF_FILES[name])
+        lines, found = [], False
+        try:
+            with open(path) as f:
+                for ln in f:
+                    if re.match(rf"\s*{re.escape(key)}\s*=", ln):
+                        lines.append(f"{key} = {val}\n")
+                        found = True
+                    else:
+                        lines.append(ln)
+        except OSError:
+            pass
+        if not found:
+            lines.append(f"{key} = {val}\n")
+        os.makedirs(ADDON_CONF, 0o755, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.writelines(lines)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        return {"ok": True, "key": key, "value": val}
+
+    def api_action(self, data):
+        act = data.get("action")
+        arg = str(data.get("arg", ""))
+        if act == "scan" and arg in GUARD_BIN:
+            return dict(zip(("rc", "out"), run([GUARD_BIN[arg], "scan"])))
+        if act == "baseline" and arg in ("driverguard", "bootguard", "biosguard"):
+            return dict(zip(("rc", "out"), run([GUARD_BIN[arg], "baseline"])))
+        if act == "set_knob":
+            # arg = "knob=value"; delegate to the CLI so kernel validation applies
+            if "=" not in arg or not re.fullmatch(r"[a-z_]+=[\w.\-]+", arg):
+                return {"error": "bad knob"}
+            k, v = arg.split("=", 1)
+            return dict(zip(("rc", "out"), run(["secure-sudo", "set", k, v])))
+        if act == "autodetect_driverdir":
+            r = os.uname().release
+            self.api_setkey({"name": "driverguard", "key": "driver_dir",
+                             "value": f"/lib/modules/{r}"})
+            return {"ok": True, "driver_dir": f"/lib/modules/{r}"}
+        if act == "autodetect_procallow":
+            return self.autodetect_procallow()
+        if act == "quarantine_pid":
+            return self.quarantine_pid(arg)
+        return {"error": "unknown action"}
+
+    def autodetect_procallow(self):
+        exes = set()
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+                if exe.startswith("/"):
+                    exes.add(exe.split(" (deleted)")[0])
+            except OSError:
+                pass
+        body = ("# auto-detected from running processes on "
+                + time.strftime("%Y-%m-%d %H:%M:%S") + "\n"
+                + "\n".join(sorted(exes)) + "\n")
+        return self.api_config_set({"name": "procguard_allow", "content": body}) \
+            | {"detected": len(exes)}
+
+    def quarantine_pid(self, arg):
+        if not arg.isdigit():
+            return {"error": "pid must be numeric"}
+        pid = int(arg)
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe").split(" (deleted)")[0]
+        except OSError as e:
+            return {"error": f"cannot read exe: {e}"}
+        qdir = os.path.join(STATE, "quarantine",
+                            time.strftime("%Y%m%d%H"))
+        os.makedirs(qdir, 0o700, exist_ok=True)
+        dst = os.path.join(qdir, os.path.basename(exe) + f".{pid}.gz")
+        try:
+            with open(exe, "rb") as fi, gzip.open(dst, "wb") as fo:
+                shutil.copyfileobj(fi, fo)
+            os.chmod(dst, 0o600)
+        except OSError as e:
+            return {"error": f"compress failed: {e}"}
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError as e:
+            return {"error": f"killed exe stored but kill failed: {e}", "stored": dst}
+        return {"ok": True, "exe": exe, "stored": dst, "killed": pid}
+
+
+def main():
+    global TOKEN, CFG
+    if os.geteuid() != 0:
+        sys.stderr.write("secure-sudo-gui: must run as root\n")
+        return 1
+    CFG = load_conf()
+    TOKEN = get_token()
+    srv = ThreadingHTTPServer((CFG["bind"], CFG["port"]), Handler)
+    sys.stderr.write(f"secure-sudo-gui on http://{CFG['bind']}:{CFG['port']} "
+                     f"(token in {TOKEN_FILE})\n")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

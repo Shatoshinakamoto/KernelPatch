@@ -1,0 +1,6 @@
+[Unit]
+Description=secure_sudo BiosGuard firmware scan (v8 add-on)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/secure-sudo-biosguard scan

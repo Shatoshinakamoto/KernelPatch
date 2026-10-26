@@ -415,6 +415,7 @@ static int __init ss_lsm_init(void)
 	ss_cfg.timevault_max_entries = 16384;	/* TV_DEF_ENTRIES; cap on list */
 
 	ss_cfg.prguard_enabled = false;		/* #20: opt-in */
+	ss_cfg.prguard_observe = false;		/* #20: verbose mem-access feed, opt-in */
 
 	ss_cfg.block_home_write = false;	/* #4 is aggressive: opt-in */
 	ss_cfg.binaryvault = false;	/* #17: conf turns it on at boot via load */

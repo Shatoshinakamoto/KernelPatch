@@ -435,7 +435,7 @@ an inline *blocking* one; pair it with BinaryVault (#17) / TimeVault (#13) for
 inline immutability of executables. If the store itself is deleted there is
 nothing to restore from, so keep `/var/lib/secure_sudo` on protected storage.
 
-### 21. ProcGuard review (runtime guard) — AC-3 / SI-4 / SC-28
+### 21. ProcGuard review (v8 add-on) — AC-3 / SI-4 / SC-28
 
 Allowlist process enforcer. The dangerous property is "kill everything not
 listed", reviewed accordingly:
@@ -465,7 +465,7 @@ process can run to completion between scans; it is an allowlist *enforcer/
 remover*, complementary to the kernel's exec-time controls (#2/#1b/#12/#13),
 not a replacement for them.
 
-### 22. DriverGuard review (runtime guard) — SI-7 / CM-5
+### 22. DriverGuard review (v8 add-on) — SI-7 / CM-5
 
 Driver-file integrity + repair. `baseline` pins each module by SHA-256 and keeps
 an hourly-rotated compressed backup; `scan` restores a changed/missing module
@@ -477,7 +477,21 @@ bytes hashing), noted so the two are not confused. New modules added by a
 legitimate kernel update are not in the manifest and are simply not protected
 until the next `baseline` — they are never deleted.
 
-### 23. BootGuard review (runtime guard) — SI-7 / CM-5 (stage-at-boot)
+### 23. BiosGuard review (v10 add-on) — SI-7 / CM-5 (detection only)
+
+The central decision is to **not** write firmware at all. A generic userspace
+firmware write bricks boards, so BiosGuard was reduced to pure detection in v10:
+it fingerprints DMI (`/sys/class/dmi/id/*`) and the ACPI tables
+(`/sys/firmware/acpi/tables/*`), and on a mismatch logs CRITICAL and fires
+`ssl_notify`. There is **no reflash/apply/stage path and no `flashrom`
+dependency** — the previous `apply`/`good_image` code was removed. It links only
+the shared logger, not the store (it keeps no sample). Residual/honest limit,
+stated plainly: ACPI+DMI hashing detects a large class of firmware tamper but is
+**not** a full SPI-flash measurement (that needs `flashrom -r` or a TPM event
+log), and remediation of a detected change is a deliberate operator action with
+vendor tooling, out of scope.
+
+### 24. BootGuard review (v8 add-on) — SI-7 / CM-5 (stage-at-boot)
 
 Same safety stance for `/boot`: a live rewrite under a running kernel is unsafe,
 so tamper is **staged** (restore list + `PENDING` flag, 0600) and applied at the
@@ -489,7 +503,7 @@ it); restoring before *anything* reads `/boot` needs an initramfs hook — the
 unit is the practical default, the initramfs hook the stronger option. New boot
 files are reported, never deleted (kernel updates add files).
 
-### 24. Locus + shared libs review (runtime guard) — SC-39 / SC-28 / AC-4
+### 25. Locus + shared libs review (v8 add-on) — SC-39 / SC-28 / AC-4
 
 The allocator is a minimal attack surface by design: a fixed `ALLOC <purpose>`
 → `OK <path>` protocol that only names a directory and touches nothing else.
@@ -508,6 +522,58 @@ Reviewed:
   0700 dir, and a size cap rotates the local file. Exposure note: the
   allocator/GUI bind addresses are the operator's responsibility — the defaults
   are loopback, and the docs say to put only the allocator on the LAN.
+
+### 26. tamperwatch review (v10 add-on) — SI-7 / AU-10 / AC-6
+
+Real-time attribution via fanotify (`FAN_CLASS_NOTIF`, classic pid-carrying
+mode). Reviewed:
+
+* **Default is non-destructive**: `mode = log` only attributes (pid → `/proc/
+  pid/exe` → log CRITICAL). `mode = quarantine` is opt-in and is the only path
+  that kills; it only kills when the resolved exe is an absolute path (never a
+  `(exited pid N)` placeholder), closing a kill-wrong-pid race on exit.
+* **Watched set is bounded**: it marks regular files under the PheonixBox
+  protected set plus explicit absolute paths from its own conf; directory walk
+  is depth-capped (24) and skips `.`/`..`. No user-controlled input chooses what
+  to kill — only a modification of an already-protected file triggers handling.
+* **Honest limit, documented**: files created after start under a protected dir
+  are covered on the next rescan, not instantly; needs `CONFIG_FANOTIFY` + root.
+  Quarantine honours the `rotate` toggle and uses the shared compressed store.
+
+### 27. Management GUI review (v10 add-on) — AC-3 / AC-4 / SC-8 / CSRF
+
+This is the one add-on that both *changes config* and *kills processes* from a
+network listener, so it got the closest look:
+
+* **Loopback + root only**: binds `127.0.0.1` by default; refuses to run as
+  non-root. Docs forbid widening the bind without a fronting authenticated TLS
+  proxy.
+* **CSRF/token**: every state-changing request (POST) requires a per-install
+  token (`secrets.token_hex(24)`, stored `0600`) that the server injects into
+  the served page — an off-origin page cannot read it. The server also checks
+  the `Host` header against the allowed set. GETs are read-only.
+* **No arbitrary writes/exec**: config writes are confined to a fixed
+  `CONF_FILES` whitelist of known `.conf` names (no path from the client);
+  `setkey` validates key `[a-z_]+` and value `[\w./:\- ]*`; `set_knob` delegates
+  to the `secure-sudo` CLI so **kernel-side validation still applies** and the
+  arg is constrained to `[a-z_]+=[\w.\-]+`; actions are a fixed dispatch table,
+  never a shell string. `X-Content-Type-Options: nosniff` on every response.
+* **Quarantine-by-PID is explicit and logged**: resolves `/proc/pid/exe`,
+  compresses a copy, then `SIGKILL`s — a deliberate operator action behind the
+  token, mirroring tamperwatch's quarantine. Residual note: a loopback root
+  console is as trusted as root; the token defends against CSRF/other-origin
+  reads, not against an operator who is already root on the box.
+
+### 28. prguard_observe memory-access feed (v10) — AU-10 / SI-4
+
+The new observe knob only *emits* events (`ss_event("prguard: mem-access …")`)
+for cross-process memory access; it changes no enforcement decision. Reviewed:
+it is gated behind the same `ss_may_admin` + one-way-lock check as every other
+prguard knob (0600 sysfs), reads the flag with `READ_ONCE`, and skips self
+access (`current->pid != child->pid`) to avoid self-noise. It can be chatty on a
+busy box — it is off by default and toggled deliberately; the event ring's
+existing overwrite semantics bound memory. Honest limit: the kernel change is
+reviewed by hand, not recompiled here (no 6.12 headers in the build container).
 
 
 ---

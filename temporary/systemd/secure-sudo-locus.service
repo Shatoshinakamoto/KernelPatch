@@ -1,0 +1,19 @@
+[Unit]
+Description=secure_sudo Locus rotating-location allocator (v8 add-on)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/secure-sudo-locus serve
+Restart=on-failure
+RestartSec=3
+# Hardening: the allocator only hands out path strings; it needs no special
+# powers beyond creating its bucket dirs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/secure_sudo /var/log/secure_sudo
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

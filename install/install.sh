@@ -225,34 +225,18 @@ set_sig_enforce_cmdline() {
 # Userspace
 # ---------------------------------------------------------------------------
 build_install_userspace() {
-	log "building userspace (cli, pam, daemon, otp, pheonixbox, guards)"
+	log "building userspace (cli, pam, daemon, otp, pheonixbox)"
 	make -C "$US_SRC/cli" install
 	make -C "$US_SRC/pam" SECDIR="$SECDIR" install
 	make -C "$US_SRC/daemon" install
 	make -C "$US_SRC/otp" install
 	make -C "$US_SRC/pheonixbox" install
-	# Runtime guards (ProcGuard, DriverGuard, BootGuard) + the Locus location
-	# allocator. They share userspace/common (logging + hourly-rotated store).
-	make -C "$US_SRC/procguard" install
-	make -C "$US_SRC/driverguard" install
-	make -C "$US_SRC/bootguard" install
-	make -C "$US_SRC/locus" install
 
 	log "installing config to /etc/secure_sudo"
 	mkdir -p /etc/secure_sudo
 	for f in "$US_SRC"/config/*.conf; do
 		local base; base="$(basename "$f")"
 		[ -e "/etc/secure_sudo/$base" ] || install -m0644 "$f" "/etc/secure_sudo/$base"
-	done
-
-	# Guard config + state/log namespace under /etc|/var/.../secure_sudo/addons.
-	log "installing guard config to /etc/secure_sudo/addons"
-	install -d -m0700 /var/lib/secure_sudo/addons /var/log/secure_sudo/addons
-	mkdir -p /etc/secure_sudo/addons
-	for f in "$US_SRC"/config/addons/*.conf; do
-		local base; base="$(basename "$f")"
-		[ -e "/etc/secure_sudo/addons/$base" ] || \
-			install -m0644 "$f" "/etc/secure_sudo/addons/$base"
 	done
 
 	# Generate the uid->home map for #4 from /etc/passwd (regular users with
@@ -293,15 +277,6 @@ build_install_userspace() {
 	mkdir -p /usr/share/doc/secure-sudo
 	install -m0644 "$ROOT/kernel/security/secure_sudo/INTEGRATION.md" \
 		/usr/share/doc/secure-sudo/INTEGRATION.md 2>/dev/null || true
-
-	# Runtime-guard systemd units (service + timers). Installed but NOT enabled:
-	# the guards are opt-in and start in a safe mode (ProcGuard in monitor, no
-	# timers running) until the operator enables them. See docs/ADDONS.md.
-	local unitdir="${UNITDIR:-/lib/systemd/system}"
-	if [ -d "$unitdir" ]; then
-		install -m0644 "$US_SRC"/systemd/*.service "$unitdir"/ 2>/dev/null || true
-		install -m0644 "$US_SRC"/systemd/*.timer   "$unitdir"/ 2>/dev/null || true
-	fi
 
 	systemctl daemon-reload || true
 	systemctl enable secure-sudod.service 2>/dev/null || \
