@@ -20,20 +20,48 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
+#include <sys/wait.h>
+#include <time.h>
 
 #include "cli.h"
 
 #define OTP_HELPER "/usr/bin/secure-sudo-otp"
 #define PHEONIXBOX_HELPER "/usr/bin/secure-sudo-pheonixbox"
+#define EVIDENCE_HELPER "/usr/libexec/secure-sudo/evidence-export.sh"
+#define EVIDENCE_VERIFY_HELPER "/usr/libexec/secure-sudo/evidence-verify.py"
+#ifndef SYSTEMCTL
+#define SYSTEMCTL "/usr/bin/systemctl"
+#endif
+#ifndef ADDON_STATE_DIR
+#define ADDON_STATE_DIR "/var/lib/secure_sudo/addons"
+#endif
+#ifndef HEALTH_FILE
+#define HEALTH_FILE "/var/lib/secure_sudo/daemon.health"
+#endif
+#ifndef LOAD_HEALTH_FILE
+#define LOAD_HEALTH_FILE "/var/lib/secure_sudo/load.health"
+#endif
+#ifndef AUDIT_ENABLED_FILE
+#define AUDIT_ENABLED_FILE "/proc/sys/kernel/audit_enabled"
+#endif
+#ifndef BOOT_ID_FILE
+#define BOOT_ID_FILE "/proc/sys/kernel/random/boot_id"
+#endif
 
 static int require_root(void)
 {
+#ifdef SS_TESTING
+	if (getenv("SS_TEST_ALLOW_ROOT"))
+		return 0;
+#endif
 	if (geteuid() != 0) {
 		fprintf(stderr, "secure-sudo: must be run as root (try: sudo secure-sudo ...)\n");
 		return -1;
@@ -211,14 +239,160 @@ static int cmd_list_one(const char *name)
  */
 struct load_tally {
 	int accepted, rejected, skipped;
+	char rejected_keys[8][64];
+	int rejected_keys_count;
+	int rejected_keys_omitted;
 };
+
+static int read_value(const char *path, char *buf, size_t size);
+
+static int persist_load_health(const char *state, const struct load_tally *t)
+{
+	char temporary[512] = { 0 }, parent[512], record[768], boot_id[64];
+	struct stat st;
+	char *slash;
+	int fd = -1, dirfd = -1, saved_errno = 0;
+	int length, result = -1;
+	ssize_t written;
+	size_t offset = 0;
+	size_t used;
+	int i;
+
+	length = snprintf(temporary, sizeof(temporary), "%s.tmp.XXXXXX",
+			  LOAD_HEALTH_FILE);
+	if (length < 0 || (size_t)length >= sizeof(temporary)) {
+		errno = ENAMETOOLONG;
+		goto done;
+	}
+	length = snprintf(parent, sizeof(parent), "%s", LOAD_HEALTH_FILE);
+	if (length < 0 || (size_t)length >= sizeof(parent)) {
+		errno = ENAMETOOLONG;
+		goto done;
+	}
+	slash = strrchr(parent, '/');
+	if (slash) {
+		if (slash == parent)
+			slash[1] = '\0';
+		else
+			*slash = '\0';
+	} else {
+		snprintf(parent, sizeof(parent), ".");
+	}
+	if (mkdir(parent, 0700) != 0 && errno != EEXIST)
+		goto done;
+	if (lstat(parent, &st) != 0 || !S_ISDIR(st.st_mode) ||
+	    st.st_uid != 0 || (st.st_mode & 0022)) {
+		errno = EPERM;
+		goto done;
+	}
+	if (read_value(BOOT_ID_FILE, boot_id, sizeof(boot_id)) != 0)
+		goto done;
+	length = snprintf(record, sizeof(record), "updated=%lld boot_id=%s "
+			  "state=%s accepted=%d rejected=%d skipped=%d "
+			  "rejected_keys=",
+			  (long long)time(NULL), boot_id, state, t->accepted,
+			  t->rejected, t->skipped);
+	if (length < 0 || (size_t)length >= sizeof(record)) {
+		errno = EOVERFLOW;
+		goto done;
+	}
+	used = (size_t)length;
+	for (i = 0; i < t->rejected_keys_count; i++) {
+		length = snprintf(record + used, sizeof(record) - used, "%s%s",
+				  i ? "," : "", t->rejected_keys[i]);
+		if (length < 0 || (size_t)length >= sizeof(record) - used) {
+			errno = EOVERFLOW;
+			goto done;
+		}
+		used += (size_t)length;
+	}
+	if (!t->rejected_keys_count) {
+		length = snprintf(record + used, sizeof(record) - used, "-");
+		if (length < 0 || (size_t)length >= sizeof(record) - used) {
+			errno = EOVERFLOW;
+			goto done;
+		}
+		used += (size_t)length;
+	}
+	length = snprintf(record + used, sizeof(record) - used,
+			  " omitted=%d\n", t->rejected_keys_omitted);
+	if (length < 0 || (size_t)length >= sizeof(record) - used) {
+		errno = EOVERFLOW;
+		goto done;
+	}
+	used += (size_t)length;
+	fd = mkstemp(temporary);
+	if (fd < 0)
+		goto done;
+	if (fchmod(fd, 0600) != 0)
+		goto done;
+	while (offset < used) {
+		written = write(fd, record + offset, used - offset);
+		if (written < 0 && errno == EINTR)
+			continue;
+		if (written <= 0) {
+			if (written == 0)
+				errno = EIO;
+			goto done;
+		}
+		offset += (size_t)written;
+	}
+	if (fsync(fd) != 0)
+		goto done;
+	if (close(fd) != 0) {
+		fd = -1;
+		goto done;
+	}
+	fd = -1;
+	if (rename(temporary, LOAD_HEALTH_FILE) != 0)
+		goto done;
+	dirfd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (dirfd < 0 || fsync(dirfd) != 0)
+		goto done;
+	result = 0;
+
+done:
+	saved_errno = errno;
+	if (fd >= 0)
+		close(fd);
+	if (dirfd >= 0)
+		close(dirfd);
+	if (result != 0 && temporary[0])
+		unlink(temporary);
+	errno = saved_errno;
+	return result;
+}
 
 static void report(struct load_tally *t, const char *verdict, const char *what,
 		   int line, const char *detail)
 {
-	if (!strcmp(verdict, "rejected"))
+	if (!strcmp(verdict, "rejected")) {
+		char key[64];
+		const char *end = strchr(what, '=');
+		size_t i, len = end ? (size_t)(end - what) : strlen(what);
+
 		t->rejected++;
-	else if (!strcmp(verdict, "skipped"))
+		while (len && (what[len - 1] == ' ' || what[len - 1] == '\t'))
+			len--;
+		if (len > sizeof(key) - 1)
+			len = sizeof(key) - 1;
+		for (i = 0; i < len; i++) {
+			unsigned char c = what[i];
+
+			key[i] = ((c >= 'a' && c <= 'z') ||
+				  (c >= 'A' && c <= 'Z') ||
+				  (c >= '0' && c <= '9') ||
+				  c == '_' || c == '-' || c == '.') ?
+				 (char)c : '_';
+		}
+		key[len] = '\0';
+		if (t->rejected_keys_count <
+		    (int)(sizeof(t->rejected_keys) / sizeof(t->rejected_keys[0])))
+			snprintf(t->rejected_keys[t->rejected_keys_count++],
+				 sizeof(t->rejected_keys[0]), "%s", key);
+		else
+			t->rejected_keys_omitted++;
+	} else if (!strcmp(verdict, "skipped"))
 		t->skipped++;
 	else
 		t->accepted++;
@@ -340,18 +514,24 @@ static int cmd_load(int force)
 		.otpdir = "/var/lib/secure_sudo/otp", .sysfs = SYSFS, .secfs = SECFS,
 		.quiet = 1, .pam_soft = 1,
 	};
-	struct load_tally t = { 0, 0, 0 };
+	struct load_tally t = { 0 };
 	size_t i;
 
 	printf("secure-sudo load: %s\n", CONFIG_DIR);
 	if (access(SYSFS, F_OK) != 0) {
 		fprintf(stderr, "secure-sudo: LSM not active (no %s); nothing loaded\n", SYSFS);
+		if (persist_load_health("refused", &t) != 0)
+			fprintf(stderr, "secure-sudo: could not persist load health: %s\n",
+				strerror(errno));
 		return -1;
 	}
 	if (policy_lint(&o) > 0) {
 		if (!force) {
 			fprintf(stderr, "secure-sudo: load refused: fix the errors above "
 				"(nothing was changed), or use `load --force`\n");
+			if (persist_load_health("refused", &t) != 0)
+				fprintf(stderr, "secure-sudo: could not persist load health: %s\n",
+					strerror(errno));
 			return -1;
 		}
 		fprintf(stderr, "secure-sudo: --force: loading despite the errors above\n");
@@ -362,6 +542,11 @@ static int cmd_load(int force)
 
 	printf("load: %d accepted, %d rejected, %d skipped\n",
 	       t.accepted, t.rejected, t.skipped);
+	if (persist_load_health(t.rejected ? "partial" : "complete", &t) != 0) {
+		fprintf(stderr, "secure-sudo: load was applied but could not persist "
+			"load health: %s\n", strerror(errno));
+		return -1;
+	}
 	if (t.rejected) {
 		fprintf(stderr, "secure-sudo: load INCOMPLETE: the kernel is running a "
 			"partial policy; fix the rejected lines and run load again\n");
@@ -401,6 +586,723 @@ static int cmd_status(void)
 	printf("%-24s ", "binvault_maint");
 	if (cat_file(path) != 0) printf("(unavailable)\n");
 	return 0;
+}
+
+static int read_value(const char *path, char *buf, size_t size)
+{
+	int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	ssize_t n;
+
+	if (fd < 0)
+		return -1;
+	n = read(fd, buf, size - 1);
+	close(fd);
+	if (n <= 0)
+		return -1;
+	buf[n] = '\0';
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' ||
+			 buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+		buf[--n] = '\0';
+	return 0;
+}
+
+static int read_counter(const char *name, unsigned long long *value)
+{
+	char path[256], buf[64], *end;
+
+	snprintf(path, sizeof(path), SYSFS "/%s", name);
+	if (read_value(path, buf, sizeof(buf)) != 0)
+		return -1;
+	errno = 0;
+	*value = strtoull(buf, &end, 10);
+	return errno || end == buf || *end ? -1 : 0;
+}
+
+static const char *audit_feed_health(void)
+{
+	char path[256], value[32], *end;
+	unsigned long enabled;
+
+	snprintf(path, sizeof(path), SYSFS "/audit_events");
+	if (read_value(path, value, sizeof(value)) != 0)
+		return "unavailable";
+	errno = 0;
+	enabled = strtoul(value, &end, 10);
+	if (errno || end == value || *end || enabled > 1)
+		return "unavailable";
+	if (!enabled)
+		return "disabled";
+	if (read_value(AUDIT_ENABLED_FILE, value, sizeof(value)) != 0)
+		return "unavailable";
+	errno = 0;
+	enabled = strtoul(value, &end, 10);
+	if (errno || end == value || *end)
+		return "unavailable";
+	return enabled ? "active" : "inactive";
+}
+
+static int heartbeat_counter(const char *heartbeat, const char *name,
+			     unsigned long long *value)
+{
+	char key[64], *end;
+	const char *p;
+
+	snprintf(key, sizeof(key), "%s=", name);
+	p = strstr(heartbeat, key);
+	if (!p)
+		return -1;
+	p += strlen(key);
+	errno = 0;
+	*value = strtoull(p, &end, 10);
+	return errno || end == p ? -1 : 0;
+}
+
+static int heartbeat_value(const char *heartbeat, const char *name,
+			   char *value, size_t size)
+{
+	char key[64], *end;
+	const char *p;
+	size_t len;
+
+	snprintf(key, sizeof(key), "%s=", name);
+	p = strstr(heartbeat, key);
+	if (!p)
+		return -1;
+	p += strlen(key);
+	end = strpbrk(p, " \t\r\n");
+	len = end ? (size_t)(end - p) : strlen(p);
+	if (!len || len >= size)
+		return -1;
+	memcpy(value, p, len);
+	value[len] = '\0';
+	return 0;
+}
+
+static int read_load_health(char *state, size_t state_size,
+			    unsigned long long *updated,
+			    unsigned long long *accepted,
+			    unsigned long long *rejected,
+			    unsigned long long *skipped,
+			    unsigned long long *rejected_omitted,
+			    char *rejected_keys, size_t rejected_keys_size,
+			    int test_override)
+{
+	char record[768], updated_text[32], record_boot_id[64];
+	char current_boot_id[64], *end;
+	struct stat st;
+
+	if (lstat(LOAD_HEALTH_FILE, &st) != 0)
+		return errno == ENOENT ? 1 : -1;
+	if (!S_ISREG(st.st_mode) ||
+	    (!test_override &&
+	     (st.st_uid != 0 || (st.st_mode & 07777) != 0600)) ||
+	    read_value(LOAD_HEALTH_FILE, record, sizeof(record)) != 0)
+		return -1;
+	if (heartbeat_value(record, "state", state, state_size) != 0 ||
+	    (strcmp(state, "complete") && strcmp(state, "partial") &&
+	     strcmp(state, "refused") && strcmp(state, "stale")) ||
+	    heartbeat_value(record, "updated", updated_text,
+			    sizeof(updated_text)) != 0 ||
+	    heartbeat_value(record, "boot_id", record_boot_id,
+			    sizeof(record_boot_id)) != 0 ||
+	    heartbeat_value(record, "rejected_keys", rejected_keys,
+			    rejected_keys_size) != 0 ||
+	    read_value(BOOT_ID_FILE, current_boot_id,
+		       sizeof(current_boot_id)) != 0)
+		return -1;
+	errno = 0;
+	*updated = strtoull(updated_text, &end, 10);
+	if (errno || end == updated_text || *end ||
+	    heartbeat_counter(record, "accepted", accepted) != 0 ||
+	    heartbeat_counter(record, "rejected", rejected) != 0 ||
+	    heartbeat_counter(record, "skipped", skipped) != 0 ||
+	    heartbeat_counter(record, "omitted", rejected_omitted) != 0)
+		return -1;
+	if (strcmp(record_boot_id, current_boot_id))
+		snprintf(state, state_size, "stale");
+	return 0;
+}
+
+static int settings_equal(const struct knob *k, const char *configured,
+			  const char *live)
+{
+	char *end_cfg, *end_live;
+	unsigned long cfg_num, live_num;
+
+	if (k->type == K_BOOL) {
+		int cfg_true = !strcasecmp(configured, "1") ||
+			       !strcasecmp(configured, "yes") ||
+			       !strcasecmp(configured, "on") ||
+			       !strcasecmp(configured, "true") ||
+			       !strcasecmp(configured, "y");
+		int live_true = !strcasecmp(live, "1") ||
+				!strcasecmp(live, "yes") ||
+				!strcasecmp(live, "on") ||
+				!strcasecmp(live, "true") ||
+				!strcasecmp(live, "y");
+		return cfg_true == live_true;
+	}
+	if (k->type == K_U32) {
+		errno = 0;
+		cfg_num = strtoul(configured, &end_cfg, 10);
+		if (errno || end_cfg == configured || *end_cfg)
+			return 0;
+		errno = 0;
+		live_num = strtoul(live, &end_live, 10);
+		return !errno && end_live != live && !*end_live &&
+		       cfg_num == live_num;
+	}
+	return !strcmp(configured, live);
+}
+
+struct health_unit {
+	const char *unit;
+	int check_active;
+	const char *baseline;
+	const char *scan_key;
+	int is_timer;
+};
+
+static int query_health_unit(const char *unit, char *load, size_t load_size,
+			     char *active, size_t active_size,
+			     char *enabled, size_t enabled_size,
+			     char *last_trigger, size_t trigger_size,
+			     char *result, size_t result_size,
+			     char *exit_status, size_t exit_status_size,
+			     char *last_exit, size_t last_exit_size,
+			     unsigned long long *last_exit_monotonic)
+{
+	char output[384], *save = NULL, *line;
+	size_t used = 0;
+	int pipefd[2], status, fd;
+	int output_overflow = 0;
+	pid_t child;
+	ssize_t n;
+
+	if (pipe(pipefd) != 0)
+		return -1;
+	child = fork();
+	if (child < 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return -1;
+	}
+	if (child == 0) {
+		char *const argv[] = {
+			(char *)SYSTEMCTL, "show", "--property=LoadState",
+			"--property=ActiveState", "--property=UnitFileState",
+			"--property=LastTriggerUSec",
+			"--property=Result", "--property=ExecMainStatus",
+			"--property=ExecMainExitTimestamp",
+			"--property=ExecMainExitTimestampMonotonic",
+			(char *)unit, NULL
+		};
+
+		close(pipefd[0]);
+		if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+			_exit(127);
+		close(pipefd[1]);
+		fd = open("/dev/null", O_WRONLY);
+		if (fd >= 0) {
+			dup2(fd, STDERR_FILENO);
+			close(fd);
+		}
+		execv(SYSTEMCTL, argv);
+		_exit(127);
+	}
+	close(pipefd[1]);
+	while (used < sizeof(output) - 1) {
+		n = read(pipefd[0], output + used, sizeof(output) - 1 - used);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		used += (size_t)n;
+	}
+	output_overflow = used == sizeof(output) - 1;
+	close(pipefd[0]);
+	output[used] = '\0';
+	if (waitpid(child, &status, 0) != child ||
+	    !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
+	    output_overflow)
+		return -1;
+
+	*load = *active = *enabled = '\0';
+	snprintf(result, result_size, "unknown");
+	snprintf(exit_status, exit_status_size, "unknown");
+	snprintf(last_exit, last_exit_size, "n/a");
+	*last_exit_monotonic = 0;
+	for (line = strtok_r(output, "\n", &save); line;
+	     line = strtok_r(NULL, "\n", &save)) {
+		char *value = strchr(line, '=');
+
+		if (!value)
+			continue;
+		*value++ = '\0';
+		if (!strcmp(line, "LoadState"))
+			snprintf(load, load_size, "%s", value);
+		else if (!strcmp(line, "ActiveState"))
+			snprintf(active, active_size, "%s", value);
+		else if (!strcmp(line, "UnitFileState"))
+			snprintf(enabled, enabled_size, "%s", value);
+		else if (!strcmp(line, "LastTriggerUSec")) {
+			size_t i;
+
+			for (i = 0; value[i] && i + 1 < trigger_size; i++) {
+				unsigned char c = value[i];
+
+				last_trigger[i] =
+					(c >= 'a' && c <= 'z') ||
+					(c >= 'A' && c <= 'Z') ||
+					(c >= '0' && c <= '9') ||
+					c == ' ' || c == ':' || c == '-' ||
+					c == '_' ? c : '?';
+			}
+			last_trigger[i] = '\0';
+		} else if (!strcmp(line, "Result")) {
+			snprintf(result, result_size, "%s", value);
+		} else if (!strcmp(line, "ExecMainStatus")) {
+			snprintf(exit_status, exit_status_size, "%s", value);
+		} else if (!strcmp(line, "ExecMainExitTimestamp")) {
+			size_t i;
+
+			for (i = 0; value[i] && i + 1 < last_exit_size; i++) {
+				unsigned char c = value[i];
+
+				last_exit[i] =
+					(c >= 'a' && c <= 'z') ||
+					(c >= 'A' && c <= 'Z') ||
+					(c >= '0' && c <= '9') ||
+					c == ' ' || c == ':' || c == '-' ||
+					c == '_' ? c : '?';
+			}
+			last_exit[i] = '\0';
+			if (!*last_exit)
+				snprintf(last_exit, last_exit_size, "n/a");
+		} else if (!strcmp(line, "ExecMainExitTimestampMonotonic")) {
+			char *end;
+
+			errno = 0;
+			*last_exit_monotonic = strtoull(value, &end, 10);
+			if (errno || end == value || *end)
+				*last_exit_monotonic = 0;
+		}
+	}
+	return *load && *active && *enabled ? 0 : -1;
+}
+
+static int unit_is_enabled(const char *state)
+{
+	return !strcmp(state, "enabled") ||
+	       !strcmp(state, "enabled-runtime") ||
+	       !strcmp(state, "linked") ||
+	       !strcmp(state, "linked-runtime");
+}
+
+static const char *baseline_health(const char *relative, time_t now,
+				   unsigned long long *age, int test_override)
+{
+	char path[512];
+	struct stat st;
+
+	*age = 0;
+	if (!relative)
+		return "not_applicable";
+	if (snprintf(path, sizeof(path), "%s/%s", ADDON_STATE_DIR,
+		     relative) >= (int)sizeof(path))
+		return "unavailable";
+	if (lstat(path, &st) != 0)
+		return errno == ENOENT ? "missing" : "unavailable";
+	if (!S_ISREG(st.st_mode) || (!test_override && st.st_uid != 0))
+		return "untrusted";
+	if (st.st_mtime > now + 300)
+		return "future";
+	*age = now > st.st_mtime ? (unsigned long long)(now - st.st_mtime) : 0;
+	return *age > 30ULL * 24 * 60 * 60 ? "stale" : "current";
+}
+
+static int cmd_health(int json)
+{
+	static const struct health_unit units[] = {
+		{ .unit = "secure-sudo-procguard.service", .check_active = 1 },
+		{ .unit = "secure-sudo-driverguard.service",
+		  .scan_key = "driverguard" },
+		{ .unit = "secure-sudo-biosguard.service",
+		  .scan_key = "biosguard" },
+		{ .unit = "secure-sudo-bootguard.service",
+		  .scan_key = "bootguard" },
+		{ .unit = "secure-sudo-bootguard-restore.service" },
+		{ .unit = "secure-sudo-locus.service", .check_active = 1 },
+		{ .unit = "secure-sudo-tamperwatch.service", .check_active = 1 },
+		{ .unit = "secure-sudo-gui.service", .check_active = 1 },
+		{ .unit = "secure-sudo-driverguard.timer", .check_active = 1,
+		  .baseline = "driverguard/manifest",
+		  .scan_key = "driverguard", .is_timer = 1 },
+		{ .unit = "secure-sudo-biosguard.timer", .check_active = 1,
+		  .baseline = "biosguard/fingerprint",
+		  .scan_key = "biosguard", .is_timer = 1 },
+		{ .unit = "secure-sudo-bootguard.timer", .check_active = 1,
+		  .baseline = "bootguard/manifest",
+		  .scan_key = "bootguard", .is_timer = 1 },
+	};
+	struct cfg_file cfg;
+	struct stat st;
+	char path[256], live[512], healthbuf[512], units_json[4096];
+	char transport[16] = "unknown", remote_value[32] = "unknown";
+	char retention_state[16] = "unknown";
+	char load_state[24] = "unknown";
+	char rejected_keys[512] = "unknown";
+	const char *audit_feed;
+	char scan_keys[3][16] = { "driverguard", "biosguard", "bootguard" };
+	char scan_results[3][32] = { "unknown", "unknown", "unknown" };
+	char scan_statuses[3][16] = { "unknown", "unknown", "unknown" };
+	char scan_last_exits[3][64] = { "n/a", "n/a", "n/a" };
+	unsigned long long scan_ages[3] = { 0, 0, 0 };
+	int scan_age_known[3] = { 0, 0, 0 };
+	const char *policy = "ok", *daemon = "inactive", *remote = remote_value;
+	const char *addon_health;
+	const char *overall;
+	unsigned long long event_drops = 0, audit_drops = 0;
+	unsigned long long remote_sent = 0, remote_failures = 0;
+	unsigned long long queue_records = 0, queue_bytes = 0, queue_dropped = 0;
+	unsigned long long local_log_failures = 0;
+	unsigned long long load_updated = 0, load_accepted = 0;
+	unsigned long long load_rejected = 0, load_skipped = 0;
+	unsigned long long load_rejected_omitted = 0;
+	int counters_ok, mismatches = 0, errors = 0, i, lsm_active, healthy;
+	int audit_configured = 0;
+	int heartbeat_stat, heartbeat_metrics = 0, test_override = 0;
+	int load_health;
+	int systemd_available = 1, unit_errors = 0;
+	size_t units_used = 0;
+	time_t now = time(NULL);
+	struct sysinfo uptime_info;
+	int uptime_available = sysinfo(&uptime_info) == 0;
+
+#ifdef SS_TESTING
+	test_override = getenv("SS_TEST_ALLOW_ROOT") != NULL;
+#endif
+	load_health = read_load_health(load_state, sizeof(load_state),
+				       &load_updated, &load_accepted,
+				       &load_rejected, &load_skipped,
+				       &load_rejected_omitted, rejected_keys,
+				       sizeof(rejected_keys),
+				       test_override);
+	if (load_health < 0)
+		snprintf(load_state, sizeof(load_state), "untrusted");
+	lsm_active = access(SYSFS, F_OK) == 0;
+	counters_ok = read_counter("events_dropped", &event_drops) == 0 &&
+		      read_counter("audit_events_dropped", &audit_drops) == 0;
+	heartbeat_stat = lstat(HEALTH_FILE, &st);
+	if (heartbeat_stat == 0 && S_ISREG(st.st_mode) &&
+	    (test_override || (st.st_uid == 0 && (st.st_mode & 07777) == 0600)) &&
+	    now >= st.st_mtime &&
+	    now - st.st_mtime <= 15) {
+		daemon = "active";
+		if (read_value(HEALTH_FILE, healthbuf, sizeof(healthbuf)) == 0) {
+			heartbeat_value(healthbuf, "remote_state", remote_value,
+					sizeof(remote_value));
+			heartbeat_metrics =
+				heartbeat_counter(healthbuf, "remote_sent",
+						  &remote_sent) == 0 &&
+				heartbeat_counter(healthbuf, "remote_failures",
+						  &remote_failures) == 0 &&
+				heartbeat_counter(healthbuf, "remote_queue_records",
+						  &queue_records) == 0 &&
+				heartbeat_counter(healthbuf, "remote_queue_bytes",
+						  &queue_bytes) == 0 &&
+				heartbeat_counter(healthbuf, "remote_queue_dropped",
+						  &queue_dropped) == 0 &&
+				heartbeat_counter(healthbuf, "local_log_failures",
+						  &local_log_failures) == 0 &&
+				heartbeat_value(healthbuf, "remote_transport",
+						transport,
+						sizeof(transport)) == 0 &&
+				heartbeat_value(healthbuf, "retention_state",
+						retention_state,
+						sizeof(retention_state)) == 0;
+			if (heartbeat_metrics &&
+			    strcmp(retention_state, "active") &&
+			    strcmp(retention_state, "held") &&
+			    strcmp(retention_state, "hold_error"))
+				heartbeat_metrics = 0;
+		}
+	} else if (heartbeat_stat == 0 || errno != ENOENT)
+		daemon = heartbeat_stat == 0 && !test_override &&
+			 (st.st_uid != 0 || (st.st_mode & 07777) != 0600) ?
+			 "untrusted" : "stale";
+
+	if (cfg_parse(CONFIG_DIR "/secure-sudo.conf", &cfg) != 0) {
+		policy = "unavailable";
+		errors++;
+	} else {
+		for (i = 0; i < cfg.n; i++) {
+			const struct cfg_entry *e = &cfg.e[i];
+			const struct knob *k = e->bad ? NULL : find_knob(e->key);
+			char why[128];
+
+			if (e->bad) {
+				errors++;
+				continue;
+			}
+			if (!k && is_daemon_key(e->key)) {
+				if (check_daemon_value(e->key, e->val, why,
+						       sizeof(why)))
+					errors++;
+				continue;
+			}
+			if (!k && !strcmp(e->key, "timevault_enabled"))
+				continue;
+			if (!k) {
+				errors++;
+				continue;
+			}
+			if (check_value(k, e->val, why, sizeof(why))) {
+				errors++;
+				continue;
+			}
+			if (!strcmp(e->key, "audit_events"))
+				audit_configured = settings_equal(k, e->val, "1");
+			snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
+			if (read_value(path, live, sizeof(live)) != 0 ||
+			    !settings_equal(k, e->val, live))
+				mismatches++;
+		}
+		cfg_free(&cfg);
+		if (errors)
+			policy = "invalid";
+		else if (mismatches)
+			policy = "mismatch";
+	}
+	audit_feed = audit_feed_health();
+
+	units_json[0] = '[';
+	units_json[1] = '\0';
+	units_used = 1;
+	for (i = 0; i < (int)(sizeof(units) / sizeof(units[0])); i++) {
+		char load[32], active[32], enabled[32];
+		char last_trigger[64] = "n/a";
+		char result[32], exit_status[16], last_exit[64];
+		unsigned long long last_exit_monotonic = 0;
+		char baseline[24];
+		char scan_state[32] = "not_applicable";
+		char scan_exit[16] = "unknown";
+		char scan_last_exit[64] = "n/a";
+		unsigned long long scan_age = 0;
+		int scan_age_known_here = 0;
+		unsigned long long baseline_age = 0;
+		int added;
+		int scan_index;
+
+		if (query_health_unit(units[i].unit, load, sizeof(load),
+				      active, sizeof(active), enabled,
+				      sizeof(enabled), last_trigger,
+				      sizeof(last_trigger), result,
+				      sizeof(result), exit_status,
+				      sizeof(exit_status), last_exit,
+				      sizeof(last_exit),
+				      &last_exit_monotonic) != 0) {
+			systemd_available = 0;
+			break;
+		}
+		scan_index = -1;
+		if (units[i].scan_key) {
+			int scan_i;
+
+			for (scan_i = 0; scan_i < 3; scan_i++)
+				if (!strcmp(units[i].scan_key, scan_keys[scan_i])) {
+					scan_index = scan_i;
+					break;
+				}
+		}
+		if (scan_index >= 0 && !units[i].is_timer) {
+			snprintf(scan_results[scan_index],
+				 sizeof(scan_results[scan_index]), "%s", result);
+			snprintf(scan_statuses[scan_index],
+				 sizeof(scan_statuses[scan_index]), "%s", exit_status);
+			snprintf(scan_last_exits[scan_index],
+				 sizeof(scan_last_exits[scan_index]), "%s", last_exit);
+			if (uptime_available && last_exit_monotonic &&
+			    last_exit_monotonic <=
+				    (unsigned long long)uptime_info.uptime * 1000000ULL) {
+				scan_ages[scan_index] =
+					(unsigned long long)uptime_info.uptime -
+					last_exit_monotonic / 1000000ULL;
+				scan_age_known[scan_index] = 1;
+			}
+#ifdef SS_TESTING
+			if (getenv("SS_TEST_STALE_SCAN")) {
+				scan_ages[scan_index] = 26ULL * 60 * 60 + 1;
+				scan_age_known[scan_index] = 1;
+				scan_age = scan_ages[scan_index];
+				scan_age_known_here = 1;
+			}
+#endif
+			if (strcmp(last_exit, "n/a") &&
+			    (strcmp(result, "success") || strcmp(exit_status, "0")))
+				unit_errors++;
+		} else if (scan_index >= 0) {
+			snprintf(scan_state, sizeof(scan_state), "%s",
+				 scan_results[scan_index]);
+			snprintf(scan_exit, sizeof(scan_exit), "%s",
+				 scan_statuses[scan_index]);
+			snprintf(scan_last_exit, sizeof(scan_last_exit), "%s",
+				 scan_last_exits[scan_index]);
+			scan_age = scan_ages[scan_index];
+			scan_age_known_here = scan_age_known[scan_index];
+			if (unit_is_enabled(enabled) &&
+			    (strcmp(scan_state, "success") ||
+			     strcmp(scan_exit, "0") ||
+			     !strcmp(scan_last_exit, "n/a") ||
+			     !scan_age_known_here || scan_age > 26ULL * 60 * 60))
+				unit_errors++;
+		}
+		if (units[i].baseline) {
+			const char *state = baseline_health(units[i].baseline, now,
+						    &baseline_age,
+						    test_override);
+
+			snprintf(baseline, sizeof(baseline), "%s", state);
+			if (unit_is_enabled(enabled) &&
+			    strcmp(load, "not-found") &&
+			    strcmp(baseline, "current"))
+				unit_errors++;
+		} else {
+			snprintf(baseline, sizeof(baseline), "not_applicable");
+		}
+		if (strcmp(load, "not-found") &&
+		    ((!strcmp(active, "failed")) ||
+		     (units[i].check_active && unit_is_enabled(enabled) &&
+		      strcmp(active, "active"))))
+			unit_errors++;
+		added = snprintf(units_json + units_used,
+				 sizeof(units_json) - units_used,
+				 "%s{\"unit\":\"%s\",\"load\":\"%s\","
+				 "\"active\":\"%s\",\"enabled\":\"%s\","
+				 "\"last_trigger\":\"%s\",\"baseline\":\"%s\","
+				 "\"baseline_age_seconds\":%llu,"
+				 "\"scan_result\":\"%s\",\"scan_exit_status\":\"%s\","
+				 "\"last_scan\":\"%s\",\"scan_age_seconds\":",
+				 units_used ? "," : "", units[i].unit, load,
+				 active, enabled, last_trigger, baseline,
+				 baseline_age, scan_state, scan_exit, scan_last_exit);
+		if (added < 0 || (size_t)added >= sizeof(units_json) - units_used) {
+			systemd_available = 0;
+			break;
+		}
+		units_used += (size_t)added;
+		if (scan_age_known_here)
+			added = snprintf(units_json + units_used,
+					 sizeof(units_json) - units_used,
+					 "%llu}", scan_age);
+		else
+			added = snprintf(units_json + units_used,
+					 sizeof(units_json) - units_used,
+					 "null}");
+		if (added < 0 || (size_t)added >= sizeof(units_json) - units_used) {
+			systemd_available = 0;
+			break;
+		}
+		units_used += (size_t)added;
+	}
+	if (systemd_available) {
+		if (units_used + 2 > sizeof(units_json))
+			systemd_available = 0;
+		else {
+			units_json[units_used++] = ']';
+			units_json[units_used] = '\0';
+		}
+	}
+	if (!systemd_available)
+		snprintf(units_json, sizeof(units_json), "null");
+	addon_health = !systemd_available ? "unavailable" :
+		       unit_errors ? "degraded" : "healthy";
+
+	healthy = lsm_active && !strcmp(daemon, "active") &&
+		  !strcmp(policy, "ok") && counters_ok && heartbeat_metrics &&
+		  systemd_available && unit_errors == 0 &&
+		  event_drops == 0 && audit_drops == 0 &&
+		  queue_records == 0 && queue_bytes == 0 && queue_dropped == 0;
+	if (!strcmp(retention_state, "hold_error"))
+		healthy = 0;
+	if (!strcmp(transport, "udp") && strcmp(remote, "disabled"))
+		healthy = 0;
+	if (!strcmp(transport, "tls") && remote_sent == 0)
+		healthy = 0;
+	if (remote_failures)
+		healthy = 0;
+	if (local_log_failures)
+		healthy = 0;
+	if (audit_configured && strcmp(audit_feed, "active"))
+		healthy = 0;
+	if (load_health != 0 || !strcmp(load_state, "partial") ||
+	    !strcmp(load_state, "refused") || !strcmp(load_state, "stale"))
+		healthy = 0;
+	overall = healthy ? "healthy" : "degraded";
+
+	if (json) {
+		printf("{\"overall\":\"%s\",\"lsm\":\"%s\","
+		       "\"daemon\":\"%s\",\"policy\":\"%s\","
+		       "\"audit_feed\":\"%s\","
+		       "\"remote_transport\":\"%s\","
+		       "\"remote_forwarding\":\"%s\","
+		       "\"remote_sent\":%llu,\"remote_failures\":%llu,"
+		       "\"remote_queue_records\":%llu,"
+		       "\"remote_queue_bytes\":%llu,"
+		       "\"remote_queue_dropped\":%llu,"
+		       "\"local_log_failures\":%llu,"
+		       "\"retention_state\":\"%s\","
+		       "\"heartbeat_metrics\":\"%s\","
+		       "\"last_load\":\"%s\",\"load_updated\":%llu,"
+		       "\"load_accepted\":%llu,\"load_rejected\":%llu,"
+		       "\"load_skipped\":%llu,\"load_rejected_keys\":\"%s\","
+		       "\"load_rejected_keys_omitted\":%llu,"
+		       "\"systemd\":\"%s\",\"addon_health\":\"%s\","
+		       "\"addon_units\":%s,"
+		       "\"policy_mismatches\":%d,\"events_dropped\":",
+		       overall, lsm_active ? "active" : "inactive", daemon,
+		       policy, audit_feed, transport, remote, remote_sent, remote_failures,
+		       queue_records, queue_bytes, queue_dropped, local_log_failures,
+		       retention_state,
+		       heartbeat_metrics ? "available" : "unavailable",
+		       load_state, load_updated, load_accepted, load_rejected,
+		       load_skipped, rejected_keys, load_rejected_omitted,
+		       systemd_available ? "available" : "unavailable",
+		       addon_health,
+		       units_json, mismatches);
+		if (counters_ok)
+			printf("%llu,\"audit_events_dropped\":%llu}\n",
+			       event_drops, audit_drops);
+		else
+			printf("null,\"audit_events_dropped\":null}\n");
+	} else {
+		printf("secure_sudo health: %s\n", overall);
+		printf("LSM: %s\nDaemon heartbeat: %s\nPolicy: %s\nAudit feed: %s\n"
+		       "Remote forwarding: %s via %s (%llu sent, %llu failures; "
+		       "%llu queued records, %llu bytes, %llu dropped)\n"
+		       "Local log write failures: %llu",
+		       lsm_active ? "active" : "inactive", daemon, policy, audit_feed,
+		       remote,
+		       transport, remote_sent, remote_failures, queue_records,
+		       queue_bytes, queue_dropped, local_log_failures);
+		if (mismatches)
+			printf(" (%d configured/live mismatch(es))", mismatches);
+		putchar('\n');
+		printf("Log retention: %s\n", retention_state);
+		printf("Add-on/timer health: %s (%d enabled unit failure(s))\n",
+		       addon_health, unit_errors);
+		printf("Last policy load: %s (%llu accepted, %llu rejected, "
+		       "%llu skipped; updated %llu; rejected keys: %s; "
+		       "%llu omitted)\n",
+		       load_state, load_accepted, load_rejected, load_skipped,
+		       load_updated, rejected_keys, load_rejected_omitted);
+		if (counters_ok)
+			printf("Event ring loss: %llu\nAudit backlog loss: %llu\n",
+			       event_drops, audit_drops);
+		else
+			printf("Event loss counters: unavailable\n");
+	}
+	return strcmp(overall, "healthy") != 0;
 }
 
 /*
@@ -635,6 +1537,42 @@ static int cmd_pheonixbox(int argc, char **argv)
 	return -1;
 }
 
+static int cmd_evidence_export(int argc, char **argv)
+{
+	char **nargv = calloc((size_t)argc, sizeof(char *));
+	int i;
+
+	if (!nargv)
+		return 1;
+	nargv[0] = (char *)EVIDENCE_HELPER;
+	for (i = 2; i < argc; i++)
+		nargv[i - 1] = argv[i];
+	nargv[argc - 1] = NULL;
+	execv(EVIDENCE_HELPER, nargv);
+	fprintf(stderr, "secure-sudo: cannot exec %s: %s\n", EVIDENCE_HELPER,
+		strerror(errno));
+	free(nargv);
+	return 1;
+}
+
+static int cmd_evidence_verify(int argc, char **argv)
+{
+	char **nargv = calloc((size_t)argc, sizeof(char *));
+	int i;
+
+	if (!nargv)
+		return 1;
+	nargv[0] = (char *)EVIDENCE_VERIFY_HELPER;
+	for (i = 2; i < argc; i++)
+		nargv[i - 1] = argv[i];
+	nargv[argc - 1] = NULL;
+	execv(EVIDENCE_VERIFY_HELPER, nargv);
+	fprintf(stderr, "secure-sudo: cannot exec %s: %s\n",
+		EVIDENCE_VERIFY_HELPER, strerror(errno));
+	free(nargv);
+	return 1;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -644,6 +1582,9 @@ static void usage(void)
 "  load [--force]       lint, then push /etc/secure_sudo/* into the kernel and\n"
 "                       report every setting as accepted/rejected/skipped\n"
 "  status               show current kernel policy state\n"
+"  health [--json]      compare config/live policy and report component health\n"
+"  evidence-export FILE [--signing-key EXTERNAL.pem] export incident evidence\n"
+"  evidence-verify FILE [--trusted-key PUBLIC.pem] verify an evidence bundle\n"
 "  settings             list every configurable knob and policy list\n"
 "  get [<knob>]         show one (or all) live scalar knob value(s)\n"
 "  set <knob> <value>   set a scalar knob and persist it to the config\n"
@@ -657,7 +1598,8 @@ static void usage(void)
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n"
 "  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list snapshot tamper protection\n"
 "\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
-"All commands but lint are root-only and refused once the config is locked.\n");
+"Kernel policy commands are root-only and refused once the config is locked;\n"
+"lint and evidence-verify are read-only and do not require root.\n");
 	vault_allow_usage();
 }
 
@@ -675,6 +1617,10 @@ int main(int argc, char **argv)
 		return cmd_otp(argc, argv) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "pheonixbox"))
 		return cmd_pheonixbox(argc, argv) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "evidence-export"))
+		return cmd_evidence_export(argc, argv);
+	if (!strcmp(argv[1], "evidence-verify"))
+		return cmd_evidence_verify(argc, argv);
 
 	/* lint is read-only and may run as anyone (e.g. before install). */
 	if (!strcmp(argv[1], "lint"))
@@ -688,6 +1634,9 @@ int main(int argc, char **argv)
 		return cmd_load(argc == 3) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
+	if (!strcmp(argv[1], "health") &&
+	    (argc == 2 || (argc == 3 && !strcmp(argv[2], "--json"))))
+		return cmd_health(argc == 3);
 	if (!strcmp(argv[1], "settings"))
 		return cmd_settings();
 	if (!strcmp(argv[1], "get") && argc <= 3)

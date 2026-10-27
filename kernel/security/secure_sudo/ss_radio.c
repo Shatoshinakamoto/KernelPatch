@@ -158,11 +158,15 @@ int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
 
 	if (wifi_blocked() && name_in(base, wifi_modules, ARRAY_SIZE(wifi_modules))) {
 		pr_warn("radio: refused Wi-Fi module load: %s\n", base);
-		ss_event("radio: refused Wi-Fi module %s", base);
+		ss_event_typed("radio_guard", "module_loader", "load_module",
+			       base, "deny", "wifi_disabled",
+			       "radio: refused Wi-Fi module %s", base);
 		ret = -EPERM;
 	} else if (bt_blocked() && name_in(base, bt_modules, ARRAY_SIZE(bt_modules))) {
 		pr_warn("radio: refused Bluetooth module load: %s\n", base);
-		ss_event("radio: refused Bluetooth module %s", base);
+		ss_event_typed("radio_guard", "module_loader", "load_module",
+			       base, "deny", "bluetooth_disabled",
+			       "radio: refused Bluetooth module %s", base);
 		ret = -EPERM;
 	}
 	kfree(buf);
@@ -177,7 +181,9 @@ int ss_radio_socket_create(int family, int type, int protocol, int kern)
 		return 0;
 	if (family == AF_BLUETOOTH && bt_blocked()) {
 		pr_warn_ratelimited("radio: denied AF_BLUETOOTH socket\n");
-		ss_event("radio: denied AF_BLUETOOTH socket");
+		ss_event_typed("radio_guard", "current_process", "create_socket",
+			       "AF_BLUETOOTH", "deny", "bluetooth_disabled",
+			       "radio: denied AF_BLUETOOTH socket");
 		return -EPERM;
 	}
 	return 0;
@@ -201,7 +207,9 @@ int ss_radio_file_open(struct file *file)
 	p = ss_file_path(&file->f_path, buf, PATH_MAX);
 	if (!IS_ERR(p) && !strcmp(p, "/dev/rfkill")) {
 		pr_warn_ratelimited("radio: denied write to /dev/rfkill (radios are locked off)\n");
-		ss_event("radio: denied /dev/rfkill write");
+		ss_event_typed("radio_guard", "current_process", "write",
+			       "/dev/rfkill", "deny", "radios_locked_off",
+			       "radio: denied /dev/rfkill write");
 		ret = -EPERM;
 	}
 	kfree(buf);

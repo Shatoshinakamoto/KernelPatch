@@ -89,6 +89,13 @@ Exit status is non-zero on a refusal or when any setting was rejected.
 Daemon-only keys (`retain_days`, `remote_syslog`, …) and `timevault_enabled`
 are reported as skipped, never as errors.
 
+Remote forwarding uses the daemon-only settings in
+[`CONFIGURATION.md`](CONFIGURATION.md#logging--retention-9). Configure
+`remote_syslog_transport = tls` with a collector `host:port` to enable
+certificate-verified RFC 5425 syslog and a bounded persistent retry queue.
+`secure-sudo health --json` reports transport state, queue backlog and drops;
+neither UDP datagram sends nor TLS stream writes claim collector persistence.
+
 ```sh
 sudo secure-sudo lint && sudo secure-sudo load
 ```
@@ -104,6 +111,83 @@ when locked. If the LSM is not active (wrong kernel booted) it says so.
 ```sh
 sudo secure-sudo status
 ```
+
+## `secure-sudo health [--json]`
+
+report whether secure_sudo is active, whether the configured kernel audit feed
+and root-owned mode-0600 daemon heartbeat/metrics are active and fresh, whether
+configured kernel settings match their live values, whether local log writes
+failed, whether event or forwarding queues have reported loss, and whether
+log retention is active or held for an investigation. It also
+reports the last `load` outcome
+and its accepted, rejected and skipped counts. Refused or partial loads degrade
+health; the root-owned mode-0600 result is atomically updated after each load
+and bound to the current boot ID, so a result from a previous boot is stale.
+The result includes rejected setting names (up to eight, with an omitted count)
+without persisting their configured values or error text.
+Missing or untrusted load status is reported as unknown and degrades health.
+Exit status is zero only when all available checks are healthy. `--json` emits
+a machine-readable object for monitoring; unavailable loss counters are
+`null`, never treated as zero.
+An active `/var/lib/secure_sudo/retention.hold` marker suspends age- and
+size-based log deletion; health reports `held`, while an invalid marker
+reports `hold_error` and degrades health. See
+[`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) for the preservation procedure.
+
+```sh
+sudo secure-sudo health
+sudo secure-sudo health --json
+```
+
+This is an initial health view, not a complete fleet-health or collector
+delivery guarantee. It reports UDP send errors and labels successful
+`sendto` calls `udp_unconfirmed`; configured UDP forwarding remains degraded.
+TLS queue state and loss are reported, but successful TLS writes are also
+unconfirmed at the collector-application level. The JSON includes
+`addon_health` plus the load, active and enabled states of optional add-on
+services and timers installed by `temporary/`. Disabled optional units do not
+degrade health; enabled units that failed to start do. If systemd status cannot
+be queried, add-on health is `unavailable` and the overall result is degraded.
+Timer entries include their last trigger time and the associated scan service's
+last exit time, result, and exit status; a failed scan or enabled timer with no
+successful scan in the preceding 26 hours degrades health. DriverGuard,
+BootGuard and BiosGuard timer
+entries also report baseline age. An enabled scan timer with no root-owned
+regular baseline, a baseline older than 30 days, or a future timestamp
+degrades health.
+
+## `secure-sudo evidence-export OUTPUT.tar.gz [--signing-key EXTERNAL.pem]`
+
+Create a root-only incident bundle containing local secure_sudo logs,
+non-secret policy/configuration files, live kernel knobs and loss counters,
+boot/kernel/LSM identity, service state, quarantine metadata and a SHA-256
+manifest. The exporter never copies quarantined file contents and excludes
+configuration files whose names indicate secrets, keys, tokens or passwords.
+Original logs and quarantined files are not changed.
+
+The bundle includes a per-log hash chain. Optionally sign its final checkpoint
+and checksum manifest with an Ed25519 PEM key held outside the monitored host
+(for example on a controlled removable device); the public key is included
+for verification. Verify `SHA256SUMS` first, then verify both detached
+signatures with `openssl pkeyutl -verify -rawin -pubin`. Trust the public key
+through a separate channel; the bundled key alone does not establish identity.
+A locally stored signing key does not provide protection from a compromised
+root account. Protect and transport the bundle as sensitive incident evidence.
+
+```sh
+sudo secure-sudo evidence-export /root/incident-2026-10-26.tar.gz
+sudo secure-sudo evidence-export /root/incident.tar.gz --signing-key /mnt/key/incident-ed25519.pem
+secure-sudo evidence-verify /root/incident-2026-10-26.tar.gz
+secure-sudo evidence-verify /root/incident.tar.gz --trusted-key /mnt/trusted/incident-ed25519.pub
+```
+
+`evidence-verify` safely inspects the archive without extracting untrusted
+paths, validates the checksum manifest and recomputes every per-log chain.
+For signed bundles, pass the independently trusted public key; the verifier
+checks both signatures and rejects a signed bundle if no trusted key is
+provided. Unsigned bundles receive integrity checks but no authenticity proof.
+For preservation, custody, and key-handling steps, see
+[`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md).
 
 ## `secure-sudo settings`
 

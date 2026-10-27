@@ -293,8 +293,10 @@ int ss_node_bprm(struct linux_binprm *bprm)
 
 	pr_warn_ratelimited("node guard: UID %u blocked child exec %s\n",
 			    from_kuid(&init_user_ns, current_uid()), resolved);
-	ss_event("node-guard: UID %u blocked child exec %s",
-		 from_kuid(&init_user_ns, current_uid()), resolved);
+	ss_event_typed("node_guard", "node_child", "execute", resolved,
+		       "deny", "child_not_allowlisted",
+		       "node-guard: UID %u blocked child exec %s",
+		       from_kuid(&init_user_ns, current_uid()), resolved);
 	ret = -EPERM;
 out:
 	kfree(buf);

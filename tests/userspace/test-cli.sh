@@ -19,8 +19,55 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 chmod 0755 "$T"
 SYS="$T/sys"; SEC="$T/sec"; CFG="$T/etc"
 CLI="$T/secure-sudo"
+HEALTH="$T/daemon.health"
+LOAD_HEALTH="$T/load.health"
+AUDIT_ENABLED="$T/audit_enabled"
+BOOT_ID="$T/boot_id"
+SYSTEMCTL="$T/systemctl"
+ADDON_STATE="$T/addons"
+echo test-boot > "$BOOT_ID"
+cat > "$SYSTEMCTL" <<'STUB'
+#!/bin/bash
+unit="${!#}"
+if [[ ${HEALTH_SYSTEMD_UNAVAILABLE:-0} == 1 ]]; then
+	exit 1
+fi
+active=active
+enabled=enabled
+if [[ $unit == *.timer ]]; then
+	active=inactive
+	enabled=disabled
+fi
+if [[ ${HEALTH_FAILED_UNIT:-} == "$unit" ]]; then
+	active=failed
+elif [[ ${HEALTH_INACTIVE_DISABLED_UNIT:-} == "$unit" ]]; then
+	active=inactive
+	enabled=disabled
+fi
+if [[ ${HEALTH_ENABLED_TIMER:-} == "$unit" ]]; then
+	active=active
+	enabled=enabled
+fi
+result=success
+exit_status=0
+exit_mono="$(awk '{printf \"%.0f\", $1 * 1000000 - 1000000}' /proc/uptime)"
+if [[ ${HEALTH_FAILED_SCAN:-} == "$unit" ]]; then
+	result=exit-code
+	exit_status=1
+fi
+printf 'LoadState=loaded\nActiveState=%s\nUnitFileState=%s\nLastTriggerUSec=Mon 2026-10-26 18:00:00 UTC\nResult=%s\nExecMainStatus=%s\nExecMainExitTimestamp=Mon 2026-10-26 17:59:00 UTC\nExecMainExitTimestampMonotonic=%s\n' \
+	"$active" "$enabled" "$result" "$exit_status" "$exit_mono"
+STUB
+chmod 0755 "$SYSTEMCTL"
 if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSYSFS="\"$SYS\"" -DSECFS="\"$SEC\"" -DCONFIG_DIR="\"$CFG\"" \
+	-DHEALTH_FILE="\"$HEALTH\"" \
+	-DLOAD_HEALTH_FILE="\"$LOAD_HEALTH\"" \
+	-DAUDIT_ENABLED_FILE="\"$AUDIT_ENABLED\"" \
+	-DBOOT_ID_FILE="\"$BOOT_ID\"" \
+	-DSYSTEMCTL="\"$SYSTEMCTL\"" \
+	-DADDON_STATE_DIR="\"$ADDON_STATE\"" \
+	-DSS_TESTING \
 	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c -lcrypto); then
 	not_ok "CLI builds with test paths"; tap_done; exit 1
 fi
@@ -29,11 +76,17 @@ ok "CLI builds with test paths (-Werror)"
 # A fresh config (the shipped one) and a fake kernel with every knob/list.
 fresh() {
 	rm -rf "$CFG" "$SYS" "$SEC"
+	rm -f "$LOAD_HEALTH"
 	mkdir -p "$CFG" "$SYS" "$SEC"
 	cp "$ROOT"/userspace/config/*.conf "$CFG/"
 	chmod 0755 "$CFG"; chmod 0644 "$CFG"/*.conf
+	echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+	chmod 0600 "$HEALTH"
 	sed -n 's/^\([a-z_]*\) *=.*/\1/p' "$ROOT/userspace/config/secure-sudo.conf" |
 		while read -r k; do echo old > "$SYS/$k"; done
+	echo 0 > "$SYS/events_dropped"
+	echo 0 > "$SYS/audit_events_dropped"
+	echo 1 > "$AUDIT_ENABLED"
 	echo 0 > "$SYS/lock"
 	for l in blacklist setid_exec_allow tmp_exec_allow node_allowed_children \
 		node_sea_binaries driver_blacklist timevault_allow home_map \
@@ -91,6 +144,16 @@ fresh; setkey vault_action delete; lint --no-kernel
 lint_err "bad daemon value (vault_action)" "vault_action = delete: not quarantine or wipe"
 fresh; setkey remote_syslog loghost; lint --no-kernel
 lint_err "bad daemon value (remote_syslog)" "remote_syslog = loghost: not host:port"
+fresh; setkey remote_syslog loghost:70000; lint --no-kernel
+lint_err "remote syslog port is bounded" "remote_syslog = loghost:70000: port is outside"
+fresh; setkey remote_syslog_transport tcp; lint --no-kernel
+lint_err "remote transport is explicit" "remote_syslog_transport = tcp: not udp or tls"
+fresh; setkey remote_syslog_ca_file relative.pem; lint --no-kernel
+lint_err "remote CA path must be absolute" "remote_syslog_ca_file = relative.pem: not an absolute path"
+fresh; setkey remote_syslog_ca_file ""; lint --no-kernel
+lint_err "remote CA bundle cannot be empty" "remote_syslog_ca_file = : not an absolute path"
+fresh; setkey remote_queue_max_mb 1025; lint --no-kernel
+lint_err "remote queue has a bounded maximum" "remote_queue_max_mb = 1025: out of range"
 fresh; setkey timevault_enabled 1; lint --no-kernel
 eq "timevault_enabled is not an error" "$LRC" 0
 check "... and lint explains load never engages TimeVault" says "note +timevault_enabled +not applied by load"
@@ -168,10 +231,112 @@ check "settings reach the kernel files" sh -c "[ \"\$(cat '$SYS/sudo_max_fails')
 check "every setting reported accepted with its line" grep -qE '^  accepted +sudo_max_fails = 5 +line [0-9]+' "$T/load.out"
 check "lists are loaded before the settings" sh -c "grep -E '^  (accepted|rejected|skipped) ' '$T/load.out' | head -1 | grep -qE 'blacklist'"
 check "summary line counts the results" grep -qE '^load: [0-9]+ accepted, 0 rejected, [0-9]+ skipped$' "$T/load.out"
+check "successful load persists a root-only complete result" sh -c \
+	"[ \"\$(stat -c '%a' '$LOAD_HEALTH')\" = 600 ] && grep -q 'state=complete .*rejected=0' '$LOAD_HEALTH'"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "health JSON reports last successful load" grep -q '"last_load":"complete"' "$T/health.out"
 fresh; setkey admin_gid 0; rm "$CFG/blacklist.conf"; "$CLI" load > "$T/load.out" 2>&1
 check "missing list file: reported as cleared, kernel list emptied" sh -c "grep -qE 'blacklist +cleared \(no config file\)' '$T/load.out' && [ \"\$(cat '$SEC/blacklist')\" = '' ]"
 fresh; setkey admin_gid 0; setkey retain_days 7; "$CLI" load > "$T/load.out" 2>&1
 check "daemon keys reported skipped" grep -qE '^  skipped +retain_days .*read by secure-sudod' "$T/load.out"
+
+echo "# health"
+fresh
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+eq "health reports degraded fake kernel and exits non-zero" "$rc" 1
+check "health JSON reports live/config policy mismatch" grep -q '"policy":"mismatch"' "$T/health.out"
+check "health JSON reports daemon heartbeat" grep -q '"daemon":"active"' "$T/health.out"
+check "health reports an unknown load outcome before the first run" grep -q \
+	'"last_load":"unknown"' "$T/health.out"
+echo 1 > "$SYS/audit_events"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "health reports an enabled kernel audit feed" grep -q '"audit_feed":"active"' "$T/health.out"
+echo 0 > "$AUDIT_ENABLED"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "configured audit feed degrades when kernel auditing is inactive" grep -q \
+	'"audit_feed":"inactive"' "$T/health.out"
+echo 1 > "$AUDIT_ENABLED"
+check "health JSON reports remote forwarding state" grep -q '"remote_forwarding":"disabled"' "$T/health.out"
+check "health JSON reports remote transport" grep -q '"remote_transport":"udp"' "$T/health.out"
+check "health JSON reports active log retention" grep -q '"retention_state":"active"' "$T/health.out"
+echo "remote_transport=udp retention_state=held remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "health reports an active evidence retention hold" grep -q '"retention_state":"held"' "$T/health.out"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+check "health JSON reports heartbeat metric availability" grep -q '"heartbeat_metrics":"available"' "$T/health.out"
+check "health JSON reports add-on and timer unit states" sh -c \
+	"grep -q '\"systemd\":\"available\"' '$T/health.out' && grep -q 'secure-sudo-driverguard.timer' '$T/health.out'"
+HEALTH_FAILED_UNIT=secure-sudo-procguard.service SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health degrades for a failed enabled add-on" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"addon_health\":\"degraded\"' '$T/health.out'"
+HEALTH_INACTIVE_DISABLED_UNIT=secure-sudo-procguard.service SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "disabled optional add-on does not degrade health" grep -q \
+	'"addon_health":"healthy"' "$T/health.out"
+HEALTH_SYSTEMD_UNAVAILABLE=1 SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health reports unavailable systemd inspection" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"addon_health\":\"unavailable\"' '$T/health.out'"
+HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "enabled scanning timer without baseline degrades health" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"baseline\":\"missing\"' '$T/health.out'"
+mkdir -p "$ADDON_STATE/driverguard"; echo baseline > "$ADDON_STATE/driverguard/manifest"
+HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "fresh baseline and timer trigger are reported" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"baseline\":\"current\"' '$T/health.out' && grep -q '\"last_trigger\":\"Mon 2026-10-26 18:00:00 UTC\"' '$T/health.out'"
+check "health reports scan service result and last successful scan time" sh -c \
+	"grep -q '\"scan_result\":\"success\",\"scan_exit_status\":\"0\",\"last_scan\":\"Mon 2026-10-26 17:59:00 UTC\",\"scan_age_seconds\":' '$T/health.out'"
+HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer \
+HEALTH_FAILED_SCAN=secure-sudo-driverguard.service SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "failed scan result degrades enabled timer health" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"addon_health\":\"degraded\"' '$T/health.out' && grep -q '\"scan_result\":\"exit-code\"' '$T/health.out'"
+HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer \
+SS_TEST_STALE_SCAN=1 SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "scan older than the hourly interval degrades timer health" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"addon_health\":\"degraded\"' '$T/health.out' && grep -q '\"scan_age_seconds\":93601' '$T/health.out'"
+touch -d '31 days ago' "$ADDON_STATE/driverguard/manifest"
+HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer SS_TEST_ALLOW_ROOT=1 \
+	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "stale baseline degrades an enabled scanning timer" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"baseline\":\"stale\"' '$T/health.out'"
+echo "remote_transport=udp retention_state=active remote_state=udp_unconfirmed remote_sent=1 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health does not treat UDP send as confirmed delivery" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"remote_forwarding\":\"udp_unconfirmed\"' '$T/health.out'"
+echo "remote_transport=tls retention_state=active remote_state=tls_queued remote_sent=0 remote_failures=1 remote_queue_records=2 remote_queue_bytes=300 remote_queue_dropped=4 local_log_failures=0" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health reports TLS queue backlog and drops" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"remote_transport\":\"tls\"' '$T/health.out' && grep -q '\"remote_queue_records\":2' '$T/health.out' && grep -q '\"remote_queue_dropped\":4' '$T/health.out'"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=1" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health reports local log write failures" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"local_log_failures\":1' '$T/health.out'"
+echo "remote_transport=udp remote_state=disabled" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health marks incomplete daemon metrics unavailable" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"heartbeat_metrics\":\"unavailable\"' '$T/health.out'"
+echo 2 > "$SYS/events_dropped"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health JSON reports event-ring loss" sh -c "[ $rc -eq 1 ] && grep -q '\"events_dropped\":2' '$T/health.out'"
+fresh; setkey remote_syslog "not-a-host"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "health detects invalid daemon configuration" grep -q '"policy":"invalid"' "$T/health.out"
+fresh; echo "unknown_policy_key = 1" >> "$CFG/secure-sudo.conf"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
+check "health detects unknown policy keys" grep -q '"policy":"invalid"' "$T/health.out"
+echo "updated=$(date +%s) boot_id=test-boot state=partial accepted=3 rejected=1 skipped=0 rejected_keys=sudo_max_fails omitted=0" > "$LOAD_HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health JSON reports and degrades for persisted partial load" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"last_load\":\"partial\"' '$T/health.out' && grep -q '\"load_rejected\":1' '$T/health.out' && grep -q '\"load_rejected_keys\":\"sudo_max_fails\"' '$T/health.out'"
+sed -i 's/boot_id=test-boot/boot_id=previous-boot/' "$LOAD_HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health rejects a load result from a previous boot" grep -q '"last_load":"stale"' "$T/health.out"
+rm -f "$LOAD_HEALTH"
 
 fresh; setkey admin_gid 0; setkey sudo_max_fails 0
 cp -a "$SYS" "$T/sys-before"
@@ -179,11 +344,16 @@ cp -a "$SYS" "$T/sys-before"
 eq "lint error: load exits 1" "$rc" 1
 check "lint error: load refused, nothing written" diff -r "$SYS" "$T/sys-before"
 check "lint error: says why" grep -q 'load refused: fix the errors above' "$T/load.out"
+check "refused load is persisted for health" grep -q 'state=refused' "$LOAD_HEALTH"
 "$CLI" load --force > "$T/load.out" 2>&1; rc=$?
 eq "--force: still exits 1 (partial policy)" "$rc" 1
 check "--force: the bad value is rejected, not written" sh -c "grep -qE '^  rejected +sudo_max_fails = 0 .*out of range' '$T/load.out' && [ \"\$(cat '$SYS/sudo_max_fails')\" = old ]"
 check "--force: the other settings were applied" sh -c "[ \"\$(cat '$SYS/sudo_window_sec')\" = 60 ]"
 check "--force: says the policy is incomplete" grep -q 'load INCOMPLETE' "$T/load.out"
+check "partial load rejection count and setting are persisted" grep -q 'state=partial .*rejected=1 .*rejected_keys=sudo_max_fails' "$LOAD_HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health degrades and reports rejected partial load" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"last_load\":\"partial\"' '$T/health.out' && grep -q '\"load_rejected\":1' '$T/health.out'"
 
 fresh; setkey admin_gid 0
 rm "$SYS/bpf_guard"; mkdir "$SYS/bpf_guard"	# the kernel refuses this one
@@ -194,6 +364,7 @@ check "kernel rejection: the rest still loaded and counted" grep -qE '^load: [0-
 
 mv "$SYS" "$T/sys-away"; "$CLI" load > "$T/load.out" 2>&1; rc=$?
 check "no LSM: load fails and says so" sh -c "[ $rc -eq 1 ] && grep -q 'LSM not active' '$T/load.out'"
+check "LSM-inactive refusal is persisted" grep -q 'state=refused' "$LOAD_HEALTH"
 mv "$T/sys-away" "$SYS"
 
 if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null; then

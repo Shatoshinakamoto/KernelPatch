@@ -89,7 +89,8 @@ const size_t ss_nlists = sizeof(ss_lists) / sizeof(ss_lists[0]);
 /* Keys read by secure-sudod, not the kernel. */
 static const char *const daemon_keys[] = {
 	"retain_days", "max_total_mb", "remote_syslog", "vault_action",
-	"vault_watch", NULL
+	"vault_watch", "remote_syslog_transport", "remote_syslog_ca_file",
+	"remote_queue_max_mb", NULL
 };
 
 const struct knob *find_knob(const char *key)
@@ -323,8 +324,8 @@ const char *check_value(const struct knob *k, const char *v, char *why, size_t n
 	return NULL;
 }
 
-static const char *check_daemon_value(const char *key, const char *v,
-				      char *why, size_t n)
+const char *check_daemon_value(const char *key, const char *v,
+			       char *why, size_t n)
 {
 	if (!strcmp(key, "retain_days") || !strcmp(key, "max_total_mb")) {
 		char *end;
@@ -342,9 +343,40 @@ static const char *check_daemon_value(const char *key, const char *v,
 	} else if (!strcmp(key, "remote_syslog")) {
 		const char *colon = strrchr(v, ':');
 
-		if (*v && (!colon || colon == v || !colon[1] ||
-			   strspn(colon + 1, "0123456789") != strlen(colon + 1))) {
+		if (*v && (!colon || !colon[1] ||
+			   strspn(colon + 1, "0123456789") != strlen(colon + 1) ||
+			   (colon == v && v[0] != '[') ||
+			   (v[0] == '[' && (!strchr(v, ']') ||
+			    strchr(v, ']') != colon - 1 ||
+			    strchr(v, ']') == v + 1)))) {
 			snprintf(why, n, "not host:port");
+			return why;
+		}
+		if (*v && colon) {
+			char *end;
+			long port = strtol(colon + 1, &end, 10);
+
+			if (*end || port < 1 || port > 65535) {
+				snprintf(why, n, "port is outside 1..65535");
+				return why;
+			}
+		}
+	} else if (!strcmp(key, "remote_syslog_transport")) {
+		if (strcmp(v, "udp") && strcmp(v, "tls")) {
+			snprintf(why, n, "not udp or tls");
+			return why;
+		}
+	} else if (!strcmp(key, "remote_syslog_ca_file")) {
+		if (!*v || *v != '/') {
+			snprintf(why, n, "not an absolute path");
+			return why;
+		}
+	} else if (!strcmp(key, "remote_queue_max_mb")) {
+		char *end;
+		long size = strtol(v, &end, 10);
+
+		if (!*v || *end || size < 1 || size > 1024) {
+			snprintf(why, n, "out of range (1..1024)");
 			return why;
 		}
 	} else if (!strcmp(key, "vault_watch")) {

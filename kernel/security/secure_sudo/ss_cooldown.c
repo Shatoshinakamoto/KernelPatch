@@ -138,8 +138,10 @@ static void record_failure(uid_t uid)
 		e->block_until = now + (unsigned long)blktime * HZ;
 		pr_warn_ratelimited("cooldown: UID %u blocked from sudo for %us (%u fails)\n",
 				    uid, blktime, e->fails);
-		ss_event("cooldown: UID %u blocked from sudo %us after %u fails",
-			 uid, blktime, e->fails);
+		ss_event_typed("sudo_cooldown", "user", "authenticate",
+			       "sudo", "deny", "failure_threshold",
+			       "cooldown: UID %u blocked from sudo %us after %u fails",
+			       uid, blktime, e->fails);
 	}
 	spin_unlock(&fail_lock);
 }
@@ -221,8 +223,10 @@ int ss_cooldown_bprm(struct linux_binprm *bprm)
 	if (IS_ERR(p) || is_priv_tool(bprm, base)) {
 		pr_warn_ratelimited("cooldown: UID %u denied %s (in cooldown)\n",
 				    uid, base);
-		ss_event("cooldown: UID %u denied %s (cooldown active)", uid,
-			 base);
+		ss_event_typed("sudo_cooldown", "user", "execute", base, "deny",
+			       "cooldown_active",
+			       "cooldown: UID %u denied %s (cooldown active)",
+			       uid, base);
 		ret = -EPERM;
 	}
 	kfree(buf);

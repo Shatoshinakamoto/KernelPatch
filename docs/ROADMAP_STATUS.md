@@ -30,7 +30,11 @@ nothing is pushed from here.
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
-| P1-1 … P1-8 | not started | groundwork only (listed below) |
+| P1-1 | partly (active) | schema-v1 JSON events, boot/sequence/clock/actor fields, typed fields across denial producers, ring + audit loss counters; target identity and deferred actor attribution remain incomplete |
+| P1-2 | partly (active) | opt-in authenticated RFC 5425 TLS, bounded persistent queue/retry, and queue/error health reporting; collector acknowledgment and integration proof remain |
+| P1-3 | partly (active) | root-only evidence export with checksums, per-log hash chains and optional externally-held Ed25519 signing key; no periodic signed checkpoints or tabletop |
+| P1-4 | partly (active) | `secure-sudo health [--json]` validates the configured audit feed, fresh root-owned heartbeat/metrics, configured/live knobs, boot-bound last load outcome/counts/rejected setting names, event loss, local log failures, remote queue/errors and optional add-on/timer state including scan results/age; collector receipt remains |
+| P1-5 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
 
@@ -110,14 +114,19 @@ without root):
 | `tests/userspace/test-otp.sh` | 66 | RFC 4226/6238 vectors, secret at rest, prefix, replay refusal |
 | `tests/userspace/test-pam.sh` | 50 | both PAM modules through libpam, the documented stacks, real `pam_unix` + `pam_faillock` (root, private mount namespace) |
 | `tests/userspace/test-helpers.sh` | 74 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
-| `tests/userspace/test-cli.sh` | 67 | config parsing, `lint`, `load` reporting, against stand-in knob and list files |
+| `tests/userspace/test-cli.sh` | 105 | config parsing, `lint`, `load` reporting and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
+| `tests/userspace/test-remote-forwarding.sh` | 9 | TLS CA/hostname validation and CA rotation, RFC 5425 delivery, queue persistence/exhaustion, outage retry |
+| `tests/userspace/test-evidence-export.sh` | 13 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation |
 | `tests/oscap/` | 39 | result parsing and the STIG gate's rule-by-rule comparison, release vs diagnostic mode, independent checks (OSB-19) |
 | `tests/provenance/` | 19 | P0-4 above |
 | `tests/install/test-install.sh` | 106 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
-`tests/vm/boot-test.sh`): **118/118** on upstream 6.14, and again 118/118
-with AppArmor stacked. They cover registration and stacking, knob defaults,
+`tests/vm/boot-test.sh`): historical runs passed **118/118** on upstream 6.14,
+and again 118/118 with AppArmor stacked. The source now has an additional
+cross-process target-identity assertion and updated schema checks, so those
+recorded runs do not validate the current source; a new VM run is required.
+They cover registration and stacking, knob defaults,
 modes and bounds, setid/setgroups/userns, setuid-exec allowlist, command
 blacklist (incl. hard links), `/tmp` and memfd exec, `/dev/mem`, packet
 sockets, BPF and perf, SysctlGuard and binfmt_misc, Process Runtime Guard,
@@ -241,14 +250,140 @@ each recovery restored sudo and `passwd` for the right users.
 
 ---
 
-## P1 — not started
+## P1-1 through P1-4 — active, partial
 
-Groundwork already in this release, so the P1 work does not start from zero:
+### P1-1 Event schema and loss
 
-* P1-1: the ring now drops whole events and exposes `events_dropped`
-  (SECURITY_REVIEW #44); no schema version, boot id or sequence numbers yet.
+`ss_log.c` now writes one JSON record per event with schema version 1,
+per-boot random ID, monotonically increasing sequence, realtime and monotonic
+nanoseconds, event category, actor PID/UID, typed target/operation/object/
+decision/reason fields, and the original message. Denial producers now supply
+stable classification values rather than requiring consumers to parse the
+message. Cross-process memory-access events also carry target PID and UID.
+All string fields are JSON-escaped and bounded so untrusted path text
+cannot forge records. The existing whole-record ring-drop counter remains,
+and `audit_events_dropped` counts failures to obtain an audit buffer. Both are
+readable under `/sys/kernel/secure_sudo/` and reported by `secure-sudo health`.
+The message encoder escapes non-ASCII bytes as `\u00xx`, keeping records valid
+JSON even when paths are not UTF-8; the daemon decodes those byte escapes before
+applying its existing cooldown and quarantine rules. A `truncated` boolean
+reports when the event type, typed string, or message was shortened. The
+64 KiB ring caps lines at 640 bytes, discards oldest whole records on
+saturation, and exposes a loss counter. The earlier CLI revision
+passed 92/92 checks. The earlier 103-check suite's focused audit-feed,
+scan-outcome and boot-bound load-health assertions passed. Two retention-state
+health assertions have since been added, but the updated suite could not be
+run here because its build needs missing OpenSSL development headers; the
+ownership/load cases also require root. The evidence export/verification suite
+previously passed 13/13 checks.
+The daemon and TLS forwarding
+harness compile and the original local forwarding suite passed 8/8 using
+temporary OpenSSL API declarations against the installed runtime libraries.
+The new CA-rotation assertion has not yet been rerun. A build against upstream
+OpenSSL development headers remains unverified because those headers are
+unavailable here.
+
+Still missing for *Done*: target values are not consistently typed PID/UID
+identities and can be descriptive labels. Cross-process memory-access events
+now include target PID and UID, but other target identities remain partial;
+deferred work may record the kernel worker rather than the initiating userspace
+actor. A source-level VM assertion checks the truncation field and normal
+short-event value, but it has not yet been run in a clean VM; saturation and
+loss-counter behavior also need a fresh VM result. Sustained-throughput
+behavior is not measured.
+
+### P1-2 Remote forwarding — partial
+
+`remote_syslog_transport=tls` selects RFC 5425 TLS syslog, verifies the
+configured CA and collector hostname/IP, and sends octet-counted RFC 5424
+messages. Unsent events are persisted as private, individually bounded queue
+files and retried oldest first after reconnect, reload, or restart. The queue
+cap is configurable from 1 to 1024 MiB (10 MiB default), with an additional
+4096-file ceiling; exhaustion drops the newest event and increments a visible
+counter. DNS, connection, TLS,
+certificate, write, queue, and drop state is exposed in the daemon heartbeat
+and health JSON. UDP remains available as a legacy explicitly selected
+transport; its state is still `udp_unconfirmed`. Local logging happens before
+forwarding and continues through collector outages.
+
+Neither UDP send nor a successful TLS stream write is a collector
+acknowledgment. The queue removes an event after the TLS write succeeds, so a
+collector-side failure after receipt can still lose it; an ambiguous retry
+can also duplicate it. The integration suite covers trusted delivery,
+wrong-host and untrusted-CA rejection, outage retention, queue exhaustion,
+and atomic server-CA bundle rotation. Rotation instructions use an overlap of
+old/new trust anchors; client certificates and private keys are not supported.
+RFC 5425 offers no durable collector acknowledgment. Health deliberately says
+`tls_sent_unconfirmed`; no custom receiver protocol is introduced, and
+collector-side persistence is not claimed. The added CA-rotation assertion has
+not yet run in this environment.
+
+### P1-3 Incident evidence — partial
+
+`secure-sudo evidence-export OUTPUT.tar.gz` creates a root-only bundle with
+logs, non-secret configuration snapshots, live knobs/counters, boot/kernel/LSM
+identity, service state, quarantine metadata and a SHA-256 manifest. It also
+builds per-log hash chains and can sign each final chain checkpoint and the
+checksum manifest with an operator-supplied Ed25519 key; the corresponding
+public key is included.
+Quarantined file contents and key/token/password-named config files are not
+exported. The exporter leaves source evidence untouched.
+
+`docs/INCIDENT_RESPONSE.md` documents the root-only retention hold, external
+key custody/rotation steps, chain-of-custody records, and a tabletop procedure.
+The daemon preserves logs while the hold marker is valid and reports `held` or
+`hold_error` through health. Still missing for *Done*: periodic checkpoints
+signed off-host, stronger secret redaction review, and a completed
+chain-of-custody tabletop. Independent verification is
+implemented in `secure-sudo evidence-verify`; the test suite validates
+unsigned and signed bundles and rejects tampering, untrusted keys and unsafe
+archive paths.
+An export signed with a key stored only on the monitored host is not
+tamper-resistant against host root.
+
+### P1-4 Unified health — partial
+
+`secure-sudo health` (and `--json`) reports whether the LSM exists, whether
+the configured kernel audit feed and daemon's root-owned heartbeat are active
+and fresh, whether configured kernel knobs match live values, event/audit loss,
+local log write failures, active log-retention holds, remote transport,
+queue records/bytes and dropped remote events. It also reports the last policy
+load state and accepted/rejected/skipped counts from an atomically written,
+root-owned mode-0600 result file bound to the current boot ID; missing,
+untrusted, refused, partial and previous-boot load results degrade health.
+It preserves up to eight rejected setting names and an omitted count, but not
+configured values or error text.
+Heartbeats are accepted only
+when fresh, regular, root-owned and mode 0600, and a missing metric field
+degrades health. The JSON command exits nonzero on queue backlog/drop,
+forwarding or local-log errors, event loss, or configured UDP forwarding
+(which remains unconfirmed). TLS stream writes are explicitly named
+`tls_sent_unconfirmed`; health does not claim collector persistence.
+
+Still missing for *Done*: collector-side durable receipt, rejected-setting
+error details, and
+comprehensive machine-readable health coverage. Systemd service/timer unit
+state, each scan service's exit result/status/time and 26-hour freshness, and DriverGuard, BootGuard
+and BiosGuard baseline
+presence/freshness are included; disabled optional units are informational,
+while enabled inactive units or missing/stale baselines degrade health.
+
+### Other P1 items still deferred
+
+P1-5 through P1-8 remain unstarted: threat model/support profile; policy
+snapshots and change history; incident runbooks and containment guardrails;
+and broader network-policy/failure-mode validation. The earlier overview's
+"groundwork" below is historical; it does not mean these requirements are
+complete.
+
+## P1-5 through P1-8 — not started
+
+Pre-existing groundwork (not completion):
+
+* P1-1: the ring drops whole events and exposes `events_dropped`
+  (SECURITY_REVIEW #44); expanded in the partial implementation above.
 * P1-4: `install.sh verify` checks the running kernel, daemon and lint;
-  `load` reports rejected settings. No unified health command yet.
+  `load` reports rejected settings; expanded in the partial implementation above.
 * P1-6: `lint` is the non-mutating preview; there is no snapshot or change
   history.
 * P1-7: [RECOVERY.md](RECOVERY.md) covers administrator lockout, not incident
@@ -256,7 +391,8 @@ Groundwork already in this release, so the P1 work does not start from zero:
 * P1-8: network modes are tested with real `nft` in namespaces for IPv4 and
   IPv6; multiple interfaces, VPNs, DHCP changes, pre-existing rulesets and
   daemon restarts are not.
-* P1-2: remote syslog is still UDP only.
+* P1-2: TLS syslog and a bounded persistent queue now exist; collector
+  acknowledgment remains unresolved.
 
 ## P2 — not started
 

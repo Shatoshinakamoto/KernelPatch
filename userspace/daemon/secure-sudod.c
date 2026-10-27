@@ -40,31 +40,54 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <openssl/evp.h>
+#include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 
 #define EVENTS   "/sys/kernel/security/secure_sudo/events"
 #define SYSFS    "/sys/kernel/secure_sudo"
 #define CONFIG   "/etc/secure_sudo/secure-sudo.conf"
 #define LOGDIR   "/var/log/secure_sudo"
 #define STATEDIR "/var/lib/secure_sudo"
+#define HEALTH_FILE STATEDIR "/daemon.health"
+#define RETENTION_HOLD STATEDIR "/retention.hold"
 #define MANIFEST STATEDIR "/manifest"
 #define QUARANTINE STATEDIR "/quarantine"
 #define HELPER_NET  "/usr/libexec/secure-sudo/apply-net.sh"
 #define HELPER_QUAR "/usr/libexec/secure-sudo/quarantine.sh"
 #define HELPER_PBOX "/usr/bin/secure-sudo-pheonixbox"	/* #21 PheonixBox */
+#define REMOTE_QUEUE_MAX_RECORDS 4096
+#ifndef REMOTE_QUEUE
+#define REMOTE_QUEUE STATEDIR "/remote-queue"
+#endif
 
 /* ---- configuration (daemon-relevant keys) ---- */
 struct cfg {
 	int retain_days;
 	long max_total_mb;
 	char remote_syslog[256];	/* "host:port" or empty */
+	char remote_transport[8];	/* udp | tls */
+	char remote_ca_file[512];
+	long remote_queue_max_mb;
 	char vault_action[16];		/* quarantine | wipe */
 	char vault_watch[1024];		/* comma-separated dirs */
 };
 
+static struct cfg *g_cfg;
 static volatile sig_atomic_t want_reload;
 static volatile sig_atomic_t want_stop;
+static char remote_state[32] = "disabled";
+static char retention_state[16] = "active";
+static unsigned long long remote_sent;
+static unsigned long long remote_failures;
+static unsigned long long remote_queue_bytes;
+static unsigned long long remote_queue_records;
+static unsigned long long remote_queue_dropped;
+static unsigned long long remote_queue_sequence;
+static unsigned long long local_log_failures;
 
 /* Forward declaration: used by kill_offenders() before its definition. */
 static void syslog_line(const char *fmt, ...)
@@ -93,6 +116,9 @@ static void load_cfg(struct cfg *c)
 	c->retain_days = 14;
 	c->max_total_mb = 512;
 	c->remote_syslog[0] = '\0';
+	strcpy(c->remote_transport, "udp");
+	strcpy(c->remote_ca_file, "/etc/ssl/certs/ca-certificates.crt");
+	c->remote_queue_max_mb = 10;
 	strcpy(c->vault_action, "quarantine");
 	strcpy(c->vault_watch, "/etc,/usr/local/bin,/opt,/usr/local/sbin");
 
@@ -114,7 +140,30 @@ static void load_cfg(struct cfg *c)
 			c->max_total_mb = atol(val);
 		else if (!strcmp(key, "remote_syslog"))
 			snprintf(c->remote_syslog, sizeof(c->remote_syslog), "%s", val);
-		else if (!strcmp(key, "vault_action"))
+		else if (!strcmp(key, "remote_syslog_transport")) {
+			if (!strcmp(val, "udp") || !strcmp(val, "tls"))
+				snprintf(c->remote_transport,
+					 sizeof(c->remote_transport), "%s", val);
+			else {
+				snprintf(c->remote_transport,
+					 sizeof(c->remote_transport), "invalid");
+				fprintf(stderr, "secure-sudod: invalid remote_syslog_transport\n");
+			}
+		} else if (!strcmp(key, "remote_syslog_ca_file")) {
+			if (*val)
+				snprintf(c->remote_ca_file,
+					 sizeof(c->remote_ca_file), "%s", val);
+		} else if (!strcmp(key, "remote_queue_max_mb")) {
+			char *end;
+			long limit = strtol(val, &end, 10);
+
+			if (*val && !*end && limit >= 1 && limit <= 1024)
+				c->remote_queue_max_mb = limit;
+			else {
+				c->remote_queue_max_mb = 0;
+				fprintf(stderr, "secure-sudod: invalid remote_queue_max_mb\n");
+			}
+		} else if (!strcmp(key, "vault_action"))
 			snprintf(c->vault_action, sizeof(c->vault_action), "%s", val);
 		else if (!strcmp(key, "vault_watch"))
 			snprintf(c->vault_watch, sizeof(c->vault_watch), "%s", val);
@@ -134,48 +183,431 @@ static void todays_logpath(char *buf, size_t n)
 		 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
 }
 
-static void forward_remote(const struct cfg *c, const char *line, size_t len)
+static int send_remote(const struct cfg *c, const char *line, size_t len)
 {
-	char host[256], *colon;
-	const char *port = "514";
-	struct addrinfo hints = { .ai_socktype = SOCK_DGRAM }, *res = NULL;
+	char target[256], host[256], *port;
+	struct addrinfo hints = { 0 }, *res = NULL, *ai;
 	int fd;
 
-	if (!c->remote_syslog[0])
-		return;
-	/* The event text is already control-char-scrubbed in the kernel, but be
-	 * defensive about the host:port we parse from config. */
-	snprintf(host, sizeof(host), "%s", c->remote_syslog);
-	colon = strrchr(host, ':');
-	if (colon) {
+	if (!c->remote_syslog[0]) {
+		snprintf(remote_state, sizeof(remote_state), "disabled");
+		return 0;
+	}
+	if (strcmp(c->remote_transport, "tls") &&
+	    strcmp(c->remote_transport, "udp")) {
+		snprintf(remote_state, sizeof(remote_state), "config_error");
+		remote_failures++;
+		return 0;
+	}
+	snprintf(target, sizeof(target), "%s", c->remote_syslog);
+	if (target[0] == '[') {
+		char *end = strchr(target, ']');
+
+		if (!end || end[1] != ':' || !end[2]) {
+			snprintf(remote_state, sizeof(remote_state), "config_error");
+			remote_failures++;
+			return 0;
+		}
+		*end = '\0';
+		snprintf(host, sizeof(host), "%s", target + 1);
+		port = end + 2;
+	} else {
+		char *colon = strrchr(target, ':');
+
+		if (!colon || colon == target || !colon[1]) {
+			snprintf(remote_state, sizeof(remote_state), "config_error");
+			remote_failures++;
+			return 0;
+		}
 		*colon = '\0';
+		snprintf(host, sizeof(host), "%s", target);
 		port = colon + 1;
 	}
-	if (getaddrinfo(host, port, &hints, &res) != 0 || !res)
-		return;
-	fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (fd >= 0) {
+	hints.ai_socktype = !strcmp(c->remote_transport, "tls") ?
+			    SOCK_STREAM : SOCK_DGRAM;
+	if (getaddrinfo(host, port, &hints, &res) != 0 || !res) {
+		snprintf(remote_state, sizeof(remote_state), "dns_error");
+		remote_failures++;
+		return 0;
+	}
+	for (ai = res; ai; ai = ai->ai_next) {
+		int flags, connected = 0;
+
+		fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (fd < 0)
+			continue;
+		if (!strcmp(c->remote_transport, "tls")) {
+			struct pollfd pfd;
+			int error = 0;
+			socklen_t error_len = sizeof(error);
+
+			flags = fcntl(fd, F_GETFL);
+			if (flags >= 0 &&
+			    fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0) {
+				if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+					connected = 1;
+				} else if (errno == EINPROGRESS) {
+					pfd.fd = fd;
+					pfd.events = POLLOUT;
+					pfd.revents = 0;
+					if (poll(&pfd, 1, 3000) > 0 &&
+					    getsockopt(fd, SOL_SOCKET, SO_ERROR,
+						       &error, &error_len) == 0 &&
+					    error == 0)
+						connected = 1;
+				}
+				fcntl(fd, F_SETFL, flags);
+			}
+		} else {
+			connected = connect(fd, ai->ai_addr,
+					    ai->ai_addrlen) == 0;
+		}
+		if (connected)
+			break;
+		close(fd);
+	}
+	if (!ai) {
+		freeaddrinfo(res);
+		snprintf(remote_state, sizeof(remote_state), "connect_error");
+		remote_failures++;
+		return 0;
+	}
+	if (!strcmp(c->remote_transport, "udp")) {
 		char msg[600];
 		int m = snprintf(msg, sizeof(msg), "<85>secure_sudo: %.*s",
 				 (int)len, line);
-		sendto(fd, msg, m, 0, res->ai_addr, res->ai_addrlen);
+
+		if (send(fd, msg, (size_t)m, 0) == m) {
+			snprintf(remote_state, sizeof(remote_state), "udp_unconfirmed");
+			remote_sent++;
+			close(fd);
+			freeaddrinfo(res);
+			return 1;
+		} else {
+			snprintf(remote_state, sizeof(remote_state), "send_error");
+			remote_failures++;
+		}
 		close(fd);
+	} else {
+		SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+		SSL *ssl = NULL;
+		struct timeval timeout = { .tv_sec = 3, .tv_usec = 0 };
+		unsigned char addr[sizeof(struct in6_addr)];
+		char msg[1200], frame[1232], hostname[256] = "localhost";
+		struct tm tm;
+		time_t now = time(NULL);
+		int m, framed, verified = 0, sent = 0;
+
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+		if (ctx &&
+		    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION) == 1 &&
+		    SSL_CTX_load_verify_locations(ctx, c->remote_ca_file,
+						  NULL) == 1) {
+			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+			ssl = SSL_new(ctx);
+		}
+		if (ssl) {
+			X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+
+			if (inet_pton(AF_INET, host, addr) == 1 ||
+			    inet_pton(AF_INET6, host, addr) == 1)
+				verified = X509_VERIFY_PARAM_set1_ip_asc(param, host) == 1;
+			else
+				verified = SSL_set1_host(ssl, host) == 1;
+			if (verified && inet_pton(AF_INET, host, addr) != 1 &&
+			    inet_pton(AF_INET6, host, addr) != 1 &&
+			    SSL_set_tlsext_host_name(ssl, host) != 1)
+				verified = 0;
+			if (SSL_set_fd(ssl, fd) != 1)
+				verified = 0;
+		}
+		if (!verified || !ssl || SSL_connect(ssl) != 1 ||
+		    SSL_get_verify_result(ssl) != X509_V_OK) {
+			snprintf(remote_state, sizeof(remote_state), "tls_error");
+			remote_failures++;
+		} else {
+			char timestamp[40];
+
+			gmtime_r(&now, &tm);
+			strftime(timestamp, sizeof(timestamp),
+				 "%Y-%m-%dT%H:%M:%SZ", &tm);
+			gethostname(hostname, sizeof(hostname) - 1);
+			m = snprintf(msg, sizeof(msg),
+				     "<85>1 %s %s secure_sudo - - - %.*s",
+				     timestamp, hostname, (int)len, line);
+			framed = snprintf(frame, sizeof(frame), "%d ", m);
+			if (m > 0 && framed > 0 &&
+			    (size_t)framed + (size_t)m < sizeof(frame)) {
+				memcpy(frame + framed, msg, (size_t)m);
+				if (SSL_write(ssl, frame, framed + m) == framed + m) {
+					snprintf(remote_state, sizeof(remote_state),
+						 "tls_sent_unconfirmed");
+					remote_sent++;
+					sent = 1;
+				} else {
+					snprintf(remote_state, sizeof(remote_state),
+						 "tls_error");
+					remote_failures++;
+				}
+			} else {
+				snprintf(remote_state, sizeof(remote_state),
+					 "message_error");
+				remote_failures++;
+			}
+		}
+		if (ssl)
+			SSL_free(ssl);
+		if (ctx)
+			SSL_CTX_free(ctx);
+		close(fd);
+		freeaddrinfo(res);
+		return sent;
 	}
 	freeaddrinfo(res);
+	return 0;
+}
+
+static int remote_queue_dir(void)
+{
+	struct stat st;
+
+	if (mkdir(REMOTE_QUEUE, 0700) != 0 && errno != EEXIST)
+		return -1;
+	if (lstat(REMOTE_QUEUE, &st) != 0 || !S_ISDIR(st.st_mode) ||
+	    st.st_uid != 0 || (st.st_mode & 0777) != 0700) {
+		errno = EPERM;
+		return -1;
+	}
+	return 0;
+}
+
+static int remote_queue_stats(void)
+{
+	struct dirent **entries = NULL;
+	int count, i;
+	unsigned long long bytes = 0, records = 0;
+
+	if (remote_queue_dir() != 0)
+		return -1;
+	count = scandir(REMOTE_QUEUE, &entries, NULL, alphasort);
+	if (count < 0)
+		return -1;
+	for (i = 0; i < count; i++) {
+		struct stat st;
+		char path[512];
+
+		if (strncmp(entries[i]->d_name, "event-", 6)) {
+			free(entries[i]);
+			continue;
+		}
+		snprintf(path, sizeof(path), "%s/%s", REMOTE_QUEUE,
+			 entries[i]->d_name);
+		if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) ||
+		    st.st_uid != 0 || (st.st_mode & 0777) != 0600) {
+			free(entries[i]);
+			while (++i < count)
+				free(entries[i]);
+			free(entries);
+			errno = EPERM;
+			return -1;
+		}
+		bytes += (unsigned long long)st.st_size;
+		records++;
+		free(entries[i]);
+	}
+	free(entries);
+	remote_queue_bytes = bytes;
+	remote_queue_records = records;
+	return 0;
+}
+
+static int write_all(int fd, const char *buf, size_t len)
+{
+	size_t written = 0;
+
+	while (written < len) {
+		ssize_t n = write(fd, buf + written, len - written);
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			return -1;
+		written += (size_t)n;
+	}
+	return 0;
+}
+
+static int remote_queue_event(const struct cfg *c, const char *line, size_t len)
+{
+	struct timespec ts;
+	char path[512], buf[1024];
+	int fd, n, dirfd;
+	unsigned long long limit;
+
+	if (len > sizeof(buf) - 2 || remote_queue_stats() != 0)
+		return -1;
+	limit = (unsigned long long)c->remote_queue_max_mb * 1024 * 1024;
+	if (remote_queue_bytes + len + 1 > limit ||
+	    remote_queue_records >= REMOTE_QUEUE_MAX_RECORDS) {
+		snprintf(remote_state, sizeof(remote_state), "queue_full");
+		remote_queue_dropped++;
+		errno = ENOSPC;
+		return -1;
+	}
+	clock_gettime(CLOCK_REALTIME, &ts);
+	n = snprintf(path, sizeof(path), "%s/event-%020llu-%08llu.msg",
+		     REMOTE_QUEUE, (unsigned long long)ts.tv_sec * 1000000000ULL +
+		     ts.tv_nsec, ++remote_queue_sequence);
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -1;
+	fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+		  0600);
+	if (fd < 0)
+		return -1;
+	memcpy(buf, line, len);
+	if (!len || line[len - 1] != '\n')
+		buf[len++] = '\n';
+	if (write_all(fd, buf, len) != 0 || fsync(fd) != 0) {
+		int saved = errno ? errno : EIO;
+
+		close(fd);
+		unlink(path);
+		errno = saved;
+		return -1;
+	}
+	if (close(fd) != 0) {
+		unlink(path);
+		return -1;
+	}
+	dirfd = open(REMOTE_QUEUE, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (dirfd < 0)
+		return -1;
+	if (fsync(dirfd) != 0) {
+		int saved = errno;
+
+		close(dirfd);
+		errno = saved;
+		return -1;
+	}
+	close(dirfd);
+	return remote_queue_stats();
+}
+
+static void flush_remote_queue(const struct cfg *c)
+{
+	struct dirent **entries = NULL;
+	int count, i;
+
+	if (remote_queue_stats() != 0) {
+		snprintf(remote_state, sizeof(remote_state), "queue_error");
+		remote_failures++;
+		return;
+	}
+	count = scandir(REMOTE_QUEUE, &entries, NULL, alphasort);
+	if (count < 0) {
+		snprintf(remote_state, sizeof(remote_state), "queue_error");
+		remote_failures++;
+		return;
+	}
+	if (!remote_queue_records) {
+		snprintf(remote_state, sizeof(remote_state), "tls_idle");
+		for (i = 0; i < count; i++)
+			free(entries[i]);
+		free(entries);
+		return;
+	}
+	for (i = 0; i < count; i++) {
+		char path[512], event[1024];
+		ssize_t n;
+		int fd;
+
+		if (strncmp(entries[i]->d_name, "event-", 6)) {
+			free(entries[i]);
+			continue;
+		}
+		snprintf(path, sizeof(path), "%s/%s", REMOTE_QUEUE,
+			 entries[i]->d_name);
+		fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+		if (fd < 0) {
+			snprintf(remote_state, sizeof(remote_state), "queue_error");
+			remote_failures++;
+			free(entries[i]);
+			for (++i; i < count; i++)
+				free(entries[i]);
+			free(entries);
+			return;
+		}
+		n = read(fd, event, sizeof(event) - 1);
+		close(fd);
+		if (n <= 0 || (n == sizeof(event) - 1 && event[n - 1] != '\n')) {
+			snprintf(remote_state, sizeof(remote_state), "queue_error");
+			remote_failures++;
+			free(entries[i]);
+			for (++i; i < count; i++)
+				free(entries[i]);
+			free(entries);
+			return;
+		}
+		if (!send_remote(c, event, (size_t)n) || unlink(path) != 0) {
+			free(entries[i]);
+			for (++i; i < count; i++)
+				free(entries[i]);
+			free(entries);
+			remote_queue_stats();
+			if (remote_queue_records)
+				snprintf(remote_state, sizeof(remote_state), "tls_queued");
+			return;
+		}
+		free(entries[i]);
+	}
+	free(entries);
+	if (remote_queue_stats() == 0 && !remote_queue_records)
+		snprintf(remote_state, sizeof(remote_state), "tls_idle");
+}
+
+static void forward_remote(const struct cfg *c, const char *line, size_t len)
+{
+	if (!c->remote_syslog[0]) {
+		snprintf(remote_state, sizeof(remote_state), "disabled");
+		return;
+	}
+	if (!strcmp(c->remote_transport, "tls")) {
+		if (remote_queue_event(c, line, len) != 0) {
+			if (strcmp(remote_state, "queue_full"))
+				snprintf(remote_state, sizeof(remote_state), "queue_error");
+			remote_failures++;
+			return;
+		}
+		flush_remote_queue(c);
+		return;
+	}
+	send_remote(c, line, len);
 }
 
 static void write_log(const struct cfg *c, const char *line, size_t len)
 {
 	char path[512];
 	FILE *f;
+	int failed = 0, saved = 0;
 
 	todays_logpath(path, sizeof(path));
 	f = fopen(path, "ae");
 	if (f) {
-		fwrite(line, 1, len, f);
-		if (len == 0 || line[len - 1] != '\n')
-			fputc('\n', f);
-		fclose(f);
+		if (fwrite(line, 1, len, f) != len ||
+		    ((len == 0 || line[len - 1] != '\n') && fputc('\n', f) == EOF) ||
+		    ferror(f))
+			failed = 1;
+		if (fclose(f) != 0)
+			failed = 1;
+	} else {
+		failed = 1;
+	}
+	if (failed) {
+		saved = errno ? errno : EIO;
+		local_log_failures++;
+		fprintf(stderr, "secure-sudod: cannot write local event log %s: %s\n",
+			path, strerror(saved));
 	}
 	forward_remote(c, line, len);
 }
@@ -183,12 +615,36 @@ static void write_log(const struct cfg *c, const char *line, size_t len)
 /* Delete logs older than retain_days and trim oldest until under max_total_mb. */
 static void enforce_retention(const struct cfg *c)
 {
-	DIR *d = opendir(LOGDIR);
+	DIR *d;
 	struct dirent *de;
 	time_t now = time(NULL);
 	long total = 0;
+	struct stat hold;
 	/* simple two-pass: first delete by age, then by total size */
 
+	if (lstat(RETENTION_HOLD, &hold) == 0) {
+		if (!S_ISREG(hold.st_mode) || hold.st_uid != 0 ||
+		    (hold.st_mode & 07777) != 0600) {
+			if (strcmp(retention_state, "hold_error"))
+				fprintf(stderr, "secure-sudod: invalid retention hold "
+					"marker; preserving logs\n");
+			snprintf(retention_state, sizeof(retention_state),
+				 "hold_error");
+			return;
+		}
+		snprintf(retention_state, sizeof(retention_state), "held");
+		return;
+	}
+	if (errno != ENOENT) {
+		if (strcmp(retention_state, "hold_error"))
+			fprintf(stderr, "secure-sudod: cannot inspect retention hold "
+				"marker: %s; preserving logs\n", strerror(errno));
+		snprintf(retention_state, sizeof(retention_state), "hold_error");
+		return;
+	}
+	snprintf(retention_state, sizeof(retention_state), "active");
+
+	d = opendir(LOGDIR);
 	if (!d)
 		return;
 	while ((de = readdir(d))) {
@@ -241,6 +697,44 @@ static void enforce_retention(const struct cfg *c)
 		unlink(oldest);
 		total -= freed;
 	}
+}
+
+static int write_health_heartbeat(void)
+{
+	char path[256];
+	int fd, n;
+	char buf[512];
+
+	snprintf(path, sizeof(path), "%s", HEALTH_FILE);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+		  0600);
+	if (fd < 0)
+		return -1;
+	n = snprintf(buf, sizeof(buf),
+		     "pid=%ld updated=%lld remote_transport=%s "
+		     "retention_state=%s "
+		     "remote_state=%s remote_sent=%llu remote_failures=%llu "
+		     "remote_queue_records=%llu remote_queue_bytes=%llu "
+		     "remote_queue_dropped=%llu local_log_failures=%llu\n",
+		     (long)getpid(), (long long)time(NULL),
+		     g_cfg ? g_cfg->remote_transport : "unknown",
+		     retention_state, remote_state,
+		     remote_sent, remote_failures, remote_queue_records,
+		     remote_queue_bytes, remote_queue_dropped,
+		     local_log_failures);
+	if (write(fd, buf, (size_t)n) != n) {
+		int saved = errno ? errno : EIO;
+		close(fd);
+		errno = saved;
+		return -1;
+	}
+	if (fsync(fd) != 0) {
+		int saved = errno;
+		close(fd);
+		errno = saved;
+		return -1;
+	}
+	return close(fd);
 }
 
 /* ---- #8 cooldown: freeze + kill the offending sudo/su processes ---- */
@@ -316,7 +810,6 @@ static void kill_offenders(uid_t uid)
 }
 
 /* Minimal local logger (also goes to our own event log via write path). */
-static struct cfg *g_cfg;
 static void syslog_line(const char *fmt, ...)
 {
 	char buf[512];
@@ -342,6 +835,41 @@ static void maybe_cooldown(const char *line)
 		return;
 	if (sscanf(p, "cooldown: UID %u blocked", &uid) == 1)
 		kill_offenders((uid_t)uid);
+}
+
+static void event_message(const char *record, char *out, size_t size)
+{
+	const char *p = strstr(record, "\"message\":\"");
+	size_t n = 0;
+
+	if (!p) {
+		snprintf(out, size, "%s", record);
+		return;
+	}
+	p += strlen("\"message\":\"");
+	while (*p && *p != '"' && n + 1 < size) {
+		if (*p == '\\' && p[1] == 'u' && strlen(p) >= 6 &&
+		    p[2] == '0' && p[3] == '0') {
+			int hi, lo;
+			char a = p[4], b = p[5];
+
+			hi = a >= '0' && a <= '9' ? a - '0' :
+			     a >= 'a' && a <= 'f' ? a - 'a' + 10 :
+			     a >= 'A' && a <= 'F' ? a - 'A' + 10 : -1;
+			lo = b >= '0' && b <= '9' ? b - '0' :
+			     b >= 'a' && b <= 'f' ? b - 'a' + 10 :
+			     b >= 'A' && b <= 'F' ? b - 'A' + 10 : -1;
+			if (hi >= 0 && lo >= 0) {
+				out[n++] = (char)((hi << 4) | lo);
+				p += 6;
+				continue;
+			}
+		}
+		if (*p == '\\' && p[1])
+			p++;
+		out[n++] = *p++;
+	}
+	out[n] = '\0';
 }
 
 /*
@@ -639,6 +1167,7 @@ int main(void)
 	struct pollfd pfd;
 	time_t last_periodic = 0;
 	time_t last_pbox = 0;
+	time_t last_health = 0;
 
 	signal(SIGHUP, on_hup);
 	signal(SIGTERM, on_term);
@@ -674,6 +1203,17 @@ int main(void)
 			syslog_line("config reloaded");
 		}
 
+		if (now - last_health >= 5) {
+			last_health = now;
+			if (cfg.remote_syslog[0] &&
+			    !strcmp(cfg.remote_transport, "tls")) {
+				flush_remote_queue(&cfg);
+			}
+			if (write_health_heartbeat() != 0)
+				fprintf(stderr, "secure-sudod: cannot update health heartbeat: %s\n",
+					strerror(errno));
+		}
+
 		if (rc > 0 && (pfd.revents & POLLIN)) {
 			char buf[4096];
 			ssize_t n = read(pfd.fd, buf, sizeof(buf) - 1);
@@ -684,9 +1224,12 @@ int main(void)
 				buf[n] = '\0';
 				for (line = strtok_r(buf, "\n", &save); line;
 				     line = strtok_r(NULL, "\n", &save)) {
+					char message[512];
+
 					write_log(&cfg, line, strlen(line));
-					maybe_cooldown(line);
-					maybe_quarantine_denied(&cfg, line);
+					event_message(line, message, sizeof(message));
+					maybe_cooldown(message);
+					maybe_quarantine_denied(&cfg, message);
 				}
 			}
 		}

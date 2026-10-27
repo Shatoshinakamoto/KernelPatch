@@ -6,6 +6,11 @@ its companion tools safer to build, deploy, operate, and trust during an
 incident. This is a roadmap, not a claim that the existing protections are
 absent or that the project is already production-certified.
 
+Execution update: P1-1 through P1-4 are now in progress; their partial
+implementation and remaining acceptance gaps are tracked in
+[docs/ROADMAP_STATUS.md](docs/ROADMAP_STATUS.md). Keep their checkboxes open
+until each item's full **Done when** criteria is met.
+
 ## Scope and current baseline
 
 The repository is a built-in Linux LSM plus userspace policy, PAM, logging,
