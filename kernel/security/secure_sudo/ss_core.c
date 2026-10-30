@@ -238,7 +238,10 @@ void ss_lock_engage(const char *why)
 {
 	if (atomic_cmpxchg(&ss_lock_state, 0, 1) == 0) {
 		pr_warn("configuration LOCKED until reboot (%s)\n", why);
-		ss_event("lock: engaged by %s; config frozen until reboot", why);
+		ss_event_typed("configuration_lock", "current_user",
+			       "engage_lock", "kernel_configuration", "enforce",
+			       why, "lock: engaged by %s; config frozen until reboot",
+			       why);
 	}
 }
 
@@ -267,8 +270,11 @@ static ssize_t lock_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (ss_locked()) {
 			pr_warn_ratelimited("refused attempt to unlock config (UID %u)\n",
 					    from_kuid(&init_user_ns, current_uid()));
-			ss_event("lock: refused unlock attempt by UID %u",
-				 from_kuid(&init_user_ns, current_uid()));
+			ss_event_typed("configuration_lock", "current_user",
+				       "unlock", "kernel_configuration", "deny",
+				       "one_way_lock",
+				       "lock: refused unlock attempt by UID %u",
+				       from_kuid(&init_user_ns, current_uid()));
 			return -EPERM;
 		}
 		return -EINVAL;
@@ -331,6 +337,16 @@ static ssize_t events_dropped_show(struct kobject *k, struct kobj_attribute *a,
 }
 static struct kobj_attribute events_dropped_attr = __ATTR_RO_MODE(events_dropped, 0400);
 
+/* #9 audit records rejected by the kernel audit backlog. */
+static ssize_t audit_events_dropped_show(struct kobject *k,
+					 struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)ss_audit_events_dropped());
+}
+static struct kobj_attribute audit_events_dropped_attr =
+	__ATTR_RO_MODE(audit_events_dropped, 0400);
+
 static struct kobj_attribute lock_attr =
 	__ATTR(lock, 0600, lock_show, lock_store);
 static struct kobj_attribute lock_modules_attr =
@@ -342,6 +358,7 @@ static struct attribute *ss_core_attrs[] = {
 	&audit_events_attr.attr,
 	&lock_confidentiality_attr.attr,
 	&events_dropped_attr.attr,
+	&audit_events_dropped_attr.attr,
 	NULL,
 };
 
@@ -375,7 +392,11 @@ static int ss_lock_locked_down(enum lockdown_reason what)
 	if (READ_ONCE(ss_cfg.lock_confidentiality) &&
 	    what > LOCKDOWN_INTEGRITY_MAX && what < LOCKDOWN_CONFIDENTIALITY_MAX) {
 		pr_warn_ratelimited("locked: denied %s\n", lockdown_reasons[what]);
-		ss_event("lock: denied %s", lockdown_reasons[what]);
+		ss_event_typed("configuration_lock", "current_task",
+			       "access_kernel_resource",
+			       lockdown_reasons[what], "deny",
+			       "confidentiality_lock",
+			       "lock: denied %s", lockdown_reasons[what]);
 		return -EPERM;
 	}
 	return 0;
@@ -389,7 +410,10 @@ static int ss_lock_load_id(int is_module, int is_kexec, int is_trust,
 	if (is_kexec || is_trust ||
 	    (is_module && READ_ONCE(ss_cfg.lock_modules))) {
 		pr_warn_ratelimited("locked: denied %s load\n", what);
-		ss_event("lock: denied %s load", what);
+		ss_event_typed("configuration_lock", "current_task",
+			       "load_code", what, "deny",
+			       "integrity_lock",
+			       "lock: denied %s load", what);
 		return -EPERM;
 	}
 	return 0;

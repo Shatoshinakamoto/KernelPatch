@@ -309,7 +309,27 @@ The daemon-side settings:
 |-----|---------|---------|
 | `retain_days` | `14` | Delete logs older than this. |
 | `max_total_mb` | `512` | Trim oldest logs once the total exceeds this. |
-| `remote_syslog` | *(empty)* | `host:port` to forward events to over UDP syslog (TimeVault relies on this so a locked box's logs survive off-box). |
+| `remote_syslog` | *(empty)* | Collector `host:port` (IPv6 literals use `[address]:port`). |
+| `remote_syslog_transport` | `udp` | `udp` retains legacy unauthenticated datagrams; `tls` selects RFC 5425 syslog over TLS with CA and host/IP verification. Configure this explicitly for authenticated forwarding. |
+| `remote_syslog_ca_file` | `/etc/ssl/certs/ca-certificates.crt` | CA bundle used to authenticate the collector in TLS mode. The configured host or IP must match the certificate. |
+| `remote_queue_max_mb` | `10` | TLS-only disk queue cap (1–1024 MiB), stored mode 0700 under `/var/lib/secure_sudo/remote-queue`, with a hard limit of 4096 pending event files. Events are retried oldest first after reconnect and daemon restart. When either bound is full, the newest event is dropped and counted; `secure-sudo health` reports queue size and drops. |
+
+TLS mode retains events locally until a TLS write succeeds. A write is not an
+application-level acknowledgment: RFC 5425 does not prove that the collector
+persisted or indexed the event. Retries after ambiguous disconnects can deliver
+duplicates; a successful write followed by a collector-side failure can still
+lose an event. UDP remains explicitly unconfirmed. The local log is written
+before either forwarding path and continues when the collector is unavailable.
+
+TLS uses server authentication only; client certificates and client private
+keys are not configured. For collector CA rotation, install an overlap bundle
+containing both old and new trust anchors at `remote_syslog_ca_file`, then
+switch the collector certificate, confirm forwarding, and remove the old
+anchor. Replace the bundle atomically so a connection cannot read a partial
+file. The daemon creates a new TLS context for each connection, so a bundle
+replacement takes effect on the next send without restarting it. A changed
+configuration path requires restarting the daemon. The forwarding test
+verifies that an atomically replaced bundle is used for the next connection.
 
 ---
 

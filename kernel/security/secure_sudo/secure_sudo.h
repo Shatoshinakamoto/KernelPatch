@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/atomic.h>
 #include <linux/cred.h>
+#include <linux/uidgid.h>
 #include <linux/mutex.h>
 #include <linux/kobject.h>
 #include <linux/lsm_hooks.h>
@@ -156,6 +157,46 @@ static inline bool ss_is_sudo_user(void)
 	return ss_cred_is_sudo(current_cred());
 }
 
+struct ss_event_fields {
+	const char *event_type;
+	const char *target;
+	pid_t target_pid;
+	bool target_pid_valid;
+	kuid_t target_uid;
+	bool target_uid_valid;
+	const char *operation;
+	const char *object;
+	const char *decision;
+	const char *reason;
+};
+
+void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...);
+void ss_event(const char *fmt, ...);
+#define ss_event_typed(_type, _target, _operation, _object, _decision, \
+		       _reason, ...) \
+	ss_event_record(&(struct ss_event_fields) { \
+		.event_type = (_type), .target = (_target), \
+		.operation = (_operation), .object = (_object), \
+		.decision = (_decision), .reason = (_reason), \
+	}, __VA_ARGS__)
+#define ss_event_typed_pid(_type, _target, _target_pid, _operation, \
+			   _object, _decision, _reason, ...) \
+	ss_event_record(&(struct ss_event_fields) { \
+		.event_type = (_type), .target = (_target), \
+		.target_pid = (_target_pid), .target_pid_valid = true, \
+		.operation = (_operation), .object = (_object), \
+		.decision = (_decision), .reason = (_reason), \
+	}, __VA_ARGS__)
+#define ss_event_typed_pid_uid(_type, _target, _target_pid, _target_uid, \
+			       _operation, _object, _decision, _reason, ...) \
+	ss_event_record(&(struct ss_event_fields) { \
+		.event_type = (_type), .target = (_target), \
+		.target_pid = (_target_pid), .target_pid_valid = true, \
+		.target_uid = (_target_uid), .target_uid_valid = true, \
+		.operation = (_operation), .object = (_object), \
+		.decision = (_decision), .reason = (_reason), \
+	}, __VA_ARGS__)
+
 /*
  * #16: once config is locked, every knob refuses writes until the next reboot.
  * The state is a one-way atomic latch: ss_lock_engage() is the only writer and
@@ -212,6 +253,7 @@ static inline int ss_check_range(u32 v, u32 lo, u32 hi)
 __printf(1, 2) void ss_event(const char *fmt, ...);
 /* #9: number of event lines dropped from the ring since boot. */
 u64 ss_events_dropped(void);
+u64 ss_audit_events_dropped(void);
 
 /* SHA-256 a file's full contents into @hex_out (>=65 bytes, hex + NUL). Defined
  * in ss_driver.c, shared with TimeVault. Returns 0 on success. */

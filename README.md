@@ -16,7 +16,7 @@ userspace/
   cli/        secure-sudo         control CLI (loads policy, status, knobs)
   pam/        pam_secure_sudo.so  feeds sudo/su auth results to the kernel
               pam_secure_otp.so   verifies the rotating OTP password
-  daemon/     secure-sudod        logs, cooldown kill, nft, TimeVault
+  daemon/     secure-sudod        logs, cooldown kill, nft, TimeVault, health heartbeat
   otp/        secure-sudo-otp     TOTP setup/verify, local QR, encrypted secret
   config/     templates for /etc/secure_sudo/
 scripts/
@@ -70,7 +70,7 @@ temporary/                        opt-in add-ons (below)
 | 6 | K | Driver blacklist / anti-BYOVD: SHA-256 + name checked at module load. |
 | 7 | K | RAM-spike detection drops caches (`si_mem_available`, kernel worker). |
 | 8 | K + U | Sudo brute-force cooldown: PAM feeds failures, the kernel blocks, the daemon kills the offender. |
-| 9 | K + U | Security event ring; the daemon writes dated, rotated, retained logs. |
+| 9 | K + U | Versioned JSON security events with per-boot sequence/clock/actor metadata and visible ring/audit loss counters; the daemon writes dated, rotated logs. `secure-sudo health` reports loss and component status; `evidence-export` creates hash-chained, optionally externally signed bundles. |
 | 10 | K + U | Network host mode denies raw/`AF_PACKET` sockets; nft rules for LAN/public modes. |
 | 11 | K | NodeJS child-process guard (LSM task blob + allowlist). |
 | 12 | K | Restrict exec and `PROT_EXEC` mmap from `/tmp`, `/var/tmp`, `/dev/shm`. |

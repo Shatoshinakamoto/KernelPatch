@@ -564,17 +564,24 @@ static size_t drain_events(char *buf, size_t len)
 
 static int line_is_event(const char *l)
 {
-	const char *p = l;
+	static const char prefix[] = "{\"schema_version\":1,\"boot_id\":\"";
 
-	while (*p >= '0' && *p <= '9')
-		p++;
-	if (p == l || *p != '.')
-		return 0;
-	p++;
-	if (!(p[0] >= '0' && p[0] <= '9' && p[1] >= '0' && p[1] <= '9' &&
-	      p[2] >= '0' && p[2] <= '9' && p[3] == ' '))
-		return 0;
-	return 1;
+	return l && strlen(l) > sizeof(prefix) &&
+	       !strncmp(l, prefix, sizeof(prefix) - 1) &&
+	       strstr(l, "\"sequence\":") &&
+	       strstr(l, "\"realtime_ns\":") &&
+	       strstr(l, "\"monotonic_ns\":") &&
+	       strstr(l, "\"event_type\":") &&
+	       strstr(l, "\"actor\":{\"pid\":") &&
+	       strstr(l, "\"target\":") &&
+	       strstr(l, "\"operation\":") &&
+	       strstr(l, "\"object\":") &&
+	       strstr(l, "\"decision\":") &&
+	       strstr(l, "\"reason\":") &&
+	       strstr(l, "\"target_pid\":") &&
+	       strstr(l, "\"target_uid\":") &&
+	       strstr(l, "\"truncated\":") &&
+	       strstr(l, "\"message\":\"") && l[strlen(l) - 1] == '}';
 }
 
 /* ============================================================== tests */
@@ -984,6 +991,27 @@ static void t_events(void)
 	as(&NONSUDO, do_perf, NULL);
 	n = drain_events(buf, sizeof(buf));
 	tap(n > 0 && strstr(buf, "perf: denied"), "#9 a denial produces an event line");
+	tap(line_is_event(strtok(buf, "\n")),
+	    "#9 event carries schema, boot, sequence, clocks, actor and typed fields");
+	tap(strstr(buf, "\"event_type\":\"perf\"") &&
+	    strstr(buf, "\"operation\":\"perf_event_open\"") &&
+	    strstr(buf, "\"decision\":\"deny\"") &&
+	    strstr(buf, "\"target_pid\":null") &&
+	    strstr(buf, "\"target_uid\":null") &&
+	    strstr(buf, "\"truncated\":false") &&
+	    strstr(buf, "\"reason\":\"perf_guard\""),
+	    "#9 producer supplies typed event classification and decision");
+
+	knob_set("prguard_observe", "1");
+	(void)drain_events(buf, sizeof(buf));
+	(void)as(&NONSUDO, do_ptrace, (void *)SS_PT_ATTACH);
+	n = drain_events(buf, sizeof(buf));
+	tap(n > 0 && strstr(buf, "\"target_pid\":") &&
+	    !strstr(buf, "\"target_pid\":null") &&
+	    strstr(buf, "\"target_uid\":") &&
+	    !strstr(buf, "\"target_uid\":null"),
+	    "#9 cross-process memory events identify the target PID and UID");
+	knob_set("prguard_observe", "0");
 
 	/* Overflow the 64 KiB ring, then check that what the reader gets is
 	 * still whole lines and that the loss is counted. */
@@ -1004,6 +1032,10 @@ static void t_events(void)
 		tap(strtoull(dropped, NULL, 10) > 0, "#9 events_dropped counts the loss (%s)", dropped);
 	else
 		tap(0, "#9 events_dropped counter exists");
+	if (rd(KNOB "audit_events_dropped", dropped, sizeof(dropped)) == 0)
+		tap(1, "#9 audit_events_dropped counter exists (%s)", dropped);
+	else
+		tap(0, "#9 audit_events_dropped counter exists");
 	knob_set("perf_guard", "0");
 }
 

@@ -121,5 +121,40 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/audit_events` | rw (0600) | #9 also send events to the kernel audit subsystem (auditd) |
 | `/sys/kernel/secure_sudo/lock_confidentiality` | rw (0600) | #16 while locked, also refuse lockdown's confidentiality class |
 | `/sys/kernel/secure_sudo/events_dropped` | r (0400) | #9 events lost because the ring was full (whole events are dropped, never parts of lines) |
+| `/sys/kernel/secure_sudo/audit_events_dropped` | r (0400) | #9 audit records refused by the audit backlog |
+
+Kernel event lines use schema-v1 JSON: `schema_version`, per-boot random
+`boot_id`, per-boot `sequence`, `realtime_ns`, `monotonic_ns`, an event
+category, current-task PID/UID under `actor`, typed `target`, `operation`,
+`object`, `decision`, `reason`, and optional numeric `target_pid` and
+`target_uid` values where the producer supplies them, and the escaped original
+`message`, plus a `truncated` boolean that is true if the formatted message,
+event type, or a typed string was shortened to its bound. Cross-process
+memory-access events identify both target PID and UID. Missing structured
+values are JSON null.
+Typed string fields are escaped and bounded to keep records within the ring's
+record-size limit. Decisions use `deny`, `allow`, `observe`, or `enforce`;
+operation, object and reason values are producer-defined stable identifiers,
+not inferred from message text. Non-ASCII message bytes are encoded as
+`\u00xx` byte escapes so the JSON remains valid even when a path is not UTF-8;
+`secure-sudod` decodes these escapes back to the original bytes. For deferred
+work, current-task identity can be a kernel worker; the initiating userspace
+task is not yet preserved, and some target fields remain descriptive labels
+rather than a fully typed PID/UID identity. `audit_events_dropped` counts
+calls for which the audit subsystem did not provide an event buffer; it is not
+a complete audit backlog accounting interface.
+
+The ring is 64 KiB and each complete JSON line is capped at 640 bytes. It has
+no producer-side rate limit: on saturation it discards oldest whole records,
+increments `events_dropped`, and preserves complete-line framing. At most 102
+maximum-size records fit at once; normal shorter lines allow more. Consumers
+must monitor the drop counter and sequence numbers rather than assume complete
+history.
+
+Example shape:
+
+```json
+{"schema_version":1,"boot_id":"0123...","sequence":42,"realtime_ns":0,"monotonic_ns":0,"event_type":"perf","actor":{"pid":1000,"uid":1000},"target":"current_user","operation":"perf_event_open","object":"performance_event","decision":"deny","reason":"perf_guard","target_pid":null,"target_uid":null,"message":"perf: denied ...","truncated":false}
+```
 
 All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `prguard`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.

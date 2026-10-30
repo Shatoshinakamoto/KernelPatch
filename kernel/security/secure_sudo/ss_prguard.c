@@ -140,10 +140,21 @@ static int ss_pg_ptrace_access(struct task_struct *child, unsigned int mode)
 	 * per cross-process memory access check, classified read vs write, with
 	 * the source and target pid/comm, so the GUI can show "who accessed whose
 	 * memory". Rate-limited and verbose; off by default. */
-	if (READ_ONCE(ss_cfg.prguard_observe) && current->pid != child->pid)
-		ss_event("prguard: mem-access %s by pid %d (%s) -> pid %d (%s)",
-			 (mode & PTRACE_MODE_ATTACH) ? "WRITE" : "READ",
-			 current->pid, current->comm, child->pid, child->comm);
+	if (READ_ONCE(ss_cfg.prguard_observe) && current->pid != child->pid) {
+		const struct cred *child_cred = get_task_cred(child);
+
+		ss_event_typed_pid_uid("process_runtime_guard", child->comm,
+				       child->pid, child_cred->uid,
+				       (mode & PTRACE_MODE_ATTACH) ?
+				       "write_memory" : "read_memory",
+				       "process_memory", "observe",
+				       "cross_process_access",
+				       "prguard: mem-access %s by pid %d (%s) -> pid %d (%s)",
+				       (mode & PTRACE_MODE_ATTACH) ? "WRITE" : "READ",
+				       current->pid, current->comm, child->pid,
+				       child->comm);
+		put_cred(child_cred);
+	}
 
 	/* Only ATTACH mode can WRITE another process (and gates
 	 * process_vm_writev + /proc/pid/mem). Read-only inspection is allowed. */
@@ -157,8 +168,17 @@ static int ss_pg_ptrace_access(struct task_struct *child, unsigned int mode)
 	pr_warn_ratelimited("prguard: denied ptrace ATTACH by UID %u (pid %d) to pid %d\n",
 			    from_kuid(&init_user_ns, current_uid()),
 			    current->pid, child->pid);
-	ss_event("prguard: denied ptrace ATTACH pid %d -> pid %d",
-		 current->pid, child->pid);
+	{
+		const struct cred *child_cred = get_task_cred(child);
+
+		ss_event_typed_pid_uid("process_runtime_guard", child->comm,
+				       child->pid, child_cred->uid,
+				       "ptrace_attach", "process_memory", "deny",
+				       "memory_access_policy",
+				       "prguard: denied ptrace ATTACH pid %d -> pid %d",
+				       current->pid, child->pid);
+		put_cred(child_cred);
+	}
 	return -EPERM;
 }
 
@@ -201,7 +221,10 @@ static int ss_pg_ptrace_traceme(struct task_struct *parent)
 
 	pr_warn_ratelimited("prguard: denied PTRACE_TRACEME (pid %d)\n",
 			    current->pid);
-	ss_event("prguard: denied PTRACE_TRACEME pid %d", current->pid);
+	ss_event_typed("process_runtime_guard", "current_process",
+		       "ptrace_traceme", "process_memory", "deny",
+		       "tracer_not_allowlisted",
+		       "prguard: denied PTRACE_TRACEME pid %d", current->pid);
 	return -EPERM;
 }
 
@@ -220,7 +243,10 @@ static int wx_check(unsigned long prot, const char *what)
 	pr_warn_ratelimited("prguard: denied W^X %s by UID %u (pid %d)\n",
 			    what, from_kuid(&init_user_ns, current_uid()),
 			    current->pid);
-	ss_event("prguard: denied W^X %s pid %d", what, current->pid);
+	ss_event_typed("process_runtime_guard", "current_process",
+		       "request_memory_protection", what, "deny",
+		       "write_execute_prohibited",
+		       "prguard: denied W^X %s pid %d", what, current->pid);
 	return -EPERM;
 }
 

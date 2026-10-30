@@ -45,6 +45,8 @@ const struct knob *find_knob(const char *key);
 const struct listmap *find_list(const char *name);
 int is_daemon_key(const char *key);
 const char *check_value(const struct knob *k, const char *v, char *why, size_t n);
+const char *check_daemon_value(const char *key, const char *v, char *why,
+			       size_t n);
 
 struct cfg_entry {
 	int line;

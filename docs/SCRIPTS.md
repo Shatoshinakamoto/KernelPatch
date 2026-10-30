@@ -309,3 +309,22 @@ original. If archiving fails the original stays where it was and the daemon
 logs it and retries later; two files with the same name never overwrite each
 other's evidence. All filename handling uses `--` so an attacker-chosen name
 cannot be read as an option.
+
+## `userspace/daemon/helpers/evidence-export.sh`
+
+Invoked by `sudo secure-sudo evidence-export OUTPUT.tar.gz` to create a
+root-only incident bundle. It copies local event logs, snapshots non-secret
+policy files and live kernel state, includes service status and quarantine
+metadata/hashes without copying quarantined contents, and creates a checksum
+manifest plus per-log hash chains. An optional external Ed25519 PEM key signs
+the chain checkpoint and the checksum manifest. The key must be root-owned and
+not group/world-readable. See [COMMANDS.md](COMMANDS.md) for verification and
+key-custody limitations.
+
+## `userspace/daemon/helpers/evidence-verify.py`
+
+Invoked by `secure-sudo evidence-verify ARCHIVE.tar.gz [--trusted-key PUBLIC.pem]`.
+It rejects unsafe archive members, verifies that the checksum manifest covers
+the payload, recomputes each exported log chain, and validates detached
+signatures against an independently supplied trusted public key. It never
+extracts files outside a private temporary directory.

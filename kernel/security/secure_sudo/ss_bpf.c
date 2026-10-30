@@ -55,8 +55,10 @@ static int ss_bpf_cmd(int cmd, union bpf_attr *attr, unsigned int size)
 		return 0;
 	pr_warn_ratelimited("bpf: denied bpf cmd %d for non-sudo uid %u\n", cmd,
 			    from_kuid(&init_user_ns, current_uid()));
-	ss_event("bpf: denied cmd %d uid %u (%s)", cmd,
-		 from_kuid(&init_user_ns, current_uid()), current->comm);
+	ss_event_typed("bpf", "current_user", "bpf_syscall", current->comm,
+		       "deny", "bpf_guard",
+		       "bpf: denied cmd %d uid %u (%s)", cmd,
+		       from_kuid(&init_user_ns, current_uid()), current->comm);
 	return -EPERM;
 }
 
@@ -92,9 +94,11 @@ static int ss_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 		return 0;
 	pr_warn_ratelimited("bpf: locked: refused tracing prog type %d (%s)\n",
 			    prog->type, current->comm);
-	ss_event("bpf: locked: refused tracing prog type %d by pid %d (%s) uid %u",
-		 prog->type, current->pid, current->comm,
-		 from_kuid(&init_user_ns, current_uid()));
+	ss_event_typed("bpf", "current_user", "load_program",
+		       "tracing_bpf_program", "deny", "configuration_locked",
+		       "bpf: locked: refused tracing prog type %d by pid %d (%s) uid %u",
+		       prog->type, current->pid, current->comm,
+		       from_kuid(&init_user_ns, current_uid()));
 	return -EPERM;
 }
 #endif /* CONFIG_BPF_SYSCALL */
@@ -115,9 +119,11 @@ static int ss_perf_check(int sec_class, int ev_type)
 		return 0;
 	pr_warn_ratelimited("perf: denied perf_event_open for uid %u\n",
 			    from_kuid(&init_user_ns, current_uid()));
-	ss_event("perf: denied perf_event_open class %d type %d uid %u (%s)",
-		 sec_class, ev_type,
-		 from_kuid(&init_user_ns, current_uid()), current->comm);
+	ss_event_typed("perf", "current_user", "perf_event_open",
+		       "performance_event", "deny", "perf_guard",
+		       "perf: denied perf_event_open class %d type %d uid %u (%s)",
+		       sec_class, ev_type,
+		       from_kuid(&init_user_ns, current_uid()), current->comm);
 	return -EPERM;
 }
 

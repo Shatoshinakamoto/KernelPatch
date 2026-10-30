@@ -12,8 +12,8 @@
  *
  * The ring is a byte kfifo behind a spinlock, readable (blocking) and pollable
  * at /sys/kernel/security/secure_sudo/events. ss_event() is safe to call from
- * any of our hooks; it never sleeps and silently drops the oldest bytes if a
- * slow reader lets the ring fill.
+ * any of our hooks; it never sleeps, marks bounded-string truncation, and
+ * drops the oldest whole lines if a slow reader lets the ring fill.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -32,11 +32,15 @@
 #include <linux/stdarg.h>
 #include <linux/security.h>
 #include <linux/audit.h>
+#include <linux/cred.h>
+#include <linux/random.h>
+#include <linux/uidgid.h>
+#include <linux/user_namespace.h>
 
 #include "secure_sudo.h"
 
 #define SS_RING_BYTES	(64 * 1024)
-#define SS_LINE_MAX	256
+#define SS_LINE_MAX	640
 
 static DEFINE_KFIFO(ss_ring, char, SS_RING_BYTES);
 static DEFINE_SPINLOCK(ss_ring_lock);
@@ -44,10 +48,18 @@ static DECLARE_WAIT_QUEUE_HEAD(ss_ring_wq);
 static bool ss_ring_ready;
 /* Lines discarded because a slow reader let the ring fill (never reset). */
 static atomic64_t ss_ring_dropped = ATOMIC64_INIT(0);
+static atomic64_t ss_event_sequence = ATOMIC64_INIT(0);
+static atomic64_t ss_audit_dropped = ATOMIC64_INIT(0);
+static u8 ss_boot_id[16];
 
 u64 ss_events_dropped(void)
 {
 	return atomic64_read(&ss_ring_dropped);
+}
+
+u64 ss_audit_events_dropped(void)
+{
+	return atomic64_read(&ss_audit_dropped);
 }
 
 /*
@@ -66,48 +78,190 @@ static void ss_audit_event(const char *msg)
 	if (!READ_ONCE(ss_cfg.audit_events))
 		return;
 	ab = audit_log_start(audit_context(), GFP_ATOMIC, AUDIT_KERNEL_OTHER);
-	if (!ab)
+	if (!ab) {
+		atomic64_inc(&ss_audit_dropped);
 		return;
+	}
 	audit_log_format(ab, "lsm=secure_sudo msg=");
 	audit_log_untrustedstring(ab, msg);
 	audit_log_end(ab);
 #endif
 }
 
-void ss_event(const char *fmt, ...)
+static int ss_json_string(char *line, int n, const char *value,
+			  int output_budget, bool *truncated)
 {
-	char line[SS_LINE_MAX];
+	static const char hex[] = "0123456789abcdef";
+	int start = n, i;
+
+	line[n++] = '"';
+	for (i = 0; value && value[i]; i++) {
+		unsigned char c = value[i];
+		int escaped = c == '"' || c == '\\';
+		int unicode = c >= 0x80;
+		int needed = unicode ? 6 : escaped ? 2 : 1;
+
+		if (n - start - 1 + needed > output_budget) {
+			*truncated = true;
+			break;
+		}
+		if (c < 0x20 || c == 0x7f)
+			c = '?';
+		if (unicode) {
+			line[n++] = '\\';
+			line[n++] = 'u';
+			line[n++] = '0';
+			line[n++] = '0';
+			line[n++] = hex[c >> 4];
+			line[n++] = hex[c & 0x0f];
+		} else if (escaped) {
+			line[n++] = '\\';
+			line[n++] = c;
+		} else {
+			line[n++] = c;
+		}
+	}
+	line[n++] = '"';
+	return n;
+}
+
+static int ss_json_field(char *line, int n, const char *name,
+			 const char *value, int output_budget, bool *truncated)
+{
+	n += scnprintf(line + n, SS_LINE_MAX - n, "\"%s\":", name);
+	if (value)
+		n = ss_json_string(line, n, value, output_budget, truncated);
+	else
+		n += scnprintf(line + n, SS_LINE_MAX - n, "null");
+	n += scnprintf(line + n, SS_LINE_MAX - n, ",");
+	return n;
+}
+
+static int ss_json_pid_field(char *line, int n, const char *name,
+			     bool valid, pid_t pid)
+{
+	n += scnprintf(line + n, SS_LINE_MAX - n, "\"%s\":", name);
+	if (valid)
+		n += scnprintf(line + n, SS_LINE_MAX - n, "%d,", pid);
+	else
+		n += scnprintf(line + n, SS_LINE_MAX - n, "null,");
+	return n;
+}
+
+static int ss_json_uid_field(char *line, int n, const char *name,
+			     bool valid, kuid_t uid)
+{
+	n += scnprintf(line + n, SS_LINE_MAX - n, "\"%s\":", name);
+	if (valid)
+		n += scnprintf(line + n, SS_LINE_MAX - n, "%u,",
+			       from_kuid_munged(&init_user_ns, uid));
+	else
+		n += scnprintf(line + n, SS_LINE_MAX - n, "null,");
+	return n;
+}
+
+static bool ss_event_type_char(char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+	       (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+static void ss_event_v(const struct ss_event_fields *fields,
+		       const char *fmt, va_list args)
+{
+	char line[SS_LINE_MAX], message[224], event_type[48];
 	struct timespec64 ts;
-	va_list args;
-	int n, i, msg_off;
+	u64 realtime_ns, monotonic_ns, seq;
+	int n, i, msg_len, type_len = 0;
 	unsigned long flags;
+	unsigned int uid;
+	bool truncated = false;
+	static const int field_budgets[] = { 32, 24, 64, 16, 40 };
+	static const char hex[] = "0123456789abcdef";
+	const char *typed_values[5];
 
 	if (!READ_ONCE(ss_ring_ready))
 		return;
 
-	ktime_get_real_ts64(&ts);
-	n = scnprintf(line, sizeof(line), "%lld.%03ld ",
-		      (long long)ts.tv_sec, ts.tv_nsec / NSEC_PER_MSEC);
-	msg_off = n;
-
-	va_start(args, fmt);
-	n += vscnprintf(line + n, sizeof(line) - n - 1, fmt, args);
-	va_end(args);
-
+	msg_len = vscnprintf(message, sizeof(message), fmt, args);
+	if (msg_len == sizeof(message) - 1)
+		truncated = true;
 	/*
-	 * Neutralise control characters. Events embed attacker-chosen strings
-	 * (file names, exec paths), and a name containing "\n" would otherwise
-	 * forge whole event lines in the log - and the daemon acts on some of
-	 * them (CWE-117 log injection).
+	 * Escape the event payload as a JSON string. Besides making the record
+	 * machine-parseable, this prevents attacker-controlled paths from
+	 * injecting new records into the ring, local log, or audit feed.
 	 */
-	for (i = 0; i < n; i++)
-		if ((unsigned char)line[i] < 0x20 || line[i] == 0x7f)
-			line[i] = '?';
-	line[n] = '\0';
-
-	ss_audit_event(line + msg_off);
-
-	line[n++] = '\n';
+	for (i = 0; i < msg_len; i++)
+		if ((unsigned char)message[i] < 0x20 || message[i] == 0x7f)
+			message[i] = '?';
+	if (fields && fields->event_type) {
+		if (strscpy(event_type, fields->event_type,
+			    sizeof(event_type)) < 0)
+			truncated = true;
+	} else {
+		while (type_len < msg_len &&
+		       type_len < (int)sizeof(event_type) - 1 &&
+		       ss_event_type_char(message[type_len])) {
+			event_type[type_len] = message[type_len];
+			type_len++;
+		}
+		if (type_len == (int)sizeof(event_type) - 1 &&
+		    type_len < msg_len && ss_event_type_char(message[type_len]))
+			truncated = true;
+		if (!type_len)
+			strscpy(event_type, "secure_sudo", sizeof(event_type));
+		else
+			event_type[type_len] = '\0';
+	}
+	typed_values[0] = fields ? fields->target : NULL;
+	typed_values[1] = fields ? fields->operation : NULL;
+	typed_values[2] = fields ? fields->object : NULL;
+	typed_values[3] = fields ? fields->decision : NULL;
+	typed_values[4] = fields ? fields->reason : NULL;
+	ktime_get_real_ts64(&ts);
+	realtime_ns = (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
+	monotonic_ns = ktime_get_ns();
+	seq = atomic64_inc_return(&ss_event_sequence);
+	uid = from_kuid_munged(current_user_ns(), current_uid());
+	n = scnprintf(line, sizeof(line),
+		      "{\"schema_version\":1,\"boot_id\":\"");
+	for (i = 0; i < (int)sizeof(ss_boot_id); i++)
+		n += scnprintf(line + n, sizeof(line) - n, "%02x",
+			       ss_boot_id[i]);
+	n += scnprintf(line + n, sizeof(line) - n,
+		       "\",\"sequence\":%llu,\"realtime_ns\":%llu,"
+		       "\"monotonic_ns\":%llu,\"event_type\":",
+		      (unsigned long long)seq,
+		      (unsigned long long)realtime_ns,
+		      (unsigned long long)monotonic_ns);
+	n = ss_json_string(line, n, event_type, 48, &truncated);
+	n += scnprintf(line + n, sizeof(line) - n,
+		       ",\"actor\":{\"pid\":%d,\"uid\":%u},",
+		       current->pid, uid);
+	n = ss_json_field(line, n, "target", typed_values[0],
+			  field_budgets[0], &truncated);
+	n = ss_json_field(line, n, "operation", typed_values[1],
+			  field_budgets[1], &truncated);
+	n = ss_json_field(line, n, "object", typed_values[2],
+			  field_budgets[2], &truncated);
+	n = ss_json_field(line, n, "decision", typed_values[3],
+			  field_budgets[3], &truncated);
+	n = ss_json_field(line, n, "reason", typed_values[4],
+			  field_budgets[4], &truncated);
+	n = ss_json_pid_field(line, n, "target_pid",
+			      fields && fields->target_pid_valid,
+			      fields ? fields->target_pid : 0);
+	n = ss_json_uid_field(line, n, "target_uid",
+			      fields && fields->target_uid_valid,
+			      fields ? fields->target_uid : KUIDT_INIT(0));
+	n += scnprintf(line + n, sizeof(line) - n, "\"message\":");
+	n = ss_json_string(line, n, message, sizeof(line) - n - 32,
+			   &truncated);
+	n += scnprintf(line + n, sizeof(line) - n,
+		       ",\"truncated\":%s}\n", truncated ? "true" : "false");
+	line[n - 1] = '\0';
+	ss_audit_event(line);
+	line[n - 1] = '\n';
 
 	spin_lock_irqsave(&ss_ring_lock, flags);
 	/*
@@ -126,6 +280,24 @@ void ss_event(const char *fmt, ...)
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 
 	wake_up_interruptible(&ss_ring_wq);
+}
+
+void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	ss_event_v(fields, fmt, args);
+	va_end(args);
+}
+
+void ss_event(const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	ss_event_v(NULL, fmt, args);
+	va_end(args);
 }
 
 /*
@@ -177,11 +349,13 @@ int ss_log_secfs(struct dentry *dir)
 {
 	struct dentry *d;
 
+	get_random_bytes(ss_boot_id, sizeof(ss_boot_id));
 	d = securityfs_create_file("events", 0400, dir, NULL, &events_fops);
 	if (IS_ERR(d))
 		return PTR_ERR(d);
 
 	WRITE_ONCE(ss_ring_ready, true);
-	ss_event("secure_sudo event log online");
+	ss_event_typed("event_log", NULL, "initialize", "kernel_event_ring",
+		       "allow", NULL, "secure_sudo event log online");
 	return 0;
 }
