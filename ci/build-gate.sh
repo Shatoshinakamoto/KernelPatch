@@ -64,7 +64,7 @@ result() { # stage status note
 # restores the executable bits a file share may have dropped.
 SRC="$WORK/src"
 mkdir -p "$SRC"
-(cd "$ROOT" && tar --exclude=./build-gate-record.txt -cf - .) | (cd "$SRC" && tar -xf -)
+(cd "$ROOT" && tar --exclude=./build-gate-record.txt --exclude=./.git -cf - .) | (cd "$SRC" && tar -xf -)
 
 shell_scripts() {
 	(cd "$SRC" && { find . -name '*.sh' -type f; \

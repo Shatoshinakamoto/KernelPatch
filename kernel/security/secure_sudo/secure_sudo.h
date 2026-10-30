@@ -22,6 +22,16 @@
 #include <linux/kobject.h>
 #include <linux/lsm_hooks.h>
 #include <linux/kernel_read_file.h>
+#include <linux/version.h>
+#include <crypto/sha2.h>
+
+/* 6.17 replaced struct sha256_state with struct sha256_ctx in the
+ * sha256_init/update/final API. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
+typedef struct sha256_ctx ss_sha256_ctx;
+#else
+typedef struct sha256_state ss_sha256_ctx;
+#endif
 
 #define SS_NAME "secure_sudo"
 

@@ -214,7 +214,7 @@ bool ss_path_under(const char *path, const char *prefix)
 
 void ss_sha256_buf(const void *data, size_t len, char *hex)
 {
-	struct sha256_state st;
+	ss_sha256_ctx st;
 	u8 digest[SHA256_DIGEST_SIZE];
 	const u8 *p = data;
 
