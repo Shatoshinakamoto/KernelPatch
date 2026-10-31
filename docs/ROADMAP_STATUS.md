@@ -177,7 +177,8 @@ What has been booted, all under QEMU/TCG with SeaBIOS
 | v12 LSM, upstream 6.14 | initramfs, PID 1 test program | 118/118, and 118/118 with AppArmor stacked |
 | current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
-| same | Ubuntu 24.04, STIG remediation | boots again after full STIG hardening with secure_sudo and AppArmor active; scan results above |
+| same | Ubuntu 24.04, STIG remediation | remediation ran; the run was cut off before the post-hardening reboot (`07-distro-stig/run-stig-test.tap` ends at check 6), so a reboot of a hardened guest was **not** shown. An earlier version of this row said it was |
+| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest does not answer SSH** (2026-10-31, twice). Cause under investigation: the test now writes the boot state to the serial console |
 
 Known platform exclusions, recorded rather than claimed:
 
