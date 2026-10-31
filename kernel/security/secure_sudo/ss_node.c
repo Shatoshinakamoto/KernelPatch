@@ -197,7 +197,7 @@ static ssize_t sl_write(struct file *file, struct strlist *sl,
 /* ------------------------------- hooks ----------------------------------- */
 
 static int ss_node_task_alloc(struct task_struct *task,
-			      unsigned long clone_flags)
+			      ss_clone_flags_t clone_flags)
 {
 	/* Propagate the node mark from the forking parent to the child. */
 	ss_task(task)->flags = ss_task(current)->flags & SS_TASK_NODE;

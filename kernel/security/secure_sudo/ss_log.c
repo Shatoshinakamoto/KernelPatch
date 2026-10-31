@@ -177,7 +177,6 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	unsigned int uid;
 	bool truncated = false;
 	static const int field_budgets[] = { 32, 24, 64, 16, 40 };
-	static const char hex[] = "0123456789abcdef";
 	const char *typed_values[5];
 
 	if (!READ_ONCE(ss_ring_ready))
@@ -222,7 +221,7 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	realtime_ns = (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 	monotonic_ns = ktime_get_ns();
 	seq = atomic64_inc_return(&ss_event_sequence);
-	uid = from_kuid_munged(current_user_ns(), current_uid());
+	uid = from_kuid_munged(&init_user_ns, current_uid());
 	n = scnprintf(line, sizeof(line),
 		      "{\"schema_version\":1,\"boot_id\":\"");
 	for (i = 0; i < (int)sizeof(ss_boot_id); i++)
