@@ -196,6 +196,14 @@ void ss_event(const char *fmt, ...);
 		.operation = (_operation), .object = (_object), \
 		.decision = (_decision), .reason = (_reason), \
 	}, __VA_ARGS__)
+#define ss_event_typed_uid(_type, _target, _target_uid, _operation, \
+			   _object, _decision, _reason, ...) \
+	ss_event_record(&(struct ss_event_fields) { \
+		.event_type = (_type), .target = (_target), \
+		.target_uid = (_target_uid), .target_uid_valid = true, \
+		.operation = (_operation), .object = (_object), \
+		.decision = (_decision), .reason = (_reason), \
+	}, __VA_ARGS__)
 #define ss_event_typed_pid(_type, _target, _target_pid, _operation, \
 			   _object, _decision, _reason, ...) \
 	ss_event_record(&(struct ss_event_fields) { \

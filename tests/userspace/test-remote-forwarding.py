@@ -11,7 +11,7 @@ import threading
 binary = sys.argv[1]
 
 
-def receiver(cert, key, callback):
+def receiver(cert, key, callback, frames=1):
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
@@ -25,21 +25,23 @@ def receiver(cert, key, callback):
     def serve():
         try:
             conn, _ = listener.accept()
+            # every frame is read from this ONE accepted connection
             with context.wrap_socket(conn, server_side=True) as tls:
-                prefix = bytearray()
-                while len(prefix) < 10 and not prefix.endswith(b" "):
-                    byte = tls.recv(1)
-                    if not byte:
-                        return
-                    prefix.extend(byte)
-                size = int(prefix[:-1])
-                message = bytearray()
-                while len(message) < size:
-                    chunk = tls.recv(size - len(message))
-                    if not chunk:
-                        return
-                    message.extend(chunk)
-                received.append(bytes(message))
+                for _ in range(frames):
+                    prefix = bytearray()
+                    while len(prefix) < 10 and not prefix.endswith(b" "):
+                        byte = tls.recv(1)
+                        if not byte:
+                            return
+                        prefix.extend(byte)
+                    size = int(prefix[:-1])
+                    message = bytearray()
+                    while len(message) < size:
+                        chunk = tls.recv(size - len(message))
+                        if not chunk:
+                            return
+                        message.extend(chunk)
+                    received.append(bytes(message))
         except (OSError, ssl.SSLError):
             pass
         finally:
@@ -174,4 +176,31 @@ with tempfile.TemporaryDirectory(prefix="secure-sudo-tls-") as temp:
             raise RuntimeError("queued event did not persist across daemon process")
         print("ok 7 - queue exhaustion is counted and unsent events persist")
         print("ok 8 - outage retains queued event for a later retry")
-    print("1..8")
+
+    if os.geteuid() == 0:
+        def deliver_batch(port):
+            return subprocess.run(
+                [binary, "queue-batch", "localhost", str(port), cert],
+                timeout=20,
+                check=False,
+            ).returncode
+
+        status, messages = receiver(cert, key, deliver_batch, frames=3)
+        order = [m.rsplit(b" ", 1)[-1] for m in messages]
+        if status != 0 or order != [b"batch-event-1", b"batch-event-2",
+                                    b"batch-event-3"]:
+            raise RuntimeError("queued events did not go out in order over "
+                               "one connection: %r" % (messages,))
+        print("ok 9 - a queue flush sends its events in order over one TLS "
+              "connection")
+        result = subprocess.run([binary, "queue-backoff"], check=False,
+                                timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError("events must only queue, and a failing "
+                               "collector must be retried with backoff")
+        print("ok 10 - events only queue; a failing collector is retried "
+              "after 5 s, 10 s, ... not per event")
+    else:
+        print("ok 9 - # SKIP queue batch requires root-owned queue directory")
+        print("ok 10 - # SKIP queue backoff requires root-owned queue directory")
+    print("1..10")

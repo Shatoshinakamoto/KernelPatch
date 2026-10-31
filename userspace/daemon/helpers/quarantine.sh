@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 #
-# quarantine.sh <file>
+# quarantine.sh [--origin ORIGINAL_PATH] <file>
 #
 # Moves a file that appeared or changed under TimeVault into a zip in
 # /var/lib/secure_sudo/quarantine/, together with a metadata sidecar recording
@@ -17,10 +17,21 @@
 # keep. Each quarantine gets a unique name, so two files with the same name
 # in the same second no longer land in (and overwrite each other in) one zip.
 #
+# --origin: secure-sudod never hands over a path from an event or a scan.
+# It copies the file (through a descriptor it opened without following
+# symlinks) into a root-only staging directory and passes that copy, with
+# the original location as ORIGINAL_PATH for the metadata. It then removes
+# the original itself, and only once this script has succeeded.
+#
 # Environment (tests only): SS_QUARANTINE_DIR overrides the quarantine dir.
 set -eu
 
-FILE="${1:?usage: quarantine.sh <file>}"
+ORIGIN=""
+if [ "${1:-}" = "--origin" ]; then
+  ORIGIN="${2:?usage: quarantine.sh [--origin ORIGINAL_PATH] <file>}"
+  shift 2
+fi
+FILE="${1:?usage: quarantine.sh [--origin ORIGINAL_PATH] <file>}"
 QDIR="${SS_QUARANTINE_DIR:-/var/lib/secure_sudo/quarantine}"
 mkdir -p "$QDIR"
 chmod 700 "$QDIR"
@@ -40,14 +51,16 @@ META="${STAMP}.meta"
 # Record provenance before touching the file. The path goes through printf %s
 # with newlines shown as \n, so a crafted file name cannot forge meta lines.
 {
-  printf 'original_path: %s\n' "$(printf '%s' "$FILE" | sed ':a;N;$!ba;s/\n/\\n/g')"
+  printf 'original_path: %s\n' "$(printf '%s' "${ORIGIN:-$FILE}" | sed ':a;N;$!ba;s/\n/\\n/g')"
   echo "quarantined_at: $(date -Is)"
   echo "sha256: $(sha256sum < "$FILE" | awk '{print $1}')"
-  ls -ln -- "$FILE" 2>/dev/null | awk '{print "stat: "$0}' | head -1
+  # With --origin, show the original's location instead of the staged copy's.
+  ls -ln -- "$FILE" 2>/dev/null | F="$FILE" O="${ORIGIN:-$FILE}" \
+    awk '{ i = index($0, ENVIRON["F"]); if (i) $0 = substr($0, 1, i - 1) ENVIRON["O"]; print "stat: " $0 }' | head -1
 } > "$META"
 
 fail() {
-  echo "quarantine.sh: $*; $FILE left in place" >&2
+  printf 'quarantine.sh: %s; %s left in place\n' "$*" "${ORIGIN:-$FILE}" >&2
   rm -f -- "$META" "$RESERVE"
   exit 1
 }
@@ -67,4 +80,4 @@ fi
 
 rm -f -- "$META" "$RESERVE"
 rm -f -- "$FILE"
-echo "quarantine.sh: quarantined $FILE -> $OUT"
+printf 'quarantine.sh: quarantined %s -> %s\n' "${ORIGIN:-$FILE}" "$OUT"

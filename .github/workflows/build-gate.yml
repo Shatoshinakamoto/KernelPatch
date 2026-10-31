@@ -8,9 +8,7 @@
 #
 # The distro VM job (install/rollback/removal/recovery, then the STIG release
 # gate on a fresh guest) runs nightly and on demand: it needs KVM and takes
-# about an hour.
-#
-# Written and checked locally; it has not run on GitHub yet.
+# about an hour. It runs only after the gate passes.
 name: build-gate
 
 on:
@@ -72,6 +70,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space for the kernel build
+        run: |
+          # install.sh build-kernel wants ~20 GB; the runner image leaves
+          # ~12 GB. Drop preinstalled SDKs this job never uses.
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            /usr/local/share/powershell /usr/local/share/chromium
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
       - name: Tools
         run: |
           sudo apt-get update
@@ -107,7 +116,7 @@ jobs:
           sudo bash tests/vm/distro/run-install-test.sh \
             "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$out" "$RUNNER_TEMP/res-install"
 
-      - name: STIG release gate in the VM (only encrypt_partitions may fail)
+      - name: STIG release gate in the VM (allowed results in tests/oscap/ubuntu2404-stig.expect)
         run: |
           # The SSG content the gate is pinned to (docs/OSCAP_BUGS.md); the
           # datastream must match the recorded hash.

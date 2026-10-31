@@ -265,8 +265,18 @@ cannot forge records. The existing whole-record ring-drop counter remains,
 and `audit_events_dropped` counts failures to obtain an audit buffer. Both are
 readable under `/sys/kernel/secure_sudo/` and reported by `secure-sudo health`.
 The message encoder escapes non-ASCII bytes as `\u00xx`, keeping records valid
-JSON even when paths are not UTF-8; the daemon decodes those byte escapes before
-applying its existing cooldown and quarantine rules. A `truncated` boolean
+JSON even when paths are not UTF-8. The daemon parses each record as JSON
+and acts only on its typed fields:
+
+* the cooldown kill takes its UID from `target_uid`, which the kernel now
+  sets;
+* the TimeVault quarantine needs an untruncated record whose message
+  matches the kernel's format exactly.
+
+Before, it searched the message text, which let a crafted file name
+trigger either action (SECURITY_REVIEW #48). Records that straddle two
+ring reads are now reassembled (#49). Actor UIDs are logged in the initial
+user namespace. A `truncated` boolean
 reports when the event type, typed string, or message was shortened. The
 64 KiB ring caps lines at 640 bytes, discards oldest whole records on
 saturation, and exposes a loss counter. The earlier CLI revision
@@ -306,17 +316,32 @@ and health JSON. UDP remains available as a legacy explicitly selected
 transport; its state is still `udp_unconfirmed`. Local logging happens before
 forwarding and continues through collector outages.
 
+Each event is written locally, acted on (cooldown, TimeVault), and only then
+queued. The main loop sends the queue in batches of up to 512 over one TLS
+connection. After a failure it retries after 5 s, then twice as long after
+each further failure, up to 5 minutes. Before this, every event connected
+and handshook inline, so a collector that dropped packets stalled the daemon
+for 3 s or more per event (SECURITY_REVIEW #50). Connections now end with
+`close_notify` and a bounded read: closing over unread session tickets
+caused a TCP reset, and in the batch test that reset lost the last event.
+
 Neither UDP send nor a successful TLS stream write is a collector
 acknowledgment. The queue removes an event after the TLS write succeeds, so a
 collector-side failure after receipt can still lose it; an ambiguous retry
-can also duplicate it. The integration suite covers trusted delivery,
-wrong-host and untrusted-CA rejection, outage retention, queue exhaustion,
-and atomic server-CA bundle rotation. Rotation instructions use an overlap of
+can also duplicate it. The integration suite (10 checks, run as root in
+CI) covers:
+
+* trusted delivery;
+* wrong-host and untrusted-CA rejection;
+* outage retention and queue exhaustion;
+* atomic server-CA bundle rotation;
+* in-order batch delivery over one connection;
+* the queue-only and backoff behaviour. Rotation instructions use an overlap of
 old/new trust anchors; client certificates and private keys are not supported.
 RFC 5425 offers no durable collector acknowledgment. Health deliberately says
 `tls_sent_unconfirmed`; no custom receiver protocol is introduced, and
-collector-side persistence is not claimed. The added CA-rotation assertion has
-not yet run in this environment.
+collector-side persistence is not claimed. The CA-rotation assertion and
+the rest of the suite pass in the GitHub build gate.
 
 ### P1-3 Incident evidence — partial
 
