@@ -6,9 +6,11 @@
 # runner's installed headers. A release is made only from a passing run; the
 # gate record is kept as an artifact.
 #
-# The distro VM job (install/rollback/removal/recovery, then the STIG release
-# gate on a fresh guest) runs nightly and on demand: it needs KVM and takes
-# about an hour. It runs only after the gate passes.
+# Two VM jobs run nightly and on demand, only after the gate passes, and need
+# KVM. kernel-boot builds the installer's default kernel with secure_sudo
+# built in and runs the in-kernel tests (tests/vm/ss-functest.c) as PID 1 of
+# a throwaway guest. distro-vm (install/rollback/removal/recovery, then the
+# STIG release gate on a fresh guest) takes about an hour.
 name: build-gate
 
 on:
@@ -60,6 +62,47 @@ jobs:
           name: build-gate-record
           path: |
             ${{ runner.temp }}/build-gate-record.txt
+            ${{ runner.temp }}/k/kernel-source.txt
+
+  kernel-boot:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
+            busybox-static qemu-system-x86 cpio gzip file gnupg xz-utils curl
+          sudo chmod 666 /dev/kvm || true
+
+      - name: Fetch and verify the installer's default kernel
+        run: |
+          kver=$(sed -n 's/^KVER="${KVER:-\([0-9.]*\)}".*/\1/p' install/install.sh)
+          mkdir -p "$RUNNER_TEMP/k" && cd "$RUNNER_TEMP/k"
+          curl -fLO "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$kver.tar.xz"
+          curl -fLO "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$kver.tar.sign"
+          bash "$GITHUB_WORKSPACE/scripts/verify-kernel-source.sh" --fetch-missing \
+            --keys "$GITHUB_WORKSPACE/install/keys" --metadata kernel-source.txt \
+            "linux-$kver.tar.xz" "linux-$kver.tar.sign"
+          tar -xf "linux-$kver.tar.xz"
+          echo "KTREE=$RUNNER_TEMP/k/linux-$kver" >> "$GITHUB_ENV"
+
+      - name: Build the test kernel (secure_sudo built in)
+        run: bash tests/vm/build-test-kernel.sh "$KTREE" "$RUNNER_TEMP/kout"
+
+      - name: Boot it and run the in-kernel tests
+        run: bash tests/vm/boot-test.sh "$RUNNER_TEMP/kout" "$RUNNER_TEMP/res-boot"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-boot-results
+          path: |
+            ${{ runner.temp }}/res-boot
             ${{ runner.temp }}/k/kernel-source.txt
 
   distro-vm:

@@ -24,7 +24,7 @@ nothing is pushed from here.
 
 | Item | Status | One line |
 |---|---|---|
-| P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy; not yet required in CI, 6.12 not built as a tree |
+| P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
 | P0-2 tests | partly | 421 host checks and 118/118 in-kernel checks pass; STIG gate compares rule IDs; not yet required in CI |
 | P0-3 boot proof | partly | boots and runs on upstream 6.14 in Ubuntu 24.04 VMs (install 51/51, STIG run classified); not 6.12, UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
@@ -96,11 +96,18 @@ Done:
 
 Missing:
 
-* The workflow has not run on GitHub, so "required in CI" is not yet true.
-  The first push will show whether it works as written.
-* The in-tree builds used 6.14; 6.12.114 was compiled against headers only.
-  The workflow builds 6.12.114 as a full tree, which is the first time that
-  will happen.
+* The workflow runs on GitHub on every push and pull request
+  (Shatoshinakamoto/KernelPatch) and passes, lsm-tree included: the LSM's
+  objects build with `-Werror` inside the signature-verified 6.12.114 tree
+  in all six configurations. It is not yet a *required* check: that is a
+  branch-protection setting on `main`, which only the repository owner can
+  turn on.
+* The gate's lsm-headers stage builds against the runner's own kernel
+  headers, which GitHub moves forward (6.17, then 7.0 by 2026-10-31). Each
+  move can break the gate with no change in this tree; the API shims for
+  6.16 to 7.0 are in `secure_sudo.h`.
+* A whole 6.12.114 kernel image is built only by the nightly/on-demand
+  `kernel-boot` and `distro-vm` jobs, not on every push.
 * The TODO names `6.12.48`; the installer default is now `6.12.114`, the
   newest 6.12 LTS point release available when this was done.
 
@@ -153,7 +160,9 @@ Missing:
   guard, RAM-spike handling, TPM and firmware sysfs paths.
 * The `no-audit`/`no-bpf`/`no-modules` variants are built, not booted.
 * Add-on monitor/enforce modes (`temporary/`) have build checks only.
-* Not required in CI yet (P0-1).
+* The host suites run as root in the gate on every push and pull request.
+  The in-kernel tests run in the `kernel-boot` job (nightly and on demand)
+  against 6.12.114 with secure_sudo built in.
 
 ### P0-3 Boot proof — partly
 
