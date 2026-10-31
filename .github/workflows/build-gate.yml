@@ -163,11 +163,18 @@ jobs:
           sudo env BUILD_ROOT="$RUNNER_TEMP/ssbuild" SS_BASE_CONFIG="$RUNNER_TEMP/base.config" \
             SS_LOCALMOD="$RUNNER_TEMP/lsmod.txt" bash install/install.sh build-kernel
 
+      - name: Locate the kernel package
+        run: |
+          # install.sh keeps BUILD_ROOT root-only (0700), so look as root.
+          out=$(sudo find "$RUNNER_TEMP/ssbuild/out" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          [ -n "$out" ] || { echo "install.sh build-kernel left no output directory"; exit 1; }
+          sudo ls -l "$out"
+          echo "KOUT=$out" >> "$GITHUB_ENV"
+
       - name: Install, trial boot, fallback, commit, recovery drills, rollback, removal
         run: |
-          out=$(ls -d "$RUNNER_TEMP"/ssbuild/out/*/ | head -1)
           sudo bash tests/vm/distro/run-install-test.sh \
-            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$out" "$RUNNER_TEMP/res-install"
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$KOUT" "$RUNNER_TEMP/res-install"
 
       - name: STIG release gate in the VM (allowed results in tests/oscap/ubuntu2404-stig.expect)
         run: |
@@ -178,10 +185,18 @@ jobs:
           unzip -q scap-security-guide-0.1.78.zip
           ds="$RUNNER_TEMP/scap-security-guide-0.1.78/ssg-ubuntu2404-ds.xml"
           echo "8ec037c7f1f8484eed419172054a9e5acd611a5aa480c2ec18090344363c36ac  $ds" | sha256sum -c
-          out=$(ls -d "$RUNNER_TEMP"/ssbuild/out/*/ | head -1)
           cd "$GITHUB_WORKSPACE"
           sudo bash tests/vm/distro/run-stig-test.sh \
-            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$out" "$ds" "$RUNNER_TEMP/res-stig"
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$KOUT" "$ds" "$RUNNER_TEMP/res-stig"
+
+      - name: Make the results readable for upload (never the VM key or disk)
+        if: always()
+        run: |
+          for d in "$RUNNER_TEMP/res-install" "$RUNNER_TEMP/res-stig"; do
+            sudo test -d "$d" || continue
+            sudo find "$d" \( -name 'id_vm*' -o -name '*.qcow2' \) -print -delete
+            sudo chown -R "$(id -u):$(id -g)" "$d"
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()

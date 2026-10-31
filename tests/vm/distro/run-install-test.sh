@@ -26,9 +26,17 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source=/dev/null
 . "$ROOT/tests/lib/tap.sh"
 IMG="$(readlink -f "${1:?usage: $0 IMAGE KERNEL-OUT-DIR RESULTS-DIR}")"
-KOUT="$(cd "${2:?KERNEL-OUT-DIR}" && pwd)"
+KOUT="$(cd "${2:?KERNEL-OUT-DIR}" 2>/dev/null && pwd)"
+# Without set -e a failed cd above only empties KOUT, and every check would
+# then run against the distro kernel with an empty expected release.
+compgen -G "$KOUT/linux-image-*.deb" > /dev/null ||
+	{ echo "Bail out! no linux-image package in KERNEL-OUT-DIR '${2}'"; exit 2; }
 RES="${3:?RESULTS-DIR}"; mkdir -p "$RES"; RES="$(cd "$RES" && pwd)"
-W="${VM_WORK:-$RES/vm}"
+# The VM work dir holds the guest's disk and its SSH key; keep it out of
+# RESULTS (which is uploaded as evidence) unless VM_WORK says otherwise.
+W_OWNED=""
+if [ -n "${VM_WORK:-}" ]; then W="$VM_WORK"
+else W="$(mktemp -d "${TMPDIR:-/tmp}/ss-vm.XXXXXX")"; W_OWNED=1; fi
 VM="$HERE/vm.sh"
 REL="$(basename "$KOUT")"
 STEP=0
@@ -53,7 +61,8 @@ SNAP='bash /root/guest-snapshot.sh snap'
 # ------------------------------------------------------------------ setup
 . /etc/os-release
 [ "$ID $VERSION_ID" = "ubuntu 24.04" ] || { echo "Bail out! host is $ID $VERSION_ID; build userspace on the guest's release" ; exit 2; }
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$work"; [ -z "$W_OWNED" ] || { bash "$VM" stop "$W" > /dev/null 2>&1; rm -rf "$W"; }' EXIT
 bash "$ROOT/ci/make-release.sh" --out "$work/rel" > "$RES/make-release.log" 2>&1 ||
 	{ echo "Bail out! make-release failed"; exit 2; }
 bash "$ROOT/install/install.sh" stage-userspace "$work/stage" > "$RES/stage.log" 2>&1 ||
