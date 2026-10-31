@@ -17,6 +17,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      vm:
+        description: "VM jobs to run after the gate"
+        type: choice
+        options: [all, kernel-boot, distro-vm]
+        default: all
   schedule:
     - cron: "17 3 * * *"
 
@@ -65,7 +71,9 @@ jobs:
             ${{ runner.temp }}/k/kernel-source.txt
 
   kernel-boot:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.vm != 'distro-vm')
     needs: gate
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -106,7 +114,9 @@ jobs:
             ${{ runner.temp }}/k/kernel-source.txt
 
   distro-vm:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.vm != 'kernel-boot')
     needs: gate
     runs-on: ubuntu-24.04
     timeout-minutes: 240
