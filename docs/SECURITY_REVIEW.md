@@ -795,9 +795,10 @@ Each of these was a v11 `install.sh` behaviour:
   left out that way). That is a recovery route (`docs/RECOVERY.md`) and also
   a bypass for anyone at the boot menu, so a GRUB password is required on a
   hardened box (STIG `grub2_password`); the STIG VM run sets one with
-  `--unrestricted` entries so unattended boots still work.
+  `--unrestricted` entries so unattended boots still work (and the
+  installer keeps kernels out of Ubuntu's restricted submenu, #51).
 
-Covered by `tests/install/test-install.sh` (100 checks: manifest, backups,
+Covered by `tests/install/test-install.sh` (131 checks: manifest, backups,
 upgrade, refusals, byte-identical removal, interrupted installs, GRUB entry
 parsing) and by the distro VM run (`tests/vm/distro/run-install-test.sh`).
 
@@ -838,8 +839,9 @@ the xt matches and `ip_tables` were left out, and in the VM `ufw enable` then
 failed half-way (and new SSH connections hung). `install.sh build-kernel` now
 always keeps that netfilter set with `SS_LOCALMOD` and stops if it does not
 stick (OSB-21). The default build, from the distro's config, was not
-affected. The fixed config was checked with Kconfig, not yet rebuilt and
-booted.
+affected. Rebuilt and booted in CI on 6.12.114: a second missing match
+(`hl`, used by ufw's IPv6 rules) was found that way and added; ufw now
+starts in the guest.
 
 ### 48. Crafted file names could make the daemon quarantine any file or kill root's sudo (v1–v12, fixed after v12) — AC-6 / SI-10 / CWE-77 / CWE-59
 
@@ -895,6 +897,28 @@ of the connection before reading them. A three-event batch lost one of
 them in the test. Connections now end with `close_notify` and a bounded
 read.
 
+### 51. With a GRUB password, every boot stopped at the menu (v12 installer, found in CI) — CP-10 / AC-3
+
+A hardened box needs a GRUB password (STIG `grub2_password`), and its menu
+entries need `--unrestricted` so that booting stays unattended while
+editing the command line (`lsm=`, #43) needs the password. On Ubuntu that
+is not enough with this installer: `10_linux` writes the "Advanced options"
+submenu without the entries' `CLASS`, so the submenu itself is restricted,
+and `install.sh` armed and committed kernels by their path inside it
+(`gnulinux-advanced-…>gnulinux-<release>-advanced-…`). After STIG hardening
+the guest stopped at a password prompt on the screen, which a server
+without a console never gets past. The CI STIG run showed it as a guest that
+never came back after its reboot.
+
+The installer's GRUB drop-in now also sets `GRUB_DISABLE_SUBMENU=true`, so
+every kernel is a top-level entry with the distribution's `CLASS`, and an
+older drop-in (GRUB_DEFAULT=saved only) is replaced on the next
+`install-kernel` (one an administrator edited is kept, with a warning).
+`install.sh verify` fails when GRUB has a superuser and the saved or
+one-shot entry would need the password, and the STIG VM run checks that
+before its reboot. Host tests: `tests/install/test-install.sh` (flat menu,
+password check, drop-in upgrade).
+
 ---
 
 ## Residual notes / assumptions
@@ -910,8 +934,7 @@ read.
 * The home-write (#4) and TimeVault strict-mmap knobs stay **opt-in**: they are
   powerful enough to break a running system if enabled without the matching
   allowlists, which would itself be an availability problem.
-* Boot-tested on upstream 6.14 in QEMU (an initramfs run and a full Ubuntu
-  24.04 guest with GRUB, systemd and AppArmor). Not yet booted on 6.12 (only
-  compiled against its headers: kernel.org was not reachable from the build
-  environment), not under UEFI/Secure Boot, and not on real hardware. See
-  [ROADMAP_STATUS.md](ROADMAP_STATUS.md).
+* Boot-tested in QEMU on upstream 6.14 and, in CI under KVM, on kernel.org
+  6.12.114 (an initramfs run and a full Ubuntu 24.04 guest with GRUB,
+  systemd and AppArmor). Not under UEFI/Secure Boot, and not on real
+  hardware. See [ROADMAP_STATUS.md](ROADMAP_STATUS.md).

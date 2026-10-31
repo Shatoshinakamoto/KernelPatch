@@ -346,6 +346,63 @@ boot_entry_present() {
 	grep -qE "vmlinuz-${rel//./\\.}([[:space:]]|$)" "$cfg"
 }
 grub_next_entry() { local t; t="$(grub_tool editenv)" || return 1; "$t" - list 2>/dev/null | sed -n 's/^next_entry=//p'; }
+# grub_env KEY: a value from the grubenv block next to grub.cfg (no tool, so
+# it reads $SS_ROOT too).
+grub_env() {
+	local cfg; cfg="$(grub_cfg)" || return 0
+	[ -f "$(dirname "$cfg")/grubenv" ] || return 0
+	sed -n "s/^$1=//p" "$(dirname "$cfg")/grubenv"
+}
+# Does grub.cfg set a GRUB superuser (STIG grub2_password)? Then every entry
+# and submenu without --unrestricted needs that password to boot.
+grub_has_password() {
+	local cfg; cfg="$(grub_cfg)" || return 1
+	grep -q '^[[:space:]]*set superusers=' "$cfg"
+}
+# grub_entry_open ENTRY: can GRUB boot ENTRY ("submenu-id>entry-id" or
+# "entry-id") without the password? 0 yes, 1 no (it or its submenu lacks
+# --unrestricted), 2 not in grub.cfg.
+grub_entry_open() {
+	local cfg; cfg="$(grub_cfg)" || return 2
+	awk -v want="$1" -v q="'" '
+		function id(line,   i, rest, j) {
+			i = index(line, "$menuentry_id_option ")
+			if (!i) return ""
+			rest = substr(line, i + 21)
+			sub(/^ +/, "", rest)
+			if (substr(rest, 1, 1) != q) return ""
+			rest = substr(rest, 2); j = index(rest, q)
+			return j ? substr(rest, 1, j - 1) : ""
+		}
+		function unr(line) { return line ~ /[[:space:]]--unrestricted[[:space:]]/ }
+		BEGIN { n = split(want, p, ">"); r = 2 }
+		/^[[:space:]]*submenu / { insub = 1; want_sub = (n == 2 && id($0) == p[1]); sub_open = unr($0); next }
+		/^}/ { insub = 0; next }
+		/^[[:space:]]*menuentry / {
+			if (n == 1 && !insub && id($0) == p[1]) { r = !unr($0); exit }
+			if (n == 2 && insub && want_sub && id($0) == p[2]) { r = !(sub_open && unr($0)); exit }
+		}
+		END { exit r }' "$cfg"
+}
+# The drop-in install.sh keeps on the Debian family (update-grub). Ubuntu's
+# 10_linux writes its "Advanced options" submenu without the entries' CLASS,
+# so without --unrestricted: with a GRUB password (STIG grub2_password) a
+# default or one-shot entry inside it waits for the password at every boot.
+# GRUB_DISABLE_SUBMENU puts every kernel at the top level instead.
+grub_dropin_text() {
+	printf '%s\n' \
+		'# Written by secure_sudo install.sh: keep the known-good kernel the' \
+		'# default and boot new kernels once (grub-reboot). Every kernel is at' \
+		'# the top level of the menu, so a GRUB password (with --unrestricted' \
+		'# entries) does not stop the boot at a submenu. Removed by uninstall.' \
+		'GRUB_DEFAULT=saved' \
+		'GRUB_DISABLE_SUBMENU=true'
+}
+# Is the drop-in missing or older than this version's?
+grub_dropin_stale() {
+	[ -f "$SS_ROOT$GRUB_DROPIN" ] || return 0
+	[ "$(grub_dropin_text | sha256sum | cut -d' ' -f1)" != "$(sha "$SS_ROOT$GRUB_DROPIN")" ]
+}
 
 update_bootloader() {
 	case "$(bootloader)" in
@@ -460,8 +517,8 @@ preflight() { # WHAT: all | build-kernel | install-kernel | userspace [--prebuil
 	esac
 	case "$what" in all|install-kernel)
 		pf kernel "install it next to $(uname -r), which stays installed and in the boot menu"
-		if [ "$FAMILY" = debian ] && [ "$SS_TRIAL_BOOT" != 0 ] && [ "$(grub_default)" != saved ]; then
-			pf bootloader "add $GRUB_DROPIN (GRUB_DEFAULT=saved), regenerate the menu"
+		if [ "$FAMILY" = debian ] && [ "$SS_TRIAL_BOOT" != 0 ] && grub_dropin_stale; then
+			pf bootloader "write $GRUB_DROPIN (GRUB_DEFAULT=saved, every kernel at the top level of the menu), regenerate the menu"
 		else
 			pf bootloader "regenerate the menu"
 		fi ;;
@@ -737,16 +794,21 @@ arrange_trial_boot() { # release previous
 		log "SS_TRIAL_BOOT=0: the new kernel becomes the default as your distro decides"
 		return 0
 	fi
-	if [ "$(grub_default)" != saved ]; then
-		if [ "$FAMILY" = debian ]; then
-			local tmp; tmp="$(mktemp)"
-			printf '# Written by secure_sudo install.sh: keep the known-good kernel the\n# default and boot new kernels once (grub-reboot). Removed by uninstall.\nGRUB_DEFAULT=saved\n' > "$tmp"
+	if [ "$FAMILY" = debian ] && grub_dropin_stale; then
+		local tmp want
+		want="$(m_get F "$GRUB_DROPIN" 2>/dev/null || true)"
+		if [ -f "$SS_ROOT$GRUB_DROPIN" ] && [ -n "$want" ] && [ "$(sha "$SS_ROOT$GRUB_DROPIN")" != "$want" ]; then
+			warn "$GRUB_DROPIN was changed since install.sh wrote it; leaving it as it is"
+		else
+			# New, or the one an older version wrote (GRUB_DEFAULT=saved only).
+			tmp="$(mktemp)"; grub_dropin_text > "$tmp"
 			install_file "$tmp" "$GRUB_DROPIN" 0644; rm -f "$tmp"
 			update_bootloader
-		else
-			warn "GRUB_DEFAULT is '$(grub_default)', not 'saved': no trial boot; the new kernel will boot by default"
-			return 0
 		fi
+	fi
+	if [ "$(grub_default)" != saved ]; then
+		warn "GRUB_DEFAULT is '$(grub_default)', not 'saved': no trial boot; the new kernel will boot by default"
+		return 0
 	fi
 	new_e="$(grub_entry "$rel")" || die "no GRUB entry found for $rel after regenerating the menu"
 	prev_e="$(grub_entry "$prev")" || die "no GRUB entry found for the running kernel $prev; refusing to continue without a known-good entry"
@@ -1108,6 +1170,21 @@ verify() { # [--commit]
 			vok "$rel is committed"
 		fi
 	done < <(m_list T)
+	# A GRUB password stops unattended boots at any entry or submenu that is
+	# not --unrestricted. BLS menus are built at boot: not checked here.
+	if [ "$(bootloader)" = grub ] && [ -n "$(m_list T)" ] && grub_has_password &&
+	   ! find "$SS_ROOT/boot/loader/entries" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q .; then
+		for st in saved_entry next_entry; do
+			m="$(grub_env "$st")"
+			[ -n "$m" ] || continue
+			s=0; grub_entry_open "$m" || s=$?
+			case "$s" in
+			0) vok "GRUB password set; $st boots without it ($m)" ;;
+			1) vbad "GRUB password set and $st needs it to boot, so unattended boots wait at the menu ($m); see docs/RECOVERY.md section 1" ;;
+			*) vnote "$st $m is not in $(grub_cfg): GRUB boots the first entry" ;;
+			esac
+		done
+	fi
 	if [ "$V_FAIL" -eq 0 ]; then echo "verify: OK"; else echo "verify: $V_FAIL problem(s)"; fi
 	[ "$V_FAIL" -eq 0 ]
 }

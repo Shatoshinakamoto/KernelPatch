@@ -242,15 +242,84 @@ check "boot_entry_present: the installed kernel" L boot_entry_present 6.8.0-147-
 refute "boot_entry_present: not a prefix" L boot_entry_present 6.8.0-147
 # The same menu after a secure_sudo kernel was added (what update-grub writes).
 awk -v u="$U" '{print} /^submenu / {
-	print "\tmenuentry '\''Ubuntu, with Linux 6.14.0-secure-sudo'\'' --class ubuntu $menuentry_id_option '\''gnulinux-6.14.0-secure-sudo-advanced-" u "'\'' {"
+	print "\tmenuentry '\''Ubuntu, with Linux 6.14.0-secure-sudo'\'' --class ubuntu --class gnu-linux --class gnu --class os $menuentry_id_option '\''gnulinux-6.14.0-secure-sudo-advanced-" u "'\'' {"
 	print "\t\tlinux\t/vmlinuz-6.14.0-secure-sudo root=LABEL=cloudimg-rootfs ro"
 	print "\t}"
-	print "\tmenuentry '\''Ubuntu, with Linux 6.14.0-secure-sudo (recovery mode)'\'' --class ubuntu $menuentry_id_option '\''gnulinux-6.14.0-secure-sudo-recovery-" u "'\'' {"
+	print "\tmenuentry '\''Ubuntu, with Linux 6.14.0-secure-sudo (recovery mode)'\'' --class ubuntu --class gnu-linux --class gnu --class os $menuentry_id_option '\''gnulinux-6.14.0-secure-sudo-recovery-" u "'\'' {"
 	print "\t}" }' "$FIX" > "$R/boot/grub/grub.cfg"
 eq "grub_entry: new kernel, normal entry (not recovery)" "$(L grub_entry 6.14.0-secure-sudo)" \
 	"gnulinux-advanced-$U>gnulinux-6.14.0-secure-sudo-advanced-$U"
 eq "grub_entry: the old kernel is still found" "$(L grub_entry 6.8.0-147-generic)" \
 	"gnulinux-advanced-$U>gnulinux-6.8.0-147-generic-advanced-$U"
+cp "$R/boot/grub/grub.cfg" "$T/sub.cfg"
+# What update-grub writes with GRUB_DISABLE_SUBMENU=true: no "Ubuntu"
+# (simple) entry, no submenu, every kernel at the top level.
+awk '/^menuentry .*gnulinux-simple-/ {skip = 1; next} skip && /^}/ {skip = 0; next} skip {next}
+	/^submenu / {insub = 1; next} insub && /^}/ {insub = 0; next} {if (insub) sub(/^\t/, ""); print}' \
+	"$T/sub.cfg" > "$T/flat.cfg"
+cp "$T/flat.cfg" "$R/boot/grub/grub.cfg"
+eq "grub_entry: flat menu (GRUB_DISABLE_SUBMENU), new kernel" "$(L grub_entry 6.14.0-secure-sudo)" \
+	"gnulinux-6.14.0-secure-sudo-advanced-$U"
+eq "grub_entry: flat menu, the old kernel" "$(L grub_entry 6.8.0-147-generic)" "gnulinux-6.8.0-147-generic-advanced-$U"
+# A GRUB superuser with --unrestricted entries, as the STIG VM run sets it
+# (CLASS in /etc/grub.d/10_linux): the submenu line has no CLASS.
+pw() { { echo 'set superusers="root"'; sed 's/--class os \$menuentry_id_option/--class os --unrestricted $menuentry_id_option/' "$1"; } > "$R/boot/grub/grub.cfg"; }
+open_rc() { L grub_entry_open "$1" > /dev/null 2>&1; echo $?; }
+SUB_E="gnulinux-advanced-$U>gnulinux-6.14.0-secure-sudo-advanced-$U"
+FLAT_E="gnulinux-6.14.0-secure-sudo-advanced-$U"
+pw "$T/sub.cfg"
+check "grub_has_password: set superusers" L grub_has_password
+eq "grub_entry_open: an entry inside the (restricted) Advanced submenu needs the password" "$(open_rc "$SUB_E")" 1
+eq "grub_entry_open: the unrestricted top-level entry does not" "$(open_rc "gnulinux-simple-$U")" 0
+eq "grub_entry_open: an unknown entry is reported as such" "$(open_rc "gnulinux-9.9-advanced-$U")" 2
+pw "$T/flat.cfg"
+eq "grub_entry_open: flat menu, the new kernel boots without the password" "$(open_rc "$FLAT_E")" 0
+{ echo 'set superusers="root"'; cat "$T/flat.cfg"; } > "$R/boot/grub/grub.cfg"
+eq "grub_entry_open: an entry without --unrestricted needs the password" "$(open_rc "$FLAT_E")" 1
+cp "$T/flat.cfg" "$R/boot/grub/grub.cfg"
+refute "grub_has_password: none set" L grub_has_password
+# verify reports a default the password would hold at the menu.
+mkdir -p "$R/var/lib/secure_sudo/install"
+printf 'T\t6.14.0-secure-sudo\tcommitted\n' > "$M"
+genv() { printf '# GRUB Environment Block\nsaved_entry=%s\n' "$1" > "$R/boot/grub/grubenv"; }
+genv "$SUB_E"; pw "$T/sub.cfg"
+I verify > "$T/out" 2>&1; rc=$?
+check "verify fails when the default boot entry needs the GRUB password" sh -c "[ $rc -ne 0 ] && grep -q 'FAIL .*saved_entry needs it to boot' '$T/out'"
+genv "$FLAT_E"; pw "$T/flat.cfg"
+I verify > "$T/out" 2>&1; rc=$?
+check "verify passes when it boots without the password" sh -c "[ $rc -eq 0 ] && grep -q 'ok .*saved_entry boots without it' '$T/out'"
+cp "$T/flat.cfg" "$R/boot/grub/grub.cfg"
+I verify > "$T/out" 2>&1
+refute "verify says nothing about it with no GRUB password" has 'GRUB password'
+# The trial boot: the drop-in an older version wrote (GRUB_DEFAULT=saved
+# only) is replaced, the menu regenerated, and the flat entries armed.
+mkdir -p "$T/grubbin" "$R/etc/default/grub.d"
+cat > "$T/grubbin/update-grub" <<EOF2
+#!/bin/sh
+if grep -q '^GRUB_DISABLE_SUBMENU=true' '$R/etc/default/grub.d/99-secure-sudo.cfg'; then cp '$T/flat.cfg' '$R/boot/grub/grub.cfg'
+else cp '$T/sub.cfg' '$R/boot/grub/grub.cfg'; fi
+EOF2
+for t in grub-set-default grub-reboot; do printf '#!/bin/sh\necho "%s $*" >> "$STUB_LOG"\n' "$t" > "$T/grubbin/$t"; done
+chmod 0755 "$T/grubbin/"*
+trial() { : > "$T/grub.log"; SS_ROOT="$R" SS_INSTALL_LIB=1 PATH="$T/grubbin:$PATH" STUB_LOG="$T/grub.log" bash -c '. "$0"; FAMILY=debian; "$@"' "$INST" arrange_trial_boot 6.14.0-secure-sudo 6.8.0-147-generic; }
+printf '# Written by secure_sudo install.sh: keep the known-good kernel the\n# default and boot new kernels once (grub-reboot). Removed by uninstall.\nGRUB_DEFAULT=saved\n' > "$R/etc/default/grub.d/99-secure-sudo.cfg"
+cp "$T/sub.cfg" "$R/boot/grub/grub.cfg"
+printf 'F\t/etc/default/grub.d/99-secure-sudo.cfg\t%s\n' "$(sha256sum "$R/etc/default/grub.d/99-secure-sudo.cfg" | cut -d' ' -f1)" > "$M"
+check "an older drop-in is stale (preflight plans to rewrite it)" sh -c "SS_ROOT='$R' SS_INSTALL_LIB=1 bash -c '. \"\$0\"; FAMILY=debian; grub_dropin_stale' '$INST'"
+trial > "$T/out" 2>&1; rc=$?
+check "trial boot after an older install succeeds" test "$rc" -eq 0
+check "... the drop-in now lists every kernel at the top level" grep -qx 'GRUB_DISABLE_SUBMENU=true' "$R/etc/default/grub.d/99-secure-sudo.cfg"
+check "... and still keeps GRUB_DEFAULT=saved" grep -qx 'GRUB_DEFAULT=saved' "$R/etc/default/grub.d/99-secure-sudo.cfg"
+check "... its manifest hash is the new one" grep -qP "^F\t/etc/default/grub.d/99-secure-sudo.cfg\t$(sha256sum "$R/etc/default/grub.d/99-secure-sudo.cfg" | cut -d' ' -f1)\$" "$M"
+check "... the known-good kernel is the default, by its top-level entry" grep -qx "grub-set-default gnulinux-6.8.0-147-generic-advanced-$U" "$T/grub.log"
+check "... and the new kernel boots once, by its top-level entry" grep -qx "grub-reboot $FLAT_E" "$T/grub.log"
+refute "a current drop-in is not stale" sh -c "SS_ROOT='$R' SS_INSTALL_LIB=1 bash -c '. \"\$0\"; grub_dropin_stale' '$INST'"
+echo '# the administrator was here' >> "$R/etc/default/grub.d/99-secure-sudo.cfg"
+cp "$R/etc/default/grub.d/99-secure-sudo.cfg" "$T/dropin.edited"
+trial > "$T/out" 2>&1
+check "a drop-in the administrator changed is left as it is" cmp -s "$T/dropin.edited" "$R/etc/default/grub.d/99-secure-sudo.cfg"
+check "... with a warning" has '99-secure-sudo.cfg was changed since install.sh wrote it'
+rm -rf "$R/etc/default/grub.d" "$R/boot/grub/grubenv" "$M"
 printf "menuentry 'Top' \$menuentry_id_option 'gnulinux-5.0.0-x-advanced-$U' {\n\tlinux /vmlinuz-5.0.0-x\n}\n" > "$R/boot/grub/grub.cfg"
 eq "grub_entry: a top-level entry has no submenu prefix" "$(L grub_entry 5.0.0-x)" "gnulinux-5.0.0-x-advanced-$U"
 rm -f "$R/boot/grub/grub.cfg"; mkdir -p "$R/boot/loader/entries"

@@ -25,7 +25,7 @@ nothing is pushed from here.
 | Item | Status | One line |
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
-| P0-2 tests | partly | 531 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
+| P0-2 tests | partly | 556 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
 | P0-3 boot proof | partly | 6.12.114 with secure_sudo: 126/126 in-kernel checks (initramfs, KVM) and the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run 51/51, both in CI; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
@@ -168,8 +168,8 @@ Missing:
 
 ### P0-3 Boot proof — partly
 
-What has been booted, all under QEMU/TCG with SeaBIOS
-(`docs/vm/results/`):
+What has been booted, under QEMU with SeaBIOS (TCG here, KVM in CI;
+`docs/vm/results/`):
 
 | Kernel | Guest | Result |
 |---|---|---|
@@ -178,7 +178,7 @@ What has been booted, all under QEMU/TCG with SeaBIOS
 | current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
 | same | Ubuntu 24.04, STIG remediation | remediation ran; the run was cut off before the post-hardening reboot (`07-distro-stig/run-stig-test.tap` ends at check 6), so a reboot of a hardened guest was **not** shown. An earlier version of this row said it was |
-| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest does not answer SSH** (2026-10-31, twice). Cause under investigation: the test now writes the boot state to the serial console |
+| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest did not come back** (2026-10-31, twice). Cause: the GRUB password held the boot at Ubuntu's restricted "Advanced options" submenu, where the installer had put the default kernel (SECURITY_REVIEW #51). Fixed: in run 41237968131 the hardened guest reboots into the secure_sudo kernel with AppArmor active; the release gate then had one unexplained failure, `file_permissions_var_log_stig`, caused by the hardening script's own reports (OSB-22, fixed) |
 
 Known platform exclusions, recorded rather than claimed:
 
@@ -186,14 +186,12 @@ Known platform exclusions, recorded rather than claimed:
   "expected lockdown state" could only be checked as "not enforced".
 * `fwupd-refresh` fails in the guest (no network firmware service), so
   systemd reports `degraded`; unrelated to secure_sudo.
-* The VM kernel was built with `SS_LOCALMOD` from a fresh guest's module
+* The VM kernel is built with `SS_LOCALMOD` from a fresh guest's module
   list. That dropped the netfilter modules, so ufw could not start (OSB-21);
-  `install.sh` now keeps them. Not yet rebuilt and booted.
+  `install.sh` now keeps them, and ufw starts on the 6.12.114 CI build.
 
 Missing for *Done*:
 
-* **6.12 LTS, the installer's default, has never been booted** (only
-  compiled against its headers; kernel.org was unreachable).
 * No UEFI, Secure Boot, MOK enrollment or TPM test (no OVMF/KVM here).
 * No VM of Fedora, openSUSE or Arch; no real hardware.
   [HARDWARE_SMOKE_TEST.md](HARDWARE_SMOKE_TEST.md) is the plan for that.
@@ -227,7 +225,7 @@ Missing for *Done*:
 * [RECOVERY.md](RECOVERY.md) covers an unbootable kernel, failed MOK
   enrollment, an interrupted package install and policy lockout.
 
-Evidence: `tests/install/test-install.sh` (109 checks, including a
+Evidence: `tests/install/test-install.sh` (131 checks, including a
 byte-identical root after install + uninstall with the daemon's runtime
 state present, undelivered remote events kept, and an interrupted install),
 and the distro VM run: `06-distro-install-final/` on the packaged tree, **51/51**: install-kernel and
