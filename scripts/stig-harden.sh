@@ -220,6 +220,11 @@ esac
 # -- 4. scan ---------------------------------------------------------------
 mkdir -p "$OUTDIR"
 chmod 700 "$OUTDIR"
+# Everything this script writes to OUTDIR is 0600 (umask 077 for its own
+# writes, never for the remediation it runs). The default OUTDIR is under
+# /var/log, where file_permissions_var_log_stig wants every file at 0640 or
+# stricter, and the reports written after the OSB-07 step (the "after" scan,
+# its cross-check, the summary) were 0644, so the next scan failed that rule.
 TS="$(date +%Y%m%d-%H%M%S)"
 # scan() writes the XML result path into the global SCAN_RESULT (rather than to
 # stdout through a pipe, which would interact badly with set -o pipefail).
@@ -230,8 +235,8 @@ scan() {
 	local rep="$OUTDIR/${tag}-report-${TS}.html"
 	info "scanning ($tag) -> $rep"
 	# oscap returns 2 when some rules fail; that is normal, not an error.
-	oscap xccdf eval "${TAIL[@]}" --profile "$PROFILE" \
-		--results "$res" --report "$rep" "$DS" || [ $? -eq 2 ]
+	( umask 077; oscap xccdf eval "${TAIL[@]}" --profile "$PROFILE" \
+		--results "$res" --report "$rep" "$DS" ) || [ $? -eq 2 ]
 	SCAN_RESULT="$res"
 	# Print a one-line tally of every result kind, parsed from the XML we
 	# just wrote (no second scan).
@@ -256,6 +261,7 @@ local_fs() { # mount points of filesystems on block devices (no bind mounts, no 
 }
 crosscheck() {
 	local out="$1" m src plain="" n=0 ww
+	install -m 0600 /dev/null "$out"
 	while IFS= read -r m; do
 		case "$m" in /boot|/boot/efi) continue ;; esac
 		n=$((n + 1))
@@ -395,13 +401,14 @@ post_patch() {
 # without an END marker stops the run instead of silently dropping the rest.
 skip_rules() {
 	local fix="$1" n
-	n="$(results skip-fix "$fix" "$SKIP_RULES")" || die "could not apply --skip-rules to $fix"
+	n="$(umask 077; results skip-fix "$fix" "$SKIP_RULES")" || die "could not apply --skip-rules to $fix"
 	info "  --skip-rules: left $n rule(s) unremediated (list: $fix.skipped)"
 }
 
 # Write a Markdown summary: before/after tallies + every rule not at pass.
 summarize() {
 	local before="$1" after="$2" out="$OUTDIR/summary-${TS}.md"
+	install -m 0600 /dev/null "$out"
 	{
 		echo "# OpenSCAP summary ($TS)"
 		echo
@@ -451,10 +458,11 @@ while [ "$pass_no" -le "$PASSES" ]; do
 	FIX="$OUTDIR/remediation-${TS}-pass${pass_no}.sh"
 	RID="$(grep -o 'TestResult id="[^"]*"' "$LAST_RES" | head -1 | cut -d'"' -f2)"
 	info "pass $pass_no/$PASSES: generating remediation from result $RID"
-	oscap xccdf generate fix "${TAIL[@]}" --fix-type bash --result-id "$RID" \
-		--output "$FIX" "$LAST_RES"
+	( umask 077; oscap xccdf generate fix "${TAIL[@]}" --fix-type bash --result-id "$RID" \
+		--output "$FIX" "$LAST_RES" )
 	[ -n "$SKIP_RULES" ] && skip_rules "$FIX"
 	info "applying $FIX"
+	install -m 0600 /dev/null "$FIX.log"
 	bash "$FIX" >"$FIX.log" 2>&1 || \
 		info "remediation returned non-zero (some fixes are environment-specific); log: $FIX.log"
 	scan "pass${pass_no}"

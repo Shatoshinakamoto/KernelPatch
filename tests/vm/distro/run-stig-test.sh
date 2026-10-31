@@ -215,6 +215,10 @@ step lsm GT 'cat /sys/kernel/security/lsm; echo; aa-status --enabled && echo app
 check "secure_sudo and AppArmor both active after hardening" sh -c "grep -q secure_sudo '$LAST' && grep -q apparmor-enabled '$LAST'"
 step scan-final GTJOB "$SH --scan --outdir /var/log/secure_sudo/stig/final; ls -t /var/log/secure_sudo/stig/final/*results*.xml | head -1 > /tmp/final-xml; chmod 644 /tmp/final-xml"
 check "final scan ran" test -s "$LAST"
+# What file_permissions_var_log_stig sees (OSB-07): files under /var/log
+# wider than 0640, less the ones the rule excludes. Empty when it passes.
+GT "find /var/log -type f -perm /7137 ! -name '[bw]tmp*' ! -name 'lastlog*' -printf '%m %u:%g %p\n'" 2>/dev/null |
+	head -n 40 | sed 's/^/# wider than 0640: /'
 FX="$(GT cat /tmp/final-xml 2>/dev/null | tail -1)"
 GT "cat $FX" > "$RES/final-results.xml" 2>/dev/null
 GT "cat ${FX%.xml}.crosscheck" > "$RES/final-results.crosscheck" 2>/dev/null
