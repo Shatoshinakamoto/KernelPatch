@@ -15,7 +15,9 @@ for issues of its own. Findings #15, #16, #18 and #19 are the second-pass review
 BinaryVault (#17), RadioGuard (#19), TimeVault v6, and Process Runtime Guard
 (#20) work. Findings #35–#47 came from v12's tests and boot runs rather than
 from reading the code, and several of them (the boot panic, OTP replay, the
-PAM order, the IPv6 gap) had survived every earlier review. The full LSM (20
+PAM order, the IPv6 gap) had survived every earlier review. Findings
+#48–#50 came from reviewing the P1 event, forwarding and evidence work
+merged after v12. The full LSM (20
 `.c` files) compiles cleanly with `-Werror` against the 6.11, 6.12.114 and
 6.14 headers and in six in-tree kernel configurations (`ci/build-gate.sh`);
 the CLI, daemon, PAM modules and add-ons compile with `-Werror`.
@@ -838,6 +840,60 @@ always keeps that netfilter set with `SS_LOCALMOD` and stops if it does not
 stick (OSB-21). The default build, from the distro's config, was not
 affected. The fixed config was checked with Kconfig, not yet rebuilt and
 booted.
+
+### 48. Crafted file names could make the daemon quarantine any file or kill root's sudo (v1–v12, fixed after v12) — AC-6 / SI-10 / CWE-77 / CWE-59
+
+`secure-sudod` runs as root and does two drastic things for the kernel: it
+kills a UID's sudo/su processes (cooldown) and it quarantines or deletes a
+file (TimeVault). It picked both by searching every event's text for
+`cooldown: UID ` or `timevault: denied exec `, and that text carries paths
+the user chooses. An unprivileged user only had to get any denial to log a
+file named like
+`/home/u/x/timevault: denied exec /usr/bin/sudo (hash mismatch)`
+to have `/usr/bin/sudo` quarantined. A file named `cooldown: UID 0 blocked`
+killed root's sudo sessions. Even for a real TimeVault denial, the path was
+cut at its first ` (` and then handed to `lstat()` and the helper, which
+follow symlinks in the directories on the way. So a user could swap their
+own directory for a symlink to `/etc` after the denial and get `/etc` files
+quarantined instead.
+
+The daemon now parses each record as JSON and chooses an action only from
+the typed fields, which are kernel constants. The cooldown UID comes from
+`target_uid`, which the kernel now fills in. A TimeVault path is accepted
+only from an untruncated record whose message matches the kernel's exact
+format, from its first byte to its last.
+
+The file itself is opened one directory at a time with `O_NOFOLLOW`. It is
+archived from that checked descriptor (`quarantine.sh --origin`). The
+original is unlinked through its pinned parent directory, and only while
+the name still refers to the same inode. The TimeVault directory scan uses
+the same path. 22 tests in `tests/userspace/test-daemon-events.sh`.
+
+### 49. A record split across two ring reads was logged as two broken lines and its action lost (v9–v12, fixed after v12) — AU-9 / SI-4
+
+A read of the ring returns whatever bytes are queued, so a read can end in
+the middle of a record. The daemon handled each read as complete lines, so a
+cooldown block that straddled two reads killed nothing, and the log held two
+fragments. The daemon now keeps the unfinished tail for the next read.
+
+### 50. A collector outage stalled the daemon, and the last events of a TLS connection could be lost (P1-2 work, fixed after v12) — AU-4 / AU-9 / SC-5
+
+With TLS forwarding, every event triggered a DNS lookup, a TCP connect
+(3 s timeout) and a TLS handshake inline, and then a retry of the whole
+queue. While the collector dropped packets, each event held up the daemon,
+including cooldown kills and TimeVault quarantines, for 3 s or more per
+address, and the kernel ring overflowed behind it. Events are now written
+locally, acted on, and only queued. The main loop sends the queue in
+batches of up to 512 over one connection. After a failure it waits 5 s,
+then twice as long after each further failure, up to 5 minutes. A config
+reload retries at once.
+
+The daemon also closed each connection without reading what the collector
+had sent (TLS 1.3 session tickets). Closing a socket with unread data makes
+the kernel send a reset, and the collector then discarded the last events
+of the connection before reading them. A three-event batch lost one of
+them in the test. Connections now end with `close_notify` and a bounded
+read.
 
 ---
 

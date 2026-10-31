@@ -95,6 +95,9 @@ static unsigned long long remote_queue_records;
 static unsigned long long remote_queue_dropped;
 static unsigned long long remote_queue_sequence;
 static unsigned long long local_log_failures;
+static int remote_queue_known;		/* the two counters above are current */
+static time_t remote_next_flush;	/* main loop: next queue flush */
+static unsigned int remote_backoff;	/* seconds; 0 = collector healthy */
 
 /* Forward declaration: used by kill_offenders() before its definition. */
 static void syslog_line(const char *fmt, ...)
@@ -190,18 +193,65 @@ static void todays_logpath(char *buf, size_t n)
 		 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
 }
 
-static int send_remote(const struct cfg *c, const char *line, size_t len)
+/*
+ * One connection to the collector. TLS events are only queued by
+ * forward_remote(); the main loop drains the queue over one connection per
+ * batch, and backs off after a failure. Earlier, every event did its own
+ * DNS lookup, TCP connect and TLS handshake inline, and also retried the
+ * whole queue. While a collector dropped packets, each event therefore
+ * held up the daemon (cooldown kills and TimeVault quarantines included)
+ * for 3 s or more per address.
+ */
+struct remote_conn {
+	int fd;
+	int tls;
+	SSL_CTX *ctx;
+	SSL *ssl;
+};
+
+static void remote_close(struct remote_conn *rc)
+{
+	if (rc->ssl) {
+		char drain[512];
+
+		/*
+		 * Close properly: send close_notify, then read what the
+		 * collector sent us (TLS 1.3 session tickets, its own
+		 * close_notify) until it closes or the 3 s receive timeout.
+		 * Closing a socket with unread received data makes the kernel
+		 * send a reset, and a reset can make the collector discard
+		 * our last events before it has read them.
+		 */
+		if (SSL_shutdown(rc->ssl) == 0)
+			while (SSL_read(rc->ssl, drain, sizeof(drain)) > 0)
+				;
+		SSL_free(rc->ssl);
+	}
+	if (rc->ctx)
+		SSL_CTX_free(rc->ctx);
+	if (rc->fd >= 0)
+		close(rc->fd);
+	rc->ssl = NULL;
+	rc->ctx = NULL;
+	rc->fd = -1;
+}
+
+/* Connect (and for TLS, handshake and verify). 1 on success. */
+static int remote_open(const struct cfg *c, struct remote_conn *rc)
 {
 	char target[256], host[256], *port;
 	struct addrinfo hints = { 0 }, *res = NULL, *ai;
-	int fd;
+	int fd = -1;
 
+	rc->fd = -1;
+	rc->ctx = NULL;
+	rc->ssl = NULL;
+	rc->tls = !strcmp(c->remote_transport, "tls");
 	if (!c->remote_syslog[0]) {
 		snprintf(remote_state, sizeof(remote_state), "disabled");
 		return 0;
 	}
-	if (strcmp(c->remote_transport, "tls") &&
-	    strcmp(c->remote_transport, "udp")) {
+	if (!rc->tls && strcmp(c->remote_transport, "udp")) {
 		snprintf(remote_state, sizeof(remote_state), "config_error");
 		remote_failures++;
 		return 0;
@@ -230,8 +280,7 @@ static int send_remote(const struct cfg *c, const char *line, size_t len)
 		snprintf(host, sizeof(host), "%s", target);
 		port = colon + 1;
 	}
-	hints.ai_socktype = !strcmp(c->remote_transport, "tls") ?
-			    SOCK_STREAM : SOCK_DGRAM;
+	hints.ai_socktype = rc->tls ? SOCK_STREAM : SOCK_DGRAM;
 	if (getaddrinfo(host, port, &hints, &res) != 0 || !res) {
 		snprintf(remote_state, sizeof(remote_state), "dns_error");
 		remote_failures++;
@@ -240,10 +289,11 @@ static int send_remote(const struct cfg *c, const char *line, size_t len)
 	for (ai = res; ai; ai = ai->ai_next) {
 		int flags, connected = 0;
 
-		fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC,
+			    ai->ai_protocol);
 		if (fd < 0)
 			continue;
-		if (!strcmp(c->remote_transport, "tls")) {
+		if (rc->tls) {
 			struct pollfd pfd;
 			int error = 0;
 			socklen_t error_len = sizeof(error);
@@ -272,107 +322,112 @@ static int send_remote(const struct cfg *c, const char *line, size_t len)
 		if (connected)
 			break;
 		close(fd);
+		fd = -1;
 	}
-	if (!ai) {
-		freeaddrinfo(res);
+	freeaddrinfo(res);
+	if (fd < 0) {
 		snprintf(remote_state, sizeof(remote_state), "connect_error");
 		remote_failures++;
 		return 0;
 	}
-	if (!strcmp(c->remote_transport, "udp")) {
-		char msg[600];
-		int m = snprintf(msg, sizeof(msg), "<85>secure_sudo: %.*s",
-				 (int)len, line);
-
-		if (send(fd, msg, (size_t)m, 0) == m) {
-			snprintf(remote_state, sizeof(remote_state), "udp_unconfirmed");
-			remote_sent++;
-			close(fd);
-			freeaddrinfo(res);
-			return 1;
-		} else {
-			snprintf(remote_state, sizeof(remote_state), "send_error");
-			remote_failures++;
-		}
-		close(fd);
-	} else {
-		SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-		SSL *ssl = NULL;
+	rc->fd = fd;
+	if (rc->tls) {
 		struct timeval timeout = { .tv_sec = 3, .tv_usec = 0 };
 		unsigned char addr[sizeof(struct in6_addr)];
-		char msg[1200], frame[1232], hostname[256] = "localhost";
-		struct tm tm;
-		time_t now = time(NULL);
-		int m, framed, verified = 0, sent = 0;
+		int is_ip = inet_pton(AF_INET, host, addr) == 1 ||
+			    inet_pton(AF_INET6, host, addr) == 1;
+		int verified = 0;
 
 		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-		if (ctx &&
-		    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION) == 1 &&
-		    SSL_CTX_load_verify_locations(ctx, c->remote_ca_file,
+		rc->ctx = SSL_CTX_new(TLS_client_method());
+		if (rc->ctx &&
+		    SSL_CTX_set_min_proto_version(rc->ctx, TLS1_2_VERSION) == 1 &&
+		    SSL_CTX_load_verify_locations(rc->ctx, c->remote_ca_file,
 						  NULL) == 1) {
-			SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-			ssl = SSL_new(ctx);
+			SSL_CTX_set_verify(rc->ctx, SSL_VERIFY_PEER, NULL);
+			rc->ssl = SSL_new(rc->ctx);
 		}
-		if (ssl) {
-			X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+		if (rc->ssl) {
+			X509_VERIFY_PARAM *param = SSL_get0_param(rc->ssl);
 
-			if (inet_pton(AF_INET, host, addr) == 1 ||
-			    inet_pton(AF_INET6, host, addr) == 1)
+			if (is_ip)
 				verified = X509_VERIFY_PARAM_set1_ip_asc(param, host) == 1;
 			else
-				verified = SSL_set1_host(ssl, host) == 1;
-			if (verified && inet_pton(AF_INET, host, addr) != 1 &&
-			    inet_pton(AF_INET6, host, addr) != 1 &&
-			    SSL_set_tlsext_host_name(ssl, host) != 1)
-				verified = 0;
-			if (SSL_set_fd(ssl, fd) != 1)
+				verified = SSL_set1_host(rc->ssl, host) == 1 &&
+					   SSL_set_tlsext_host_name(rc->ssl, host) == 1;
+			if (SSL_set_fd(rc->ssl, fd) != 1)
 				verified = 0;
 		}
-		if (!verified || !ssl || SSL_connect(ssl) != 1 ||
-		    SSL_get_verify_result(ssl) != X509_V_OK) {
+		if (!verified || SSL_connect(rc->ssl) != 1 ||
+		    SSL_get_verify_result(rc->ssl) != X509_V_OK) {
 			snprintf(remote_state, sizeof(remote_state), "tls_error");
 			remote_failures++;
-		} else {
-			char timestamp[40];
-
-			gmtime_r(&now, &tm);
-			strftime(timestamp, sizeof(timestamp),
-				 "%Y-%m-%dT%H:%M:%SZ", &tm);
-			gethostname(hostname, sizeof(hostname) - 1);
-			m = snprintf(msg, sizeof(msg),
-				     "<85>1 %s %s secure_sudo - - - %.*s",
-				     timestamp, hostname, (int)len, line);
-			framed = snprintf(frame, sizeof(frame), "%d ", m);
-			if (m > 0 && framed > 0 &&
-			    (size_t)framed + (size_t)m < sizeof(frame)) {
-				memcpy(frame + framed, msg, (size_t)m);
-				if (SSL_write(ssl, frame, framed + m) == framed + m) {
-					snprintf(remote_state, sizeof(remote_state),
-						 "tls_sent_unconfirmed");
-					remote_sent++;
-					sent = 1;
-				} else {
-					snprintf(remote_state, sizeof(remote_state),
-						 "tls_error");
-					remote_failures++;
-				}
-			} else {
-				snprintf(remote_state, sizeof(remote_state),
-					 "message_error");
-				remote_failures++;
-			}
+			remote_close(rc);
+			return 0;
 		}
-		if (ssl)
-			SSL_free(ssl);
-		if (ctx)
-			SSL_CTX_free(ctx);
-		close(fd);
-		freeaddrinfo(res);
-		return sent;
 	}
-	freeaddrinfo(res);
-	return 0;
+	return 1;
+}
+
+/* Send one event over @rc. 1 on success. */
+static int remote_write(struct remote_conn *rc, const char *line, size_t len)
+{
+	char msg[1200], frame[1232], hostname[256] = "localhost";
+	char timestamp[40];
+	struct tm tm;
+	time_t now = time(NULL);
+	int m, framed;
+
+	while (len && line[len - 1] == '\n')
+		len--;
+	if (!rc->tls) {
+		m = snprintf(msg, sizeof(msg), "<85>secure_sudo: %.*s",
+			     (int)len, line);
+		if (m > 0 && (size_t)m < sizeof(msg) &&
+		    send(rc->fd, msg, (size_t)m, 0) == m) {
+			snprintf(remote_state, sizeof(remote_state), "udp_unconfirmed");
+			remote_sent++;
+			return 1;
+		}
+		snprintf(remote_state, sizeof(remote_state), "send_error");
+		remote_failures++;
+		return 0;
+	}
+	gmtime_r(&now, &tm);
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+	gethostname(hostname, sizeof(hostname) - 1);
+	m = snprintf(msg, sizeof(msg), "<85>1 %s %s secure_sudo - - - %.*s",
+		     timestamp, hostname, (int)len, line);
+	framed = snprintf(frame, sizeof(frame), "%d ", m);
+	if (m <= 0 || (size_t)m >= sizeof(msg) || framed <= 0 ||
+	    (size_t)framed + (size_t)m >= sizeof(frame)) {
+		snprintf(remote_state, sizeof(remote_state), "message_error");
+		remote_failures++;
+		return 0;
+	}
+	memcpy(frame + framed, msg, (size_t)m);
+	if (SSL_write(rc->ssl, frame, framed + m) != framed + m) {
+		snprintf(remote_state, sizeof(remote_state), "tls_error");
+		remote_failures++;
+		return 0;
+	}
+	snprintf(remote_state, sizeof(remote_state), "tls_sent_unconfirmed");
+	remote_sent++;
+	return 1;
+}
+
+/* One event on its own connection (UDP, and the tests). 1 on success. */
+static int send_remote(const struct cfg *c, const char *line, size_t len)
+{
+	struct remote_conn rc;
+	int sent;
+
+	if (!remote_open(c, &rc))
+		return 0;
+	sent = remote_write(&rc, line, len);
+	remote_close(&rc);
+	return sent;
 }
 
 static int remote_queue_dir(void)
@@ -426,6 +481,7 @@ static int remote_queue_stats(void)
 	free(entries);
 	remote_queue_bytes = bytes;
 	remote_queue_records = records;
+	remote_queue_known = 1;
 	return 0;
 }
 
@@ -452,9 +508,17 @@ static int remote_queue_event(const struct cfg *c, const char *line, size_t len)
 	int fd, n, dirfd;
 	unsigned long long limit;
 
-	if (len > sizeof(buf) - 2 || remote_queue_stats() != 0)
+	if (len > sizeof(buf) - 2)
 		return -1;
 	limit = (unsigned long long)c->remote_queue_max_mb * 1024 * 1024;
+	/* The counters are kept up to date here and by the flush; rescan the
+	 * directory only when they are unknown or say the queue is full, so
+	 * a long backlog does not cost a directory scan per event. */
+	if ((!remote_queue_known ||
+	     remote_queue_bytes + len + 1 > limit ||
+	     remote_queue_records >= REMOTE_QUEUE_MAX_RECORDS) &&
+	    remote_queue_stats() != 0)
+		return -1;
 	if (remote_queue_bytes + len + 1 > limit ||
 	    remote_queue_records >= REMOTE_QUEUE_MAX_RECORDS) {
 		snprintf(remote_state, sizeof(remote_state), "queue_full");
@@ -498,79 +562,118 @@ static int remote_queue_event(const struct cfg *c, const char *line, size_t len)
 		return -1;
 	}
 	close(dirfd);
-	return remote_queue_stats();
+	remote_queue_records++;
+	remote_queue_bytes += len;
+	return 0;
 }
 
-static void flush_remote_queue(const struct cfg *c)
+#define REMOTE_FLUSH_BATCH 512		/* events per flush call */
+
+/*
+ * Send queued events oldest first over one connection, deleting each after
+ * its write succeeds. Returns 0 when the queue is empty, 1 when the batch
+ * limit left events for the next call, -1 when the collector or the queue
+ * failed (the event that failed and all later ones stay queued).
+ */
+static int flush_remote_queue(const struct cfg *c)
 {
 	struct dirent **entries = NULL;
-	int count, i;
+	struct remote_conn rc = { .fd = -1 };
+	int count, i, sent = 0, ret = 0, open_ok = 0;
 
 	if (remote_queue_stats() != 0) {
 		snprintf(remote_state, sizeof(remote_state), "queue_error");
 		remote_failures++;
-		return;
+		return -1;
+	}
+	if (!remote_queue_records) {
+		snprintf(remote_state, sizeof(remote_state), "tls_idle");
+		return 0;
 	}
 	count = scandir(REMOTE_QUEUE, &entries, NULL, alphasort);
 	if (count < 0) {
 		snprintf(remote_state, sizeof(remote_state), "queue_error");
 		remote_failures++;
-		return;
+		return -1;
 	}
-	if (!remote_queue_records) {
-		snprintf(remote_state, sizeof(remote_state), "tls_idle");
-		for (i = 0; i < count; i++)
-			free(entries[i]);
-		free(entries);
-		return;
-	}
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < count && ret == 0; i++) {
 		char path[512], event[1024];
 		ssize_t n;
 		int fd;
 
-		if (strncmp(entries[i]->d_name, "event-", 6)) {
-			free(entries[i]);
+		if (strncmp(entries[i]->d_name, "event-", 6))
 			continue;
+		if (sent == REMOTE_FLUSH_BATCH) {
+			ret = 1;
+			break;
 		}
 		snprintf(path, sizeof(path), "%s/%s", REMOTE_QUEUE,
 			 entries[i]->d_name);
 		fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-		if (fd < 0) {
-			snprintf(remote_state, sizeof(remote_state), "queue_error");
-			remote_failures++;
-			free(entries[i]);
-			for (++i; i < count; i++)
-				free(entries[i]);
-			free(entries);
-			return;
-		}
-		n = read(fd, event, sizeof(event) - 1);
-		close(fd);
+		n = fd < 0 ? -1 : read(fd, event, sizeof(event) - 1);
+		if (fd >= 0)
+			close(fd);
 		if (n <= 0 || (n == sizeof(event) - 1 && event[n - 1] != '\n')) {
 			snprintf(remote_state, sizeof(remote_state), "queue_error");
 			remote_failures++;
-			free(entries[i]);
-			for (++i; i < count; i++)
-				free(entries[i]);
-			free(entries);
-			return;
+			ret = -1;
+			break;
 		}
-		if (!send_remote(c, event, (size_t)n) || unlink(path) != 0) {
-			free(entries[i]);
-			for (++i; i < count; i++)
-				free(entries[i]);
-			free(entries);
-			remote_queue_stats();
-			if (remote_queue_records)
-				snprintf(remote_state, sizeof(remote_state), "tls_queued");
-			return;
+		if (!open_ok && !(open_ok = remote_open(c, &rc))) {
+			ret = -1;
+			break;
 		}
-		free(entries[i]);
+		if (!remote_write(&rc, event, (size_t)n)) {
+			ret = -1;
+			break;
+		}
+		if (unlink(path) != 0) {
+			snprintf(remote_state, sizeof(remote_state), "queue_error");
+			remote_failures++;
+			ret = -1;
+			break;
+		}
+		sent++;
 	}
+	for (i = 0; i < count; i++)
+		free(entries[i]);
 	free(entries);
-	if (remote_queue_stats() == 0 && !remote_queue_records)
+	if (open_ok)
+		remote_close(&rc);
+	if (remote_queue_stats() != 0)
+		return -1;
+	/* as before: a send failure with events left reads "tls_queued" */
+	if (ret < 0 && remote_queue_records &&
+	    strcmp(remote_state, "queue_error"))
+		snprintf(remote_state, sizeof(remote_state), "tls_queued");
+	if (ret == 0 && !remote_queue_records)
 		snprintf(remote_state, sizeof(remote_state), "tls_idle");
+	return ret;
+}
+
+/*
+ * Main loop: flush the TLS queue when it is due. After a failure, wait
+ * 5 s, then twice as long after each further failure, up to 5 minutes, so
+ * an unreachable collector costs one attempt per wait instead of one per
+ * event.
+ */
+static void maybe_flush_remote(const struct cfg *c, time_t now)
+{
+	int rc;
+
+	if (!c->remote_syslog[0] || strcmp(c->remote_transport, "tls") ||
+	    now < remote_next_flush)
+		return;
+	rc = flush_remote_queue(c);
+	if (rc < 0) {
+		remote_backoff = remote_backoff ? remote_backoff * 2 : 5;
+		if (remote_backoff > 300)
+			remote_backoff = 300;
+		remote_next_flush = now + remote_backoff;
+	} else {
+		remote_backoff = 0;
+		remote_next_flush = rc > 0 ? now : now + 5;
+	}
 }
 
 static void forward_remote(const struct cfg *c, const char *line, size_t len)
@@ -586,13 +689,15 @@ static void forward_remote(const struct cfg *c, const char *line, size_t len)
 			remote_failures++;
 			return;
 		}
-		flush_remote_queue(c);
+		/* sent by maybe_flush_remote(); promptly unless backing off */
+		if (!remote_backoff)
+			remote_next_flush = 0;
 		return;
 	}
 	send_remote(c, line, len);
 }
 
-static void write_log(const struct cfg *c, const char *line, size_t len)
+static void write_local_log(const struct cfg *c, const char *line, size_t len)
 {
 	char path[512];
 	FILE *f;
@@ -616,6 +721,12 @@ static void write_log(const struct cfg *c, const char *line, size_t len)
 		fprintf(stderr, "secure-sudod: cannot write local event log %s: %s\n",
 			path, strerror(saved));
 	}
+	(void)c;
+}
+
+static void write_log(const struct cfg *c, const char *line, size_t len)
+{
+	write_local_log(c, line, len);
 	forward_remote(c, line, len);
 }
 
@@ -1556,8 +1667,10 @@ static void drain_events(const struct cfg *c, int fd)
 	while ((nl = memchr(line, '\n', ev_have - (size_t)(line - ev_buf)))) {
 		*nl = '\0';
 		if (nl > line) {
-			write_log(c, line, (size_t)(nl - line));
+			/* act before forwarding, so a slow queue never delays it */
+			write_local_log(c, line, (size_t)(nl - line));
 			handle_event(c, line);
+			forward_remote(c, line, (size_t)(nl - line));
 		}
 		line = nl + 1;
 	}
@@ -1611,15 +1724,13 @@ int main(void)
 		if (want_reload) {
 			want_reload = 0;
 			load_cfg(&cfg);
+			remote_backoff = 0;	/* try a new collector at once */
+			remote_next_flush = 0;
 			syslog_line("config reloaded");
 		}
 
 		if (now - last_health >= 5) {
 			last_health = now;
-			if (cfg.remote_syslog[0] &&
-			    !strcmp(cfg.remote_transport, "tls")) {
-				flush_remote_queue(&cfg);
-			}
 			if (write_health_heartbeat() != 0)
 				fprintf(stderr, "secure-sudod: cannot update health heartbeat: %s\n",
 					strerror(errno));
@@ -1627,6 +1738,7 @@ int main(void)
 
 		if (rc > 0 && (pfd.revents & POLLIN))
 			drain_events(&cfg, pfd.fd);
+		maybe_flush_remote(&cfg, time(NULL));
 
 		/* Periodic work roughly every 5s. */
 		if (now - last_periodic >= 5) {
