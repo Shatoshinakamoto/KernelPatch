@@ -158,7 +158,49 @@ GT id -u > "$RES/tester-sudo.log" 2>&1; eq "tester can reach root through sudo" 
 SH='bash /root/ss/KernelPatch-merged/scripts/stig-harden.sh --tailoring /root/stig-vm-tailoring.xml'
 step remediate GTJOB "$SH --remediate --yes --outdir /var/log/secure_sudo/stig/remediate"
 check "baseline scan, remediation and rescan ran to the end" sh -c "[ $GRC -eq 0 ] && grep -q 'remediation complete' '$LAST'"
-if reboot_vm; then ok "the hardened guest reboots"; else not_ok "the hardened guest reboots"; fi
+# If the hardened guest does not answer after its reboot, the serial console
+# is all there is. A one-shot unit (removed once it has run) writes the
+# state of the services that decide whether SSH works to that console.
+GT "cat > /usr/local/sbin/ss-vmtest-diag <<'DIAG'
+#!/bin/sh
+sleep 30
+{
+systemctl is-system-running
+systemctl --failed --no-legend
+ufw status verbose
+ss -tlnp
+iptables -S ufw-user-input
+iptables -L ufw-user-limit -nv
+journalctl -b --no-pager -u ssh -u ssh.socket -u ufw | tail -n 30
+} 2>&1 | sed 's/^/SSDIAG: /' > /dev/ttyS0
+systemctl disable ss-vmtest-diag.service
+rm -f /etc/systemd/system/ss-vmtest-diag.service /usr/local/sbin/ss-vmtest-diag
+DIAG
+cat > /etc/systemd/system/ss-vmtest-diag.service <<'UNIT'
+[Unit]
+Description=secure_sudo VM test: boot state to the serial console (test only)
+After=multi-user.target ufw.service ssh.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/sbin/ss-vmtest-diag
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable ss-vmtest-diag.service" > "$RES/diag-unit.log" 2>&1
+if reboot_vm; then ok "the hardened guest reboots"
+else
+	not_ok "the hardened guest reboots"
+	con="$(ls -t "$W"/console*.log 2>/dev/null | head -1)"
+	if [ -n "$con" ]; then
+		cp "$con" "$RES/console-after-hardening.log"
+		echo "# guest state the diagnostic unit wrote to the console:"
+		tr -d '\r' < "$con" | grep -a 'SSDIAG: ' | sed 's/^/# /' | tail -n 80
+		echo "# last console lines:"
+		tr -d '\r' < "$con" | grep -av 'SSDIAG: ' | tail -n 40 | sed 's/^/# /'
+	fi
+	echo "Bail out! the hardened guest is unreachable after its reboot"
+	tap_done; exit 1
+fi
 eq "after hardening it still runs the secure_sudo kernel" "$(running)" "$REL"
 step lsm GT 'cat /sys/kernel/security/lsm; echo; aa-status --enabled && echo apparmor-enabled; systemctl is-system-running; systemctl --failed --no-legend'
 check "secure_sudo and AppArmor both active after hardening" sh -c "grep -q secure_sudo '$LAST' && grep -q apparmor-enabled '$LAST'"
