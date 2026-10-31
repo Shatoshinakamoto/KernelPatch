@@ -1243,7 +1243,21 @@ uninstall() {
 		rm -rf "$SS_ROOT/etc/secure_sudo" "$SS_ROOT/var/log/secure_sudo"
 		log "purged /etc/secure_sudo and /var/log/secure_sudo"
 	fi
-	if [ -d "$SS_ROOT/var/lib/secure_sudo/quarantine" ]; then
+	# 7. State the daemon and the CLI keep for themselves (heartbeat, last
+	#    load result, event-stream position, and their temporary files). It
+	#    is rebuilt on the next start and holds nothing an investigation
+	#    needs; the logs and the quarantine do, and they stay. Events still
+	#    queued for the remote collector stay too. The service is stopped
+	#    (step 3), so nothing rewrites these behind us.
+	local sd="$SS_ROOT/var/lib/secure_sudo" f
+	for f in daemon.health daemon.health.tmp load.health event-cursor event-cursor.tmp; do
+		rm -f -- "${sd:?}/$f"
+	done
+	rm -f -- "$sd"/load.health.tmp.??????
+	if [ -d "$sd/remote-queue" ] && ! rmdir "$sd/remote-queue" 2>/dev/null; then
+		warn "kept /var/lib/secure_sudo/remote-queue: events not yet delivered to the remote collector"
+	fi
+	if [ -d "$sd/quarantine" ]; then
 		log "kept /var/lib/secure_sudo/quarantine (TimeVault evidence); delete it yourself when done"
 	fi
 

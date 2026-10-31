@@ -182,10 +182,25 @@ refute "--purge removed /etc/secure_sudo" test -e "$R/etc/secure_sudo"
 mkroot
 pristine="$(snap)"
 I userspace --prebuilt "$STAGE" > /dev/null 2>&1
+# What the running daemon and CLI leave in their state directory.
+mkdir -p "$R/var/lib/secure_sudo/remote-queue"
+for f in daemon.health load.health event-cursor event-cursor.tmp; do
+	echo state > "$R/var/lib/secure_sudo/$f"
+done
 I uninstall > "$T/out" 2>&1; rc=$?
 check "install then uninstall succeeds" test "$rc" -eq 0
 check "... and says everything is gone" has 'uninstall complete'
 eq "install + uninstall leaves the root exactly as it was" "$(snap)" "$pristine"
+refute "... including the daemon's heartbeat, cursor and load state" test -e "$R/var/lib/secure_sudo"
+
+# Events still queued for the remote collector are never thrown away.
+mkroot
+I userspace --prebuilt "$STAGE" > /dev/null 2>&1
+mkdir -p "$R/var/lib/secure_sudo/remote-queue"
+echo '{"sequence":7}' > "$R/var/lib/secure_sudo/remote-queue/0000000007"
+I uninstall > "$T/out" 2>&1
+check "uninstall keeps undelivered remote events" test -s "$R/var/lib/secure_sudo/remote-queue/0000000007"
+check "... and says so" has 'kept /var/lib/secure_sudo/remote-queue'
 
 # An install that dies half-way can still be removed.
 mkroot

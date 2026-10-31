@@ -174,6 +174,9 @@ check "the install record is gone" G "! test -e /var/lib/secure_sudo/install"
 check "PAM files are back to their original content" G "cmp -s /etc/pam.d/sudo /root/pam-sudo.orig"
 gstep compare-after "$SNAP > /root/after.sha; bash /root/guest-snapshot.sh compare /root/before.sha /root/after.sha /root/pkgs-before"
 check "clean removal: every file install.sh placed is gone and every file it changed is back" test "$GRC" -eq 0
+# The differences, in the TAP stream too: CI logs show them without the
+# results artifact.
+[ "$GRC" -eq 0 ] || sed 's/^/# /' "$LAST"
 check "the only packages left behind are runtime libraries/tools, no kernel" sh -c "! grep -q 'packages installed since:.* linux-' '$LAST'"
 gstep grub-cfg-after 'diff /root/grub.cfg.regen /boot/grub/grub.cfg; echo "diff-vs-regen=$?"; diff /root/grub.cfg.image /boot/grub/grub.cfg | head -40'
 check "the boot menu is byte-identical to the one GRUB generated before the install" inlast '^diff-vs-regen=0$'
