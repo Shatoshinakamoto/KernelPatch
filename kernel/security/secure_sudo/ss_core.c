@@ -8,6 +8,7 @@
  * driver model is up.
  */
 #include <linux/kernel.h>
+#include <linux/hex.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/cred.h>
@@ -515,7 +516,11 @@ static int __init ss_lsm_init(void)
 }
 
 DEFINE_LSM(secure_sudo) = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+	.id    = &ss_lsmid,	/* 6.19 dropped lsm_info.name for the lsm_id */
+#else
 	.name  = SS_NAME,
+#endif
 	.init  = ss_lsm_init,
 	.blobs = &ss_blob_sizes,	/* #11 per-task blob (defined in ss_node.c) */
 };

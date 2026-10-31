@@ -33,6 +33,13 @@ typedef struct sha256_ctx ss_sha256_ctx;
 typedef struct sha256_state ss_sha256_ctx;
 #endif
 
+/* 6.18 widened the task_alloc hook's clone_flags to u64. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+typedef u64 ss_clone_flags_t;
+#else
+typedef unsigned long ss_clone_flags_t;
+#endif
+
 #define SS_NAME "secure_sudo"
 
 #undef pr_fmt

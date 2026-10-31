@@ -29,6 +29,7 @@
  * half.)
  */
 #include <linux/kernel.h>
+#include <linux/hex.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/file.h>
