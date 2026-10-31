@@ -26,9 +26,9 @@ nothing is pushed from here.
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
 | P0-2 tests | partly | 531 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
-| P0-3 boot proof | partly | 6.12.114 boots with secure_sudo and passes 126/126 in-kernel checks (initramfs, KVM); the full Ubuntu 24.04 install was proven on 6.14 (51/51); not UEFI, other distros or hardware |
+| P0-3 boot proof | partly | 6.12.114 with secure_sudo: 126/126 in-kernel checks (initramfs, KVM) and the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run 51/51, both in CI; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
-| P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM; other distros simulated only |
+| P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
 | P1-1 | partly (active) | schema-v1 JSON events with typed fields; sequence numbers given in ring order so gaps are exact; `events_sequence`/`events_boot_id`; the daemon logs `event_stream`/`event_gap` records and keeps a restart cursor; health shows gaps. Remaining: some targets are labels rather than typed PID/UID; long paths are only complete in `message`; deferred-work actor attribution |
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
@@ -226,8 +226,9 @@ Missing for *Done*:
 * [RECOVERY.md](RECOVERY.md) covers an unbootable kernel, failed MOK
   enrollment, an interrupted package install and policy lockout.
 
-Evidence: `tests/install/test-install.sh` (106 checks, including a
-byte-identical root after install + uninstall and an interrupted install),
+Evidence: `tests/install/test-install.sh` (109 checks, including a
+byte-identical root after install + uninstall with the daemon's runtime
+state present, undelivered remote events kept, and an interrupted install),
 and the distro VM run: `06-distro-install-final/` on the packaged tree, **51/51**: install-kernel and
 userspace on a fresh Ubuntu 24.04 cloud image, the trial boot with
 secure_sudo and AppArmor active, `verify --commit`, a deliberately broken
@@ -236,6 +237,11 @@ refusing while PAM uses the modules, and a removal after which every file
 under the directories `install.sh` touches is byte-identical to the fresh
 image (apart from the runtime packages `libqrencode4 zip unzip`) and
 `grub.cfg` is byte-identical to what GRUB generated before the install.
+The same 51 checks passed on 6.12.114 in the CI `distro-vm` job on
+2026-10-31 (`09-ci-distro-install-6.12/`). That run's first attempt found
+that uninstall left the daemon's heartbeat, cursor and load-result files
+in `/var/lib/secure_sudo`; uninstall now removes them and keeps only a
+non-empty remote queue.
 
 Missing: Fedora, openSUSE and Arch paths are exercised only by the host
 suite's simulated roots, not in a VM of those distros. The MOK path is not

@@ -143,6 +143,13 @@ step site G "set -e
 	ufw status | grep -q 'Status: active'
 	echo done"
 check "site steps applied (ufw limits ssh and is on, GRUB password with unrestricted entries, chrony server, audit offload job)" test "$GRC" -eq 0
+if [ "$GRC" -ne 0 ]; then
+	# A half-applied ufw makes the hardened guest unreachable after its
+	# reboot, which then only times out. Show why and stop here.
+	tail -n 40 "$LAST" | sed 's/^/# /'
+	echo "Bail out! site steps failed; see $LAST"
+	tap_done; exit 1
+fi
 # tester will drive the guest after remediation: prove it works now.
 GT id -u > "$RES/tester-sudo.log" 2>&1; eq "tester can reach root through sudo" "$(tail -1 "$RES/tester-sudo.log")" 0
 

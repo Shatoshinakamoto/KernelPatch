@@ -615,18 +615,23 @@ configure_kernel() {
 		# hardening turns ufw on) loses the netfilter modules: in the STIG VM,
 		# ufw then could not start (no conntrack, nft_compat or xt matches).
 		# The firewall stack ufw and secure_sudo's nft network modes use is
-		# always kept.
+		# always kept. ufw 0.36 (Ubuntu 24.04) uses the matches conntrack,
+		# addrtype, comment, hl, limit, multiport, recent and rt, and the
+		# targets LOG and REJECT; one missing match fails the whole
+		# ip(6)tables-restore and leaves ufw half-applied.
 		local m
 		for m in NETFILTER_ADVANCED NF_CONNTRACK NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 \
 			NF_TABLES_IPV6 NFT_CT NFT_LOG NFT_LIMIT NFT_REJECT NFT_COMPAT NETFILTER_XTABLES \
 			NETFILTER_XT_MATCH_ADDRTYPE NETFILTER_XT_MATCH_COMMENT NETFILTER_XT_MATCH_CONNTRACK \
-			NETFILTER_XT_MATCH_LIMIT NETFILTER_XT_MATCH_MULTIPORT NETFILTER_XT_MATCH_RECENT \
+			NETFILTER_XT_MATCH_HL NETFILTER_XT_MATCH_LIMIT NETFILTER_XT_MATCH_MULTIPORT \
+			NETFILTER_XT_MATCH_RECENT \
 			NETFILTER_XT_TARGET_LOG NF_LOG_SYSLOG IP_NF_IPTABLES IP_NF_FILTER IP_NF_TARGET_REJECT \
 			IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_TARGET_REJECT IP6_NF_MATCH_IPV6HEADER IP6_NF_MATCH_RT; do
 			[ "$(./scripts/config --state "$m")" = y ] || ./scripts/config --module "$m"
 		done
 		make olddefconfig
-		for m in NF_CONNTRACK NFT_COMPAT NETFILTER_XT_MATCH_CONNTRACK NETFILTER_XT_MATCH_RECENT IP_NF_IPTABLES; do
+		for m in NF_CONNTRACK NFT_COMPAT NETFILTER_XT_MATCH_CONNTRACK NETFILTER_XT_MATCH_HL \
+			 NETFILTER_XT_MATCH_RECENT IP_NF_IPTABLES IP6_NF_IPTABLES; do
 			grep -qE "^CONFIG_$m=[ym]$" .config || die "CONFIG_$m did not stick after localmodconfig (the firewall would not start)"
 		done
 	fi
