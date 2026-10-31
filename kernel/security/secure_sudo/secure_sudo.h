@@ -279,6 +279,9 @@ __printf(1, 2) void ss_event(const char *fmt, ...);
 /* #9: number of event lines dropped from the ring since boot. */
 u64 ss_events_dropped(void);
 u64 ss_audit_events_dropped(void);
+/* #9 last record sequence number this boot, and the records' boot_id. */
+u64 ss_events_sequence(void);
+void ss_events_boot_id(char out[33]);
 
 /* SHA-256 a file's full contents into @hex_out (>=65 bytes, hex + NUL). Defined
  * in ss_driver.c, shared with TimeVault. Returns 0 on success. */

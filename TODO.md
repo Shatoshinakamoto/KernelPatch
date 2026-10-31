@@ -6,8 +6,8 @@ its companion tools safer to build, deploy, operate, and trust during an
 incident. This is a roadmap, not a claim that the existing protections are
 absent or that the project is already production-certified.
 
-Execution update: P1-1 through P1-4 are now in progress; their partial
-implementation and remaining acceptance gaps are tracked in
+Execution update: P1-2 and P1-4 meet their **Done when** criteria. P1-1 and
+P1-3 are still in progress; their remaining acceptance gaps are tracked in
 [docs/ROADMAP_STATUS.md](docs/ROADMAP_STATUS.md). Keep their checkboxes open
 until each item's full **Done when** criteria is met.
 
@@ -149,7 +149,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
   - **Done when:** a consumer can detect gaps, correlate events across a
     reboot, and parse records without relying on free-form message text.
 
-- [ ] **P1-2: Harden core daemon log forwarding.**
+- [x] **P1-2: Harden core daemon log forwarding.**
   - The core daemon currently forwards remote syslog using UDP; add an
     explicitly configured reliable and authenticated transport (such as
     TLS syslog), bounded retry/queue behavior, and visible health/error
@@ -175,7 +175,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
   - **Done when:** an exported bundle can be independently integrity-checked
     on another machine and a documented tabletop exercise completes.
 
-- [ ] **P1-4: Provide a unified health and policy view.**
+- [x] **P1-4: Provide a unified health and policy view.**
   - Distinguish configured values from live kernel values and show whether
     the LSM, daemon, audit feed, remote collector, timers, and add-ons are
     actually active or degraded.

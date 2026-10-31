@@ -54,6 +54,20 @@ contain sensitive host and user metadata; restrict access accordingly.
    sha256sum evidence.tar.gz
    ```
 
+   If the host forwards to a remote collector, also check the bundle against
+   the collector's copy of the `log_checkpoint` records. They are the
+   tamper-evidence anchor that never lived on the monitored host:
+
+   ```sh
+   grep log_checkpoint /var/log/remote/HOST/secure_sudo.log > checkpoints.txt
+   secure-sudo evidence-verify evidence.tar.gz --checkpoints checkpoints.txt
+   ```
+
+   Lines up to the last matching checkpoint are anchored. Lines after it
+   (at most 5 minutes' worth, plus any collector outage) rest on the host's
+   word alone. A host-side `log_modified` record means the daemon saw its
+   log change underneath it.
+
    Record the archive SHA-256, transfer time, sender, recipient, storage
    location, verification result, and any custody transfer. Never rely on the
    public key embedded in the bundle as proof of signer identity.
@@ -85,7 +99,9 @@ non-production signing key.
 3. Export and sign a bundle; verify it on the second machine using a public
    key whose fingerprint was communicated separately.
 4. Confirm a modified copy fails verification, while the original still
-   verifies. Record timestamps, hashes, custody transfers, and any clock
+   verifies. With a collector, edit one line of a local log that is older
+   than the last checkpoint, export again, and confirm `--checkpoints`
+   reports the change. Record timestamps, hashes, custody transfers, and any clock
    offset.
 5. Remove the hold, verify health reports `active`, and confirm the daemon
    resumes normal retention on a disposable log set.

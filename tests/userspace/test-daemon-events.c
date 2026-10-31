@@ -104,6 +104,39 @@ static int log_has(const char *needle)
 	return n;
 }
 
+static int log_contains(const char *needle)
+{
+	char path[512], line[4096];
+	FILE *f;
+	int n = 0;
+
+	todays_logpath(path, sizeof(path));
+	f = fopen(path, "re");
+	if (!f)
+		return 0;
+	while (fgets(line, sizeof(line), f))
+		if (strstr(line, needle))
+			n++;
+	fclose(f);
+	return n;
+}
+
+/* Feed one kernel record with this boot id and sequence. */
+static void seq_event(const struct cfg *c, const char *boot, unsigned seq)
+{
+	char r[1024];
+
+	snprintf(r, sizeof(r),
+		 "{\"schema_version\":1,\"boot_id\":\"%s\",\"sequence\":%u,"
+		 "\"realtime_ns\":1,\"monotonic_ns\":1,\"event_type\":\"perf\","
+		 "\"actor\":{\"pid\":1,\"uid\":1000},\"target\":null,"
+		 "\"operation\":\"x\",\"object\":null,\"decision\":\"deny\","
+		 "\"reason\":\"y\",\"target_pid\":null,\"target_uid\":null,"
+		 "\"message\":\"perf: denied\",\"truncated\":false}", boot, seq);
+	write_local_log(c, r, strlen(r));
+	handle_event(c, r);
+}
+
 int main(int argc, char **argv)
 {
 	struct cfg cfg = { .remote_queue_max_mb = 1 };
@@ -248,6 +281,73 @@ int main(int argc, char **argv)
 	drain_events(&cfg, p[0]);
 	tap(log_has(r) == 1 && ev_have == 0,
 	    "a record split across two reads is logged once, whole");
+
+	/* ---- P1-1: gaps and boots become records in the log ---- */
+	{
+		static const char *A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		static const char *B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+		char hb[1024];
+		FILE *f;
+
+		ev_boot[0] = '\0';	/* forget the record the reader test fed */
+		ev_seq = 0;
+		event_gaps = events_missing = 0;
+		seq_event(&cfg, A, 1);
+		seq_event(&cfg, A, 2);
+		seq_event(&cfg, A, 3);
+		tap(event_gaps == 0 && log_contains("\"event_type\":\"event_stream\",\"boot_id\":\"aaaa") == 1,
+		    "a new boot's stream is recorded once; consecutive records are no gap");
+		seq_event(&cfg, A, 7);
+		tap(event_gaps == 1 && events_missing == 3 &&
+		    log_contains("\"event_type\":\"event_gap\",\"boot_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"first_missing\":4,\"last_missing\":6,\"missing\":3") == 1,
+		    "a sequence jump is written as an event_gap record (4..6, 3 missing)");
+		seq_event(&cfg, A, 7);
+		tap(log_contains("\"event_type\":\"event_sequence_error\"") == 1 &&
+		    event_gaps == 1, "a repeated sequence is flagged, not counted as loss");
+		cursor_save();
+		ev_boot[0] = '\0';
+		ev_seq = 0;
+		cursor_load();
+		tap(!strcmp(ev_boot, A) && ev_seq == 7,
+		    "the stream position survives a daemon restart (cursor file)");
+		seq_event(&cfg, A, 10);
+		tap(event_gaps == 2 && events_missing == 5,
+		    "records lost while the daemon was down are reported after restart");
+		seq_event(&cfg, B, 3);
+		tap(log_contains("\"boot_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"first_sequence\":3,\"previous_boot_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previous_last_sequence\":10") == 1 &&
+		    event_gaps == 3 && events_missing == 7,
+		    "a reboot is recorded with both boot ids; its first 2 records are reported missing");
+		tap(write_health_heartbeat() == 0 && (f = fopen(HEALTH_FILE, "re")) &&
+		    fgets(hb, sizeof(hb), f) && !fclose(f) &&
+		    strstr(hb, " event_gaps=3 events_missing=7\n") &&
+		    !exists(HEALTH_FILE ".tmp"),
+		    "the heartbeat carries the gap counters and is renamed into place");
+	}
+
+	/* ---- P1-3: checkpoints, outside changes, one line per record ---- */
+	{
+		char lp[512];
+		FILE *f;
+
+		syslog_line("crafted\n{\"schema_version\":1,\"forged\":true}");
+		tap(log_contains("crafted?{\"schema_version\":1,\"forged\":true}") == 1,
+		    "a newline in a daemon message cannot start a forged record");
+		log_checkpoint(&cfg);
+		tap(log_contains("\"event_type\":\"log_checkpoint\"") == 1,
+		    "a log_checkpoint record is written");
+		todays_logpath(lp, sizeof(lp));
+		f = fopen(lp, "ae");
+		if (!f)
+			return 1;
+		fputs("written behind the daemon's back\n", f);
+		fclose(f);
+		syslog_line("after the outside write");
+		tap(log_contains("\"event_type\":\"log_modified\"") == 1,
+		    "a log changed outside the daemon is recorded (log_modified)");
+		log_checkpoint(&cfg);
+		tap(log_contains("\"event_type\":\"log_checkpoint\"") == 2,
+		    "the next checkpoint covers the file as it is now");
+	}
 
 	printf("1..%d\n", n_test);
 	return n_fail ? 1 : 0;

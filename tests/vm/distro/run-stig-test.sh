@@ -30,10 +30,18 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 # shellcheck source=/dev/null
 . "$ROOT/tests/lib/tap.sh"
 IMG="$(readlink -f "${1:?usage: $0 IMAGE KERNEL-OUT-DIR SSG-DATASTREAM RESULTS-DIR}")"
-KOUT="$(cd "${2:?KERNEL-OUT-DIR}" && pwd)"
+KOUT="$(cd "${2:?KERNEL-OUT-DIR}" 2>/dev/null && pwd)"
+# Without set -e a failed cd above only empties KOUT, and every check would
+# then run against the distro kernel with an empty expected release.
+compgen -G "$KOUT/linux-image-*.deb" > /dev/null ||
+	{ echo "Bail out! no linux-image package in KERNEL-OUT-DIR '${2}'"; exit 2; }
 DS="$(readlink -f "${3:?SSG-DATASTREAM}")"
 RES="${4:?RESULTS-DIR}"; mkdir -p "$RES"; RES="$(cd "$RES" && pwd)"
-W="${VM_WORK:-$RES/vm}"
+# The VM work dir holds the guest's disk and its SSH key; keep it out of
+# RESULTS (which is uploaded as evidence) unless VM_WORK says otherwise.
+W_OWNED=""
+if [ -n "${VM_WORK:-}" ]; then W="$VM_WORK"
+else W="$(mktemp -d "${TMPDIR:-/tmp}/ss-vm.XXXXXX")"; W_OWNED=1; fi
 VM="$HERE/vm.sh"
 REL="$(basename "$KOUT")"
 PW=tester-pw-1
@@ -85,7 +93,8 @@ reboot_vm() { # the vm.sh reboot uses root ssh; do it as tester instead
 }
 I='cd /root/ss/KernelPatch-merged && bash install/install.sh'
 
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$work"; [ -z "$W_OWNED" ] || { bash "$VM" stop "$W" > /dev/null 2>&1; rm -rf "$W"; }' EXIT
 bash "$ROOT/ci/make-release.sh" --out "$work/rel" > "$RES/make-release.log" 2>&1 || { echo "Bail out! make-release"; exit 2; }
 bash "$ROOT/install/install.sh" stage-userspace "$work/stage" > "$RES/stage.log" 2>&1 || { echo "Bail out! stage"; exit 2; }
 tar -C "$work" -czf "$work/stage.tgz" stage
@@ -134,6 +143,13 @@ step site G "set -e
 	ufw status | grep -q 'Status: active'
 	echo done"
 check "site steps applied (ufw limits ssh and is on, GRUB password with unrestricted entries, chrony server, audit offload job)" test "$GRC" -eq 0
+if [ "$GRC" -ne 0 ]; then
+	# A half-applied ufw makes the hardened guest unreachable after its
+	# reboot, which then only times out. Show why and stop here.
+	tail -n 40 "$LAST" | sed 's/^/# /'
+	echo "Bail out! site steps failed; see $LAST"
+	tap_done; exit 1
+fi
 # tester will drive the guest after remediation: prove it works now.
 GT id -u > "$RES/tester-sudo.log" 2>&1; eq "tester can reach root through sudo" "$(tail -1 "$RES/tester-sudo.log")" 0
 
@@ -142,7 +158,49 @@ GT id -u > "$RES/tester-sudo.log" 2>&1; eq "tester can reach root through sudo" 
 SH='bash /root/ss/KernelPatch-merged/scripts/stig-harden.sh --tailoring /root/stig-vm-tailoring.xml'
 step remediate GTJOB "$SH --remediate --yes --outdir /var/log/secure_sudo/stig/remediate"
 check "baseline scan, remediation and rescan ran to the end" sh -c "[ $GRC -eq 0 ] && grep -q 'remediation complete' '$LAST'"
-if reboot_vm; then ok "the hardened guest reboots"; else not_ok "the hardened guest reboots"; fi
+# If the hardened guest does not answer after its reboot, the serial console
+# is all there is. A one-shot unit (removed once it has run) writes the
+# state of the services that decide whether SSH works to that console.
+GT "cat > /usr/local/sbin/ss-vmtest-diag <<'DIAG'
+#!/bin/sh
+sleep 30
+{
+systemctl is-system-running
+systemctl --failed --no-legend
+ufw status verbose
+ss -tlnp
+iptables -S ufw-user-input
+iptables -L ufw-user-limit -nv
+journalctl -b --no-pager -u ssh -u ssh.socket -u ufw | tail -n 30
+} 2>&1 | sed 's/^/SSDIAG: /' > /dev/ttyS0
+systemctl disable ss-vmtest-diag.service
+rm -f /etc/systemd/system/ss-vmtest-diag.service /usr/local/sbin/ss-vmtest-diag
+DIAG
+cat > /etc/systemd/system/ss-vmtest-diag.service <<'UNIT'
+[Unit]
+Description=secure_sudo VM test: boot state to the serial console (test only)
+After=multi-user.target ufw.service ssh.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/sbin/ss-vmtest-diag
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable ss-vmtest-diag.service" > "$RES/diag-unit.log" 2>&1
+if reboot_vm; then ok "the hardened guest reboots"
+else
+	not_ok "the hardened guest reboots"
+	con="$(ls -t "$W"/console*.log 2>/dev/null | head -1)"
+	if [ -n "$con" ]; then
+		cp "$con" "$RES/console-after-hardening.log"
+		echo "# guest state the diagnostic unit wrote to the console:"
+		tr -d '\r' < "$con" | grep -a 'SSDIAG: ' | sed 's/^/# /' | tail -n 80
+		echo "# last console lines:"
+		tr -d '\r' < "$con" | grep -av 'SSDIAG: ' | tail -n 40 | sed 's/^/# /'
+	fi
+	echo "Bail out! the hardened guest is unreachable after its reboot"
+	tap_done; exit 1
+fi
 eq "after hardening it still runs the secure_sudo kernel" "$(running)" "$REL"
 step lsm GT 'cat /sys/kernel/security/lsm; echo; aa-status --enabled && echo apparmor-enabled; systemctl is-system-running; systemctl --failed --no-legend'
 check "secure_sudo and AppArmor both active after hardening" sh -c "grep -q secure_sudo '$LAST' && grep -q apparmor-enabled '$LAST'"

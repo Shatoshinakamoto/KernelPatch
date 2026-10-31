@@ -47,7 +47,10 @@ echo "SS_LOCKDOWN $(cat /sys/kernel/security/lockdown 2>/dev/null)"
 dmesg | grep -i secure_sudo | sed 's/^/SS_DMESG /'
 /ss-functest
 echo "SS_EXIT=$?"
-dmesg | grep -E 'BUG:|Oops|WARNING:|Kernel panic|general protection|refcount_t:|UBSAN|KASAN' | sed 's/^/SS_KERNEL_PROBLEM /'
+# A WARN() splat reads "WARNING: CPU: n PID: n at file:line". A bare
+# "WARNING:" also appears in CPU vulnerability notices (SRSO on AMD hosts
+# under KVM), which say nothing about this kernel's code.
+dmesg | grep -E 'BUG:|Oops|WARNING: CPU:|cut here|Kernel panic|general protection|refcount_t:|UBSAN|KASAN' | sed 's/^/SS_KERNEL_PROBLEM /'
 poweroff -f
 EOF
 chmod 0755 "$root/init" "$root/ss-functest"

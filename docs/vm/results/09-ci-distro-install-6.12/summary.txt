@@ -1,0 +1,26 @@
+GitHub Actions run 41211242016, job distro-vm (commit 5b0a7e8, 2026-10-31)
+https://github.com/Shatoshinakamoto/KernelPatch/actions/runs/41211242016
+
+Kernel: linux-6.12.114 (kernel.org, signature-verified), packaged by
+`install.sh build-kernel` from the Ubuntu 24.04 guest's config with
+SS_LOCALMOD (the guest's lsmod), as 6.12.114-secure-sudo (46 min).
+Guest: verified Ubuntu 24.04 cloud image, QEMU/KVM, SeaBIOS.
+
+tests/vm/distro/run-install-test.sh: 51/51, including
+  - trial boot runs 6.12.114-secure-sudo, secure_sudo and AppArmor active,
+    secure-sudod and sshd up, verify clean, module signatures enforced
+  - an uncommitted trial falls back to 6.8.0-147-generic by itself
+  - verify --commit makes it the default
+  - recovery exercises in the guest: 35/35 (E1 bad admin group, E2
+    incomplete allowlist, E3 OTP wired but not set up, E4 one-way lock)
+  - after the lock reboot the lock is gone and the fixed policy applies
+  - rollback, uninstall refused while PAM uses the modules, clean removal
+    byte-identical to the fresh image, grub.cfg byte-identical, the box
+    boots the distro kernel and systemd is healthy
+
+The previous attempt (run 41206451739, 5b0a7e8's parent) was 50/51: the
+clean-removal check found the daemon's runtime state left in
+/var/lib/secure_sudo. Fixed in install.sh uninstall.
+
+The STIG step of this run failed at the site steps (ufw could not start:
+missing hl match, OSCAP_BUGS OSB-21) and is not counted here.

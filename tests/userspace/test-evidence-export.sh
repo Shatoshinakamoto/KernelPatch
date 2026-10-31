@@ -18,7 +18,10 @@ trap 'rm -rf -- "$T"' EXIT
 chmod 0700 "$T"
 mkdir -p "$T/logs" "$T/state/quarantine" "$T/config" "$T/sysfs" \
 	"$T/secfs" "$T/proc" "$T/bin"
-printf '{"schema_version":1,"message":"fixture event"}\n' > "$T/logs/2026-10-26.log"
+# Includes the awkward cases for the two chain implementations: an empty
+# line, backslashes, trailing blanks and a last line without a newline.
+printf '{"schema_version":1,"message":"fixture event"}\n\n  a \\\\ b\\n  \nlast line, no newline' \
+	> "$T/logs/2026-10-26.log"
 printf 'block_setid = 1\n' > "$T/config/secure-sudo.conf"
 printf 'fixture secret\n' > "$T/config/otp-secret.conf"
 printf '1\n' > "$T/sysfs/block_setid"
@@ -130,4 +133,56 @@ if bash "$SCRIPT" "$T/evidence.tar.gz" >"$T/out" 2>&1; then
 else
 	ok "export refuses to overwrite an existing bundle"
 fi
+
+# ---- P1-3: the shell fallback chains exactly like the Python path ----
+sed -e 's/command -v python3 /command -v python3-absent-for-test /' "$SCRIPT" \
+	> "$T/export-noshell.sh"
+if PATH="$T/bin:$PATH" bash "$T/export-noshell.sh" "$T/shellchain.tar.gz" >"$T/out" 2>&1; then
+	mkdir "$T/shellchain"
+	tar -xzf "$T/shellchain.tar.gz" -C "$T/shellchain"
+	check "shell and Python exporters write the same event chain" \
+		cmp "$T/shellchain/event-chain.txt" "$T/unpacked/event-chain.txt"
+else
+	not_ok "shell-fallback export runs ($(cat "$T/out"))"
+fi
+
+# ---- P1-3: off-host checkpoints (as the collector received them) ----
+python3 - "$T/logs/2026-10-27.log" "$T/collector.log" <<'PY'
+import hashlib, json, sys
+log, collector = sys.argv[1], sys.argv[2]
+name = "2026-10-27.log"
+c = hashlib.sha256(b"secure_sudo-event-chain-v1\t" + name.encode() + b"\n").hexdigest()
+with open(log, "wb") as out, open(collector, "w") as coll:
+    for i in range(1, 6):
+        line = json.dumps({"schema_version": 1, "sequence": i}).encode()
+        out.write(line + b"\n")
+        c = hashlib.sha256(c.encode() + b"\t" + line + b"\n").hexdigest()
+        if i == 3:   # the collector's copy, behind its syslog header
+            coll.write("<85>1 2026-10-27T10:00:00Z host secure_sudo - - - " +
+                       json.dumps({"schema_version": 1, "source": "secure-sudod",
+                                   "event_type": "log_checkpoint", "log": name,
+                                   "lines": 3, "chain": c}) + "\n")
+PY
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/cp-ok.tar.gz" >/dev/null 2>&1
+if python3 "$VERIFY" "$T/cp-ok.tar.gz" --checkpoints "$T/collector.log" >"$T/out" 2>&1 &&
+	grep -q "2026-10-27.log: lines 1-3 match an off-host checkpoint; 2 later" "$T/out"; then
+	ok "off-host checkpoint verifies the logs and reports the unanchored tail"
+else
+	not_ok "off-host checkpoint verifies the logs ($(cat "$T/out"))"
+fi
+sed -i '2s/"sequence": 2/"sequence": 20/' "$T/logs/2026-10-27.log"
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/cp-edited.tar.gz" >/dev/null 2>&1
+refute_with "a log edited on the host fails against the off-host checkpoint" \
+	"changed after it was checkpointed" \
+	python3 "$VERIFY" "$T/cp-edited.tar.gz" --checkpoints "$T/collector.log"
+head -n 2 "$T/logs/2026-10-27.log" > "$T/short" && cat "$T/short" > "$T/logs/2026-10-27.log"
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/cp-short.tar.gz" >/dev/null 2>&1
+refute_with "a log truncated on the host fails against the off-host checkpoint" \
+	"truncated or replaced" \
+	python3 "$VERIFY" "$T/cp-short.tar.gz" --checkpoints "$T/collector.log"
+printf '{"source":"secure-sudod","event_type":"log_checkpoint","log":"../x.log","lines":1,"chain":"00"}\n' \
+	> "$T/bad-collector.log"
+refute_with "a malformed checkpoint record is rejected, not skipped" \
+	"malformed log_checkpoint" \
+	python3 "$VERIFY" "$T/cp-ok.tar.gz" --checkpoints "$T/bad-collector.log"
 tap_done

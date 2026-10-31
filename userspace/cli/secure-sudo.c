@@ -641,6 +641,23 @@ static const char *audit_feed_health(void)
 	return enabled ? "active" : "inactive";
 }
 
+/*
+ * Find "name=" as a whole key: at the start of the record or after a space.
+ * A plain strstr() would let "state=" match inside "retention_state=".
+ */
+static const char *heartbeat_key(const char *heartbeat, const char *key)
+{
+	const char *p = heartbeat;
+
+	while ((p = strstr(p, key))) {
+		if (p == heartbeat || p[-1] == ' ' || p[-1] == '\t' ||
+		    p[-1] == '\n')
+			return p;
+		p++;
+	}
+	return NULL;
+}
+
 static int heartbeat_counter(const char *heartbeat, const char *name,
 			     unsigned long long *value)
 {
@@ -648,7 +665,7 @@ static int heartbeat_counter(const char *heartbeat, const char *name,
 	const char *p;
 
 	snprintf(key, sizeof(key), "%s=", name);
-	p = strstr(heartbeat, key);
+	p = heartbeat_key(heartbeat, key);
 	if (!p)
 		return -1;
 	p += strlen(key);
@@ -665,7 +682,7 @@ static int heartbeat_value(const char *heartbeat, const char *name,
 	size_t len;
 
 	snprintf(key, sizeof(key), "%s=", name);
-	p = strstr(heartbeat, key);
+	p = heartbeat_key(heartbeat, key);
 	if (!p)
 		return -1;
 	p += strlen(key);
@@ -966,6 +983,7 @@ static int cmd_health(int json)
 	unsigned long long remote_sent = 0, remote_failures = 0;
 	unsigned long long queue_records = 0, queue_bytes = 0, queue_dropped = 0;
 	unsigned long long local_log_failures = 0;
+	unsigned long long event_gaps = 0, events_missing = 0;
 	unsigned long long load_updated = 0, load_accepted = 0;
 	unsigned long long load_rejected = 0, load_skipped = 0;
 	unsigned long long load_rejected_omitted = 0;
@@ -1015,6 +1033,10 @@ static int cmd_health(int json)
 						  &queue_dropped) == 0 &&
 				heartbeat_counter(healthbuf, "local_log_failures",
 						  &local_log_failures) == 0 &&
+				heartbeat_counter(healthbuf, "event_gaps",
+						  &event_gaps) == 0 &&
+				heartbeat_counter(healthbuf, "events_missing",
+						  &events_missing) == 0 &&
 				heartbeat_value(healthbuf, "remote_transport",
 						transport,
 						sizeof(transport)) == 0 &&
@@ -1233,6 +1255,8 @@ static int cmd_health(int json)
 		healthy = 0;
 	if (local_log_failures)
 		healthy = 0;
+	if (events_missing)	/* the daemon saw records go missing */
+		healthy = 0;
 	if (audit_configured && strcmp(audit_feed, "active"))
 		healthy = 0;
 	if (load_health != 0 || !strcmp(load_state, "partial") ||
@@ -1251,6 +1275,7 @@ static int cmd_health(int json)
 		       "\"remote_queue_bytes\":%llu,"
 		       "\"remote_queue_dropped\":%llu,"
 		       "\"local_log_failures\":%llu,"
+		       "\"event_gaps\":%llu,\"events_missing\":%llu,"
 		       "\"retention_state\":\"%s\","
 		       "\"heartbeat_metrics\":\"%s\","
 		       "\"last_load\":\"%s\",\"load_updated\":%llu,"
@@ -1263,6 +1288,7 @@ static int cmd_health(int json)
 		       overall, lsm_active ? "active" : "inactive", daemon,
 		       policy, audit_feed, transport, remote, remote_sent, remote_failures,
 		       queue_records, queue_bytes, queue_dropped, local_log_failures,
+		       event_gaps, events_missing,
 		       retention_state,
 		       heartbeat_metrics ? "available" : "unavailable",
 		       load_state, load_updated, load_accepted, load_rejected,
@@ -1288,6 +1314,8 @@ static int cmd_health(int json)
 		if (mismatches)
 			printf(" (%d configured/live mismatch(es))", mismatches);
 		putchar('\n');
+		printf("Event stream gaps seen by the daemon: %llu (%llu records missing)\n",
+		       event_gaps, events_missing);
 		printf("Log retention: %s\n", retention_state);
 		printf("Add-on/timer health: %s (%d enabled unit failure(s))\n",
 		       addon_health, unit_errors);
@@ -1584,7 +1612,8 @@ static void usage(void)
 "  status               show current kernel policy state\n"
 "  health [--json]      compare config/live policy and report component health\n"
 "  evidence-export FILE [--signing-key EXTERNAL.pem] export incident evidence\n"
-"  evidence-verify FILE [--trusted-key PUBLIC.pem] verify an evidence bundle\n"
+"  evidence-verify FILE [--trusted-key PUBLIC.pem] [--checkpoints COLLECTOR.log]\n"
+"                       verify an evidence bundle (and against off-host checkpoints)\n"
 "  settings             list every configurable knob and policy list\n"
 "  get [<knob>]         show one (or all) live scalar knob value(s)\n"
 "  set <knob> <value>   set a scalar knob and persist it to the config\n"

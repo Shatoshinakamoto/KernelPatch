@@ -24,16 +24,16 @@ nothing is pushed from here.
 
 | Item | Status | One line |
 |---|---|---|
-| P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy; not yet required in CI, 6.12 not built as a tree |
-| P0-2 tests | partly | 421 host checks and 118/118 in-kernel checks pass; STIG gate compares rule IDs; not yet required in CI |
-| P0-3 boot proof | partly | boots and runs on upstream 6.14 in Ubuntu 24.04 VMs (install 51/51, STIG run classified); not 6.12, UEFI, other distros or hardware |
+| P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
+| P0-2 tests | partly | 531 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
+| P0-3 boot proof | partly | 6.12.114 with secure_sudo: 126/126 in-kernel checks (initramfs, KVM) and the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run 51/51, both in CI; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
-| P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM; other distros simulated only |
+| P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
-| P1-1 | partly (active) | schema-v1 JSON events, boot/sequence/clock/actor fields, typed fields across denial producers, ring + audit loss counters; target identity and deferred actor attribution remain incomplete |
-| P1-2 | partly (active) | opt-in authenticated RFC 5425 TLS, bounded persistent queue/retry, and queue/error health reporting; collector acknowledgment and integration proof remain |
-| P1-3 | partly (active) | root-only evidence export with checksums, per-log hash chains and optional externally-held Ed25519 signing key; no periodic signed checkpoints or tabletop |
-| P1-4 | partly (active) | `secure-sudo health [--json]` validates the configured audit feed, fresh root-owned heartbeat/metrics, configured/live knobs, boot-bound last load outcome/counts/rejected setting names, event loss, local log failures, remote queue/errors and optional add-on/timer state including scan results/age; collector receipt remains |
+| P1-1 | partly (active) | schema-v1 JSON events with typed fields; sequence numbers given in ring order so gaps are exact; `events_sequence`/`events_boot_id`; the daemon logs `event_stream`/`event_gap` records and keeps a restart cursor; health shows gaps. Remaining: some targets are labels rather than typed PID/UID; long paths are only complete in `message`; deferred-work actor attribution |
+| P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
+| P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
+| P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
 | P1-5 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
@@ -96,11 +96,18 @@ Done:
 
 Missing:
 
-* The workflow has not run on GitHub, so "required in CI" is not yet true.
-  The first push will show whether it works as written.
-* The in-tree builds used 6.14; 6.12.114 was compiled against headers only.
-  The workflow builds 6.12.114 as a full tree, which is the first time that
-  will happen.
+* The workflow runs on GitHub on every push and pull request
+  (Shatoshinakamoto/KernelPatch) and passes, lsm-tree included: the LSM's
+  objects build with `-Werror` inside the signature-verified 6.12.114 tree
+  in all six configurations. It is not yet a *required* check: that is a
+  branch-protection setting on `main`, which only the repository owner can
+  turn on.
+* The gate's lsm-headers stage builds against the runner's own kernel
+  headers, which GitHub moves forward (6.17, then 7.0 by 2026-10-31). Each
+  move can break the gate with no change in this tree; the API shims for
+  6.16 to 7.0 are in `secure_sudo.h`.
+* A whole 6.12.114 kernel image is built only by the nightly/on-demand
+  `kernel-boot` and `distro-vm` jobs, not on every push.
 * The TODO names `6.12.48`; the installer default is now `6.12.114`, the
   newest 6.12 LTS point release available when this was done.
 
@@ -122,10 +129,12 @@ without root):
 | `tests/install/test-install.sh` | 106 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
-`tests/vm/boot-test.sh`): historical runs passed **118/118** on upstream 6.14,
-and again 118/118 with AppArmor stacked. The source now has an additional
-cross-process target-identity assertion and updated schema checks, so those
-recorded runs do not validate the current source; a new VM run is required.
+`tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **126/126** on
+6.12.114 under KVM on 2026-10-31 against the current source, including the
+cross-process target identity, the schema checks and the P1-1 sequence
+checks (`docs/vm/results/08-ci-kernel-boot-6.12/`). Earlier runs passed
+118/118 on upstream 6.14, and 118/118 with AppArmor stacked; the stacked
+configuration has not been re-run on 6.12.
 They cover registration and stacking, knob defaults,
 modes and bounds, setid/setgroups/userns, setuid-exec allowlist, command
 blacklist (incl. hard links), `/tmp` and memfd exec, `/dev/mem`, packet
@@ -153,7 +162,9 @@ Missing:
   guard, RAM-spike handling, TPM and firmware sysfs paths.
 * The `no-audit`/`no-bpf`/`no-modules` variants are built, not booted.
 * Add-on monitor/enforce modes (`temporary/`) have build checks only.
-* Not required in CI yet (P0-1).
+* The host suites run as root in the gate on every push and pull request.
+  The in-kernel tests run in the `kernel-boot` job (nightly and on demand)
+  against 6.12.114 with secure_sudo built in.
 
 ### P0-3 Boot proof — partly
 
@@ -164,8 +175,10 @@ What has been booted, all under QEMU/TCG with SeaBIOS
 |---|---|---|
 | v11 LSM, upstream 6.14 | initramfs | **panic** at boot (`Ran out of static slots`, SECURITY_REVIEW #35); fixed in v12, guarded by `ci/check-lsm-hooks.sh` |
 | v12 LSM, upstream 6.14 | initramfs, PID 1 test program | 118/118, and 118/118 with AppArmor stacked |
+| current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
-| same | Ubuntu 24.04, STIG remediation | boots again after full STIG hardening with secure_sudo and AppArmor active; scan results above |
+| same | Ubuntu 24.04, STIG remediation | remediation ran; the run was cut off before the post-hardening reboot (`07-distro-stig/run-stig-test.tap` ends at check 6), so a reboot of a hardened guest was **not** shown. An earlier version of this row said it was |
+| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest does not answer SSH** (2026-10-31, twice). Cause under investigation: the test now writes the boot state to the serial console |
 
 Known platform exclusions, recorded rather than claimed:
 
@@ -214,8 +227,9 @@ Missing for *Done*:
 * [RECOVERY.md](RECOVERY.md) covers an unbootable kernel, failed MOK
   enrollment, an interrupted package install and policy lockout.
 
-Evidence: `tests/install/test-install.sh` (106 checks, including a
-byte-identical root after install + uninstall and an interrupted install),
+Evidence: `tests/install/test-install.sh` (109 checks, including a
+byte-identical root after install + uninstall with the daemon's runtime
+state present, undelivered remote events kept, and an interrupted install),
 and the distro VM run: `06-distro-install-final/` on the packaged tree, **51/51**: install-kernel and
 userspace on a fresh Ubuntu 24.04 cloud image, the trial boot with
 secure_sudo and AppArmor active, `verify --commit`, a deliberately broken
@@ -224,6 +238,11 @@ refusing while PAM uses the modules, and a removal after which every file
 under the directories `install.sh` touches is byte-identical to the fresh
 image (apart from the runtime packages `libqrencode4 zip unzip`) and
 `grub.cfg` is byte-identical to what GRUB generated before the install.
+The same 51 checks passed on 6.12.114 in the CI `distro-vm` job on
+2026-10-31 (`09-ci-distro-install-6.12/`). That run's first attempt found
+that uninstall left the daemon's heartbeat, cursor and load-result files
+in `/var/lib/secure_sudo`; uninstall now removes them and keeps only a
+non-empty remote queue.
 
 Missing: Fedora, openSUSE and Arch paths are exercised only by the host
 suite's simulated roots, not in a VM of those distros. The MOK path is not
@@ -279,19 +298,29 @@ ring reads are now reassembled (#49). Actor UIDs are logged in the initial
 user namespace. A `truncated` boolean
 reports when the event type, typed string, or message was shortened. The
 64 KiB ring caps lines at 640 bytes, discards oldest whole records on
-saturation, and exposes a loss counter. The earlier CLI revision
-passed 92/92 checks. The earlier 103-check suite's focused audit-feed,
-scan-outcome and boot-bound load-health assertions passed. Two retention-state
-health assertions have since been added, but the updated suite could not be
-run here because its build needs missing OpenSSL development headers; the
-ownership/load cases also require root. The evidence export/verification suite
-previously passed 13/13 checks.
-The daemon and TLS forwarding
-harness compile and the original local forwarding suite passed 8/8 using
-temporary OpenSSL API declarations against the installed runtime libraries.
-The new CA-rotation assertion has not yet been rerun. A build against upstream
-OpenSSL development headers remains unverified because those headers are
-unavailable here.
+saturation, and exposes a loss counter. The CLI/health, daemon-event,
+TLS-forwarding (CA rotation included) and evidence export/verify suites
+are built against the OpenSSL development headers and run as root in the
+CI gate on every push and pull request.
+
+Gap detection is now exact:
+
+* The kernel numbers records under the ring lock, in ring order, so a
+  jump in `sequence` is precisely the records a full ring dropped.
+* It exposes `events_sequence` and `events_boot_id`.
+* It counts events raised before securityfs was ready in
+  `events_dropped`; they used to vanish without trace.
+* `secure-sudod` writes `event_stream` records (a new boot, with the
+  previous boot's id and last sequence) and `event_gap` records into the
+  log and the forwarded stream.
+* It keeps a cursor, so loss while it was stopped is also reported.
+* Health shows `event_gaps`/`events_missing`.
+* Host tests cover gaps, repeats, restarts and reboots.
+* The in-kernel test now checks that surviving records are contiguous and
+  that the gap equals `events_dropped`; it passed on 6.12.114 in CI.
+
+So a consumer can detect gaps, correlate events across a reboot, and parse
+records without the message text.
 
 Still missing for *Done*: target values are not consistently typed PID/UID
 identities and can be descriptive labels. Cross-process memory-access events
@@ -348,18 +377,41 @@ the rest of the suite pass in the GitHub build gate.
 `secure-sudo evidence-export OUTPUT.tar.gz` creates a root-only bundle with
 logs, non-secret configuration snapshots, live knobs/counters, boot/kernel/LSM
 identity, service state, quarantine metadata and a SHA-256 manifest. It also
-builds per-log hash chains and can sign each final chain checkpoint and the
-checksum manifest with an operator-supplied Ed25519 key; the corresponding
-public key is included.
+builds per-log hash chains. With an operator-supplied Ed25519 key it signs
+the last log's final chain value and the checksum manifest, which covers
+every log and `event-chain.txt`; the corresponding public key is included.
+The chain is now computed in one Python pass, falling back to the shell
+loop, which took minutes for a 100k-line day; a test checks that both write
+the same chain.
+
+Off-host checkpoints (new):
+
+* `secure-sudod` keeps the same chain over its local log as it writes.
+* At start and every 5 minutes it logs and forwards a `log_checkpoint`
+  record with the log name, line count and chain value.
+* The collector's copies are the integrity anchor that is never stored on
+  the monitored host. `evidence-verify --checkpoints COLLECTOR.log` fails a
+  bundle whose log was edited or truncated after a checkpoint, and reports
+  how much of each log is anchored.
+* If the log changes underneath the daemon (appended, truncated or
+  replaced by anyone else), it records `log_modified`.
+* Daemon messages can no longer split into extra log lines.
+* Tests:
+  - the C chain is checked against an independent Python one;
+  - edited, truncated and malformed-checkpoint cases fail as they should.
 Quarantined file contents and key/token/password-named config files are not
 exported. The exporter leaves source evidence untouched.
 
 `docs/INCIDENT_RESPONSE.md` documents the root-only retention hold, external
 key custody/rotation steps, chain-of-custody records, and a tabletop procedure.
 The daemon preserves logs while the hold marker is valid and reports `held` or
-`hold_error` through health. Still missing for *Done*: periodic checkpoints
-signed off-host, stronger secret redaction review, and a completed
-chain-of-custody tabletop. Independent verification is
+`hold_error` through health. Still missing for *Done*:
+
+* A stronger review of secret redaction.
+* A completed chain-of-custody tabletop. People have to run it, with the
+  steps in INCIDENT_RESPONSE.md, now including the checkpoint check.
+* Checkpoints are anchored by the collector's copy, not signed. A host that
+  never forwards has only its own word, plus signed exports. Independent verification is
 implemented in `secure-sudo evidence-verify`; the test suite validates
 unsigned and signed bundles and rejects tampering, untrusted keys and unsafe
 archive paths.

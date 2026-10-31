@@ -179,10 +179,21 @@ sudo secure-sudo evidence-export /root/incident-2026-10-26.tar.gz
 sudo secure-sudo evidence-export /root/incident.tar.gz --signing-key /mnt/key/incident-ed25519.pem
 secure-sudo evidence-verify /root/incident-2026-10-26.tar.gz
 secure-sudo evidence-verify /root/incident.tar.gz --trusted-key /mnt/trusted/incident-ed25519.pub
+secure-sudo evidence-verify /root/incident.tar.gz --checkpoints collector-secure_sudo.log
 ```
 
 `evidence-verify` safely inspects the archive without extracting untrusted
 paths, validates the checksum manifest and recomputes every per-log chain.
+
+`--checkpoints FILE` also checks the bundle against the `log_checkpoint`
+records the remote collector received. `secure-sudod` logs and forwards one
+every 5 minutes, holding the log name, line count and chain value. Each
+record must match the chain after that many lines. A log edited or
+truncated on the host afterwards fails, even if the attacker was root there:
+the collector's copy was never on the host. The verifier reports, per log,
+how many lines are anchored that way and how many came after the last
+checkpoint. The file can be the collector's raw syslog output; the JSON
+record is taken from the first `{` on each line.
 For signed bundles, pass the independently trusted public key; the verifier
 checks both signatures and rejects a signed bundle if no trusted key is
 provided. Unsigned bundles receive integrity checks but no authenticity proof.

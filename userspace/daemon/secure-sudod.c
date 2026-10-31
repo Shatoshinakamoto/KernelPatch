@@ -55,9 +55,14 @@
 #define LOGDIR   "/var/log/secure_sudo"
 #endif
 #define STATEDIR "/var/lib/secure_sudo"
+#ifndef HEALTH_FILE
 #define HEALTH_FILE STATEDIR "/daemon.health"
+#endif
 #define RETENTION_HOLD STATEDIR "/retention.hold"
 #define MANIFEST STATEDIR "/manifest"
+#ifndef EVENT_CURSOR
+#define EVENT_CURSOR STATEDIR "/event-cursor"
+#endif
 #ifndef QUARANTINE
 #define QUARANTINE STATEDIR "/quarantine"
 #endif
@@ -96,6 +101,8 @@ static unsigned long long remote_queue_dropped;
 static unsigned long long remote_queue_sequence;
 static unsigned long long local_log_failures;
 static int remote_queue_known;		/* the two counters above are current */
+static unsigned long long event_gaps;	/* gap records written since start */
+static unsigned long long events_missing; /* records those gaps cover */
 static time_t remote_next_flush;	/* main loop: next queue flush */
 static unsigned int remote_backoff;	/* seconds; 0 = collector healthy */
 
@@ -697,17 +704,156 @@ static void forward_remote(const struct cfg *c, const char *line, size_t len)
 	send_remote(c, line, len);
 }
 
+/*
+ * ---- P1-3: hash chain over the local log, checkpointed off-host ----
+ *
+ * The daemon keeps the same per-file chain that `evidence-export` writes
+ * and `evidence-verify` checks: c0 = sha256("secure_sudo-event-chain-v1\t"
+ * NAME "\n"), then c = sha256(hex(c) "\t" LINE "\n") for every line. Every
+ * CHECKPOINT_SECS it logs and forwards a log_checkpoint record with the
+ * file name, line count and chain value. The copies at the collector are
+ * the anchor that is not stored only on this host: rewriting or truncating
+ * a log here afterwards no longer matches them (`evidence-verify
+ * --checkpoints`). The records also tell the collector the daemon is alive.
+ */
+#ifndef CHECKPOINT_SECS
+#define CHECKPOINT_SECS 300
+#endif
+static char chain_name[64];		/* log file the chain covers */
+static char chain_hex[65];
+static unsigned long long chain_lines;
+static unsigned long long chain_bytes;	/* file size the chain accounts for */
+static int chain_ok;			/* 0: re-read the file before use */
+
+static void sha256_bytes_hex(const void *a, size_t alen, const void *b,
+			     size_t blen, const void *c, size_t clen,
+			     char out[65])
+{
+	unsigned char d[EVP_MAX_MD_SIZE];
+	unsigned int dlen = 0, i;
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+	out[0] = '\0';
+	if (!ctx)
+		return;
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+	    EVP_DigestUpdate(ctx, a, alen) == 1 &&
+	    EVP_DigestUpdate(ctx, b, blen) == 1 &&
+	    EVP_DigestUpdate(ctx, c, clen) == 1 &&
+	    EVP_DigestFinal_ex(ctx, d, &dlen) == 1)
+		for (i = 0; i < dlen && i < 32; i++)
+			snprintf(out + 2 * i, 3, "%02x", d[i]);
+	EVP_MD_CTX_free(ctx);
+}
+
+static void chain_step(const char *line, size_t len)
+{
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	unsigned char d[EVP_MAX_MD_SIZE];
+	unsigned int dlen = 0, i;
+
+	if (!ctx) {
+		chain_ok = 0;
+		return;
+	}
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+	    EVP_DigestUpdate(ctx, chain_hex, 64) == 1 &&
+	    EVP_DigestUpdate(ctx, "\t", 1) == 1 &&
+	    EVP_DigestUpdate(ctx, line, len) == 1 &&
+	    EVP_DigestUpdate(ctx, "\n", 1) == 1 &&
+	    EVP_DigestFinal_ex(ctx, d, &dlen) == 1 && dlen == 32) {
+		for (i = 0; i < dlen; i++)
+			snprintf(chain_hex + 2 * i, 3, "%02x", d[i]);
+		chain_lines++;
+		chain_bytes += len + 1;
+	} else {
+		chain_ok = 0;
+	}
+	EVP_MD_CTX_free(ctx);
+}
+
+/* Start the chain for @name and replay what @path already holds. */
+static void chain_sync(const char *path, const char *name)
+{
+	char head[128];
+	FILE *f;
+	char *line = NULL;
+	size_t cap = 0;
+	ssize_t n;
+	int len;
+
+	snprintf(chain_name, sizeof(chain_name), "%s", name);
+	len = snprintf(head, sizeof(head), "secure_sudo-event-chain-v1\t%s\n",
+		       name);
+	sha256_bytes_hex(head, (size_t)len, "", 0, "", 0, chain_hex);
+	chain_lines = 0;
+	chain_bytes = 0;
+	chain_ok = chain_hex[0] != '\0';
+	f = fopen(path, "re");
+	if (!f) {
+		if (errno != ENOENT)
+			chain_ok = 0;
+		return;
+	}
+	while (chain_ok && (n = getline(&line, &cap, f)) > 0) {
+		int nl = line[n - 1] == '\n';
+
+		chain_step(line, (size_t)(n - nl));
+		if (!nl)
+			chain_bytes--;	/* a last line without its newline */
+	}
+	if (ferror(f))
+		chain_ok = 0;
+	free(line);
+	fclose(f);
+}
+
+static const char *log_basename(const char *path)
+{
+	const char *b = strrchr(path, '/');
+
+	return b ? b + 1 : path;
+}
+
+static void daemon_record(const struct cfg *c, const char *type,
+			  const char *fmt, ...);
+
 static void write_local_log(const struct cfg *c, const char *line, size_t len)
 {
-	char path[512];
+	char path[512], clean[2048];
+	unsigned long long was = 0, found = 0;
+	struct stat st;
 	FILE *f;
-	int failed = 0, saved = 0;
+	int failed = 0, saved = 0, changed = 0;
 
+	while (len && line[len - 1] == '\n')
+		len--;
+	/* One record, one physical line: an embedded newline (a crafted file
+	 * name in a daemon message) must not start a forged record. */
+	if (memchr(line, '\n', len) || memchr(line, '\r', len)) {
+		size_t i;
+
+		if (len > sizeof(clean))
+			len = sizeof(clean);
+		for (i = 0; i < len; i++)
+			clean[i] = line[i] == '\n' || line[i] == '\r' ? '?' : line[i];
+		line = clean;
+	}
 	todays_logpath(path, sizeof(path));
+	if (!chain_ok || strcmp(chain_name, log_basename(path)))
+		chain_sync(path, log_basename(path));
 	f = fopen(path, "ae");
+	if (f && chain_ok && fstat(fileno(f), &st) == 0 &&
+	    (unsigned long long)st.st_size != chain_bytes) {
+		/* Someone else wrote, truncated or replaced the log since we
+		 * last did: note it, and chain what the file holds now. */
+		was = chain_bytes;
+		found = (unsigned long long)st.st_size;
+		changed = 1;
+		chain_sync(path, log_basename(path));
+	}
 	if (f) {
-		if (fwrite(line, 1, len, f) != len ||
-		    ((len == 0 || line[len - 1] != '\n') && fputc('\n', f) == EOF) ||
+		if (fwrite(line, 1, len, f) != len || fputc('\n', f) == EOF ||
 		    ferror(f))
 			failed = 1;
 		if (fclose(f) != 0)
@@ -718,10 +864,34 @@ static void write_local_log(const struct cfg *c, const char *line, size_t len)
 	if (failed) {
 		saved = errno ? errno : EIO;
 		local_log_failures++;
+		chain_ok = 0;		/* re-read the file: it may hold a partial line */
 		fprintf(stderr, "secure-sudod: cannot write local event log %s: %s\n",
 			path, strerror(saved));
+	} else if (chain_ok) {
+		chain_step(line, len);
 	}
-	(void)c;
+	if (changed)
+		daemon_record(c, "log_modified",
+			      "\"log\":\"%s\",\"expected_bytes\":%llu,"
+			      "\"found_bytes\":%llu", chain_name, was, found);
+}
+
+/* Log and forward a log_checkpoint record for today's log (P1-3). */
+
+static void log_checkpoint(const struct cfg *c)
+{
+	char path[512];
+
+	todays_logpath(path, sizeof(path));
+	if (!chain_ok || strcmp(chain_name, log_basename(path)))
+		chain_sync(path, log_basename(path));
+	if (!chain_ok)
+		return;
+	/* The values cover the lines before this record; the record itself
+	 * is the next line of the chain. */
+	daemon_record(c, "log_checkpoint",
+		      "\"log\":\"%s\",\"lines\":%llu,\"chain\":\"%s\"",
+		      chain_name, chain_lines, chain_hex);
 }
 
 static void write_log(const struct cfg *c, const char *line, size_t len)
@@ -817,42 +987,54 @@ static void enforce_retention(const struct cfg *c)
 	}
 }
 
+/*
+ * The heartbeat is written to a temporary file and renamed into place, so
+ * `secure-sudo health` never reads a half-written one (it used to be
+ * truncated and rewritten in place).
+ */
 static int write_health_heartbeat(void)
 {
-	char path[256];
-	int fd, n;
-	char buf[512];
+	char tmp[sizeof(HEALTH_FILE) + 8];
+	int fd, n, saved;
+	char buf[640];
 
-	snprintf(path, sizeof(path), "%s", HEALTH_FILE);
-	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
-		  0600);
-	if (fd < 0)
-		return -1;
+	snprintf(tmp, sizeof(tmp), "%s.tmp", HEALTH_FILE);
 	n = snprintf(buf, sizeof(buf),
 		     "pid=%ld updated=%lld remote_transport=%s "
 		     "retention_state=%s "
 		     "remote_state=%s remote_sent=%llu remote_failures=%llu "
 		     "remote_queue_records=%llu remote_queue_bytes=%llu "
-		     "remote_queue_dropped=%llu local_log_failures=%llu\n",
+		     "remote_queue_dropped=%llu local_log_failures=%llu "
+		     "event_gaps=%llu events_missing=%llu\n",
 		     (long)getpid(), (long long)time(NULL),
 		     g_cfg ? g_cfg->remote_transport : "unknown",
 		     retention_state, remote_state,
 		     remote_sent, remote_failures, remote_queue_records,
 		     remote_queue_bytes, remote_queue_dropped,
-		     local_log_failures);
-	if (write(fd, buf, (size_t)n) != n) {
-		int saved = errno ? errno : EIO;
+		     local_log_failures, event_gaps, events_missing);
+	if (n <= 0 || (size_t)n >= sizeof(buf)) {
+		errno = EOVERFLOW;
+		return -1;
+	}
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+		  0600);
+	if (fd < 0)
+		return -1;
+	if (write_all(fd, buf, (size_t)n) != 0 || fsync(fd) != 0) {
+		saved = errno ? errno : EIO;
 		close(fd);
+		unlink(tmp);
 		errno = saved;
 		return -1;
 	}
-	if (fsync(fd) != 0) {
-		int saved = errno;
-		close(fd);
+	if (close(fd) != 0 || rename(tmp, HEALTH_FILE) != 0) {
+		saved = errno;
+		unlink(tmp);
 		errno = saved;
 		return -1;
 	}
-	return close(fd);
+	return 0;
 }
 
 /* ---- #8 cooldown: freeze + kill the offending sudo/su processes ---- */
@@ -939,6 +1121,11 @@ static void syslog_line(const char *fmt, ...)
 	va_end(ap);
 	if (n < 0)
 		return;
+	if ((size_t)n >= sizeof(buf))
+		n = sizeof(buf) - 1;
+	for (int i = 0; i < n; i++)	/* paths can hold any byte */
+		if ((unsigned char)buf[i] < 0x20 || buf[i] == 0x7f)
+			buf[i] = '?';
 	if (g_cfg)
 		write_log(g_cfg, buf, n);
 }
@@ -962,6 +1149,8 @@ static void syslog_line(const char *fmt, ...)
  */
 struct ss_ev {
 	long long schema;		/* schema_version, -1 if absent */
+	char boot_id[40];
+	long long sequence;		/* -1 if absent */
 	char event_type[64];
 	char operation[32];
 	char decision[24];
@@ -1111,6 +1300,7 @@ static int ev_parse(const char *rec, struct ss_ev *e)
 
 	memset(e, 0, sizeof(*e));
 	e->schema = -1;
+	e->sequence = -1;
 	e->target_uid = -1;
 	e->truncated = -1;
 	if (*p++ != '{')
@@ -1132,6 +1322,8 @@ static int ev_parse(const char *rec, struct ss_ev *e)
 		p = json_ws(p);
 		if (!strcmp(key, "event_type"))
 			dst = e->event_type, dsz = sizeof(e->event_type);
+		else if (!strcmp(key, "boot_id"))
+			dst = e->boot_id, dsz = sizeof(e->boot_id);
 		else if (!strcmp(key, "operation"))
 			dst = e->operation, dsz = sizeof(e->operation);
 		else if (!strcmp(key, "decision"))
@@ -1146,6 +1338,8 @@ static int ev_parse(const char *rec, struct ss_ev *e)
 			p = json_int(p, &e->schema);
 		else if (!strcmp(key, "target_uid"))
 			p = json_int(p, &e->target_uid);
+		else if (!strcmp(key, "sequence"))
+			p = json_int(p, &e->sequence);
 		else if (!strcmp(key, "truncated") && !strncmp(p, "true", 4))
 			e->truncated = 1, p += 4;
 		else if (!strcmp(key, "truncated") && !strncmp(p, "false", 5))
@@ -1390,6 +1584,155 @@ out:
 	return rc;
 }
 
+/*
+ * ---- P1-1: make lost events visible in the log itself ----
+ *
+ * Kernel records carry a per-boot boot_id and a sequence number given in
+ * ring order. A jump in the sequence therefore means records were lost:
+ * dropped from a full ring, or produced while the daemon was down. The
+ * daemon writes a record of its own for each gap and each new boot, so the
+ * local log, the forwarded stream and any evidence bundle say where history
+ * is missing. Without such a record, a missing stretch would look like a
+ * quiet one. The last position is kept in EVENT_CURSOR so that loss
+ * while the daemon was stopped is reported too. A crash can leave the
+ * cursor a few records behind; then a gap can be overstated, never hidden.
+ */
+static char ev_boot[40];		/* boot_id of the last record seen */
+static unsigned long long ev_seq;	/* and its sequence */
+static int ev_cursor_dirty;
+
+static void daemon_record(const struct cfg *c, const char *type,
+			  const char *fmt, ...)
+{
+	char buf[640], rest[512];
+	struct timespec ts;
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	vsnprintf(rest, sizeof(rest), fmt, ap);
+	va_end(ap);
+	clock_gettime(CLOCK_REALTIME, &ts);
+	n = snprintf(buf, sizeof(buf),
+		     "{\"schema_version\":1,\"source\":\"secure-sudod\","
+		     "\"realtime_ns\":%llu,\"event_type\":\"%s\",%s}",
+		     (unsigned long long)ts.tv_sec * 1000000000ULL +
+		     (unsigned long long)ts.tv_nsec, type, rest);
+	if (n > 0 && (size_t)n < sizeof(buf))
+		write_log(c, buf, (size_t)n);
+}
+
+static int read_sysfs_str(const char *name, char *out, size_t n);
+
+static unsigned long long sysfs_counter(const char *name)
+{
+	char v[32];
+
+	return read_sysfs_str(name, v, sizeof(v)) == 0 ?
+	       strtoull(v, NULL, 10) : 0;
+}
+
+static void cursor_load(void)
+{
+	char buf[128], id[40];
+	unsigned long long seq;
+	struct stat st;
+	ssize_t n;
+	int fd = open(EVENT_CURSOR, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+
+	if (fd < 0)
+		return;
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
+	    st.st_uid != geteuid() || (st.st_mode & 077)) {
+		close(fd);
+		return;			/* not ours: ignore it */
+	}
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return;
+	buf[n] = '\0';
+	if (sscanf(buf, "boot_id=%39s sequence=%llu", id, &seq) == 2 &&
+	    strspn(id, "0123456789abcdef") == strlen(id)) {
+		snprintf(ev_boot, sizeof(ev_boot), "%s", id);
+		ev_seq = seq;
+	}
+}
+
+static void cursor_save(void)
+{
+	char tmp[sizeof(EVENT_CURSOR) + 8], buf[128];
+	int fd, n;
+
+	if (!ev_cursor_dirty || !ev_boot[0])
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.tmp", EVENT_CURSOR);
+	n = snprintf(buf, sizeof(buf), "boot_id=%s sequence=%llu\n", ev_boot,
+		     ev_seq);
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		  0600);
+	if (fd < 0)
+		return;
+	if (write_all(fd, buf, (size_t)n) != 0 || fsync(fd) != 0) {
+		close(fd);
+		unlink(tmp);
+		return;
+	}
+	close(fd);
+	if (rename(tmp, EVENT_CURSOR) == 0)
+		ev_cursor_dirty = 0;
+	else
+		unlink(tmp);
+}
+
+static void track_sequence(const struct cfg *c, const struct ss_ev *e)
+{
+	unsigned long long seq;
+
+	if (e->schema != 1 || strlen(e->boot_id) != 32 ||
+	    strspn(e->boot_id, "0123456789abcdef") != 32 || e->sequence <= 0)
+		return;
+	seq = (unsigned long long)e->sequence;
+	if (strcmp(e->boot_id, ev_boot)) {
+		/* the first record of a boot this daemon has not seen before */
+		daemon_record(c, "event_stream",
+			      "\"boot_id\":\"%s\",\"first_sequence\":%llu,"
+			      "\"previous_boot_id\":%s%s%s,"
+			      "\"previous_last_sequence\":%llu",
+			      e->boot_id, seq, ev_boot[0] ? "\"" : "",
+			      ev_boot[0] ? ev_boot : "null",
+			      ev_boot[0] ? "\"" : "", ev_seq);
+		if (seq > 1) {
+			event_gaps++;
+			events_missing += seq - 1;
+			daemon_record(c, "event_gap",
+				      "\"boot_id\":\"%s\",\"first_missing\":1,"
+				      "\"last_missing\":%llu,\"missing\":%llu,"
+				      "\"kernel_events_dropped\":%llu",
+				      e->boot_id, seq - 1, seq - 1,
+				      sysfs_counter("events_dropped"));
+		}
+		snprintf(ev_boot, sizeof(ev_boot), "%s", e->boot_id);
+	} else if (seq > ev_seq + 1) {
+		event_gaps++;
+		events_missing += seq - ev_seq - 1;
+		daemon_record(c, "event_gap",
+			      "\"boot_id\":\"%s\",\"first_missing\":%llu,"
+			      "\"last_missing\":%llu,\"missing\":%llu,"
+			      "\"kernel_events_dropped\":%llu",
+			      e->boot_id, ev_seq + 1, seq - 1, seq - ev_seq - 1,
+			      sysfs_counter("events_dropped"));
+	} else if (seq <= ev_seq) {
+		daemon_record(c, "event_sequence_error",
+			      "\"boot_id\":\"%s\",\"sequence\":%llu,"
+			      "\"after_sequence\":%llu",
+			      e->boot_id, seq, ev_seq);
+	}
+	ev_seq = seq;
+	ev_cursor_dirty = 1;
+}
+
 /* Act on one complete ring line, after it has been logged. */
 static void handle_event(const struct cfg *c, const char *line)
 {
@@ -1399,6 +1742,7 @@ static void handle_event(const struct cfg *c, const char *line)
 
 	if (ev_parse(line, &e) != 0)
 		return;			/* not a kernel record: never acted on */
+	track_sequence(c, &e);
 	if (ev_cooldown_uid(&e, &uid))
 		kill_offenders(uid);
 	if (ev_vault_path(&e, path, sizeof(path)))
@@ -1676,6 +2020,7 @@ static void drain_events(const struct cfg *c, int fd)
 	}
 	ev_have -= (size_t)(line - ev_buf);
 	memmove(ev_buf, line, ev_have);
+	cursor_save();
 	if (ev_have >= sizeof(ev_buf) / 2) {
 		/* No kernel record is this long: resynchronise. */
 		local_log_failures++;
@@ -1692,6 +2037,7 @@ int main(void)
 	time_t last_periodic = 0;
 	time_t last_pbox = 0;
 	time_t last_health = 0;
+	time_t last_checkpoint = 0;
 
 	signal(SIGHUP, on_hup);
 	signal(SIGTERM, on_term);
@@ -1705,6 +2051,7 @@ int main(void)
 
 	load_cfg(&cfg);
 	g_cfg = &cfg;
+	cursor_load();
 
 	pfd.fd = open(EVENTS, O_RDONLY);
 	pfd.events = POLLIN;
@@ -1739,6 +2086,11 @@ int main(void)
 		if (rc > 0 && (pfd.revents & POLLIN))
 			drain_events(&cfg, pfd.fd);
 		maybe_flush_remote(&cfg, time(NULL));
+
+		if (now - last_checkpoint >= CHECKPOINT_SECS) {
+			last_checkpoint = now;
+			log_checkpoint(&cfg);
+		}
 
 		/* Periodic work roughly every 5s. */
 		if (now - last_periodic >= 5) {

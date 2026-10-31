@@ -80,7 +80,7 @@ fresh() {
 	mkdir -p "$CFG" "$SYS" "$SEC"
 	cp "$ROOT"/userspace/config/*.conf "$CFG/"
 	chmod 0755 "$CFG"; chmod 0644 "$CFG"/*.conf
-	echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+	echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 	chmod 0600 "$HEALTH"
 	sed -n 's/^\([a-z_]*\) *=.*/\1/p' "$ROOT/userspace/config/secure-sudo.conf" |
 		while read -r k; do echo old > "$SYS/$k"; done
@@ -259,10 +259,10 @@ echo 1 > "$AUDIT_ENABLED"
 check "health JSON reports remote forwarding state" grep -q '"remote_forwarding":"disabled"' "$T/health.out"
 check "health JSON reports remote transport" grep -q '"remote_transport":"udp"' "$T/health.out"
 check "health JSON reports active log retention" grep -q '"retention_state":"active"' "$T/health.out"
-echo "remote_transport=udp retention_state=held remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+echo "remote_transport=udp retention_state=held remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1
 check "health reports an active evidence retention hold" grep -q '"retention_state":"held"' "$T/health.out"
-echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 check "health JSON reports heartbeat metric availability" grep -q '"heartbeat_metrics":"available"' "$T/health.out"
 check "health JSON reports add-on and timer unit states" sh -c \
 	"grep -q '\"systemd\":\"available\"' '$T/health.out' && grep -q 'secure-sudo-driverguard.timer' '$T/health.out'"
@@ -304,18 +304,30 @@ HEALTH_ENABLED_TIMER=secure-sudo-driverguard.timer SS_TEST_ALLOW_ROOT=1 \
 	"$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "stale baseline degrades an enabled scanning timer" sh -c \
 	"[ $rc -eq 1 ] && grep -q '\"baseline\":\"stale\"' '$T/health.out'"
-echo "remote_transport=udp retention_state=active remote_state=udp_unconfirmed remote_sent=1 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+echo "remote_transport=udp retention_state=active remote_state=udp_unconfirmed remote_sent=1 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "health does not treat UDP send as confirmed delivery" sh -c \
 	"[ $rc -eq 1 ] && grep -q '\"remote_forwarding\":\"udp_unconfirmed\"' '$T/health.out'"
-echo "remote_transport=tls retention_state=active remote_state=tls_queued remote_sent=0 remote_failures=1 remote_queue_records=2 remote_queue_bytes=300 remote_queue_dropped=4 local_log_failures=0" > "$HEALTH"
+echo "remote_transport=tls retention_state=active remote_state=tls_queued remote_sent=0 remote_failures=1 remote_queue_records=2 remote_queue_bytes=300 remote_queue_dropped=4 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "health reports TLS queue backlog and drops" sh -c \
 	"[ $rc -eq 1 ] && grep -q '\"remote_transport\":\"tls\"' '$T/health.out' && grep -q '\"remote_queue_records\":2' '$T/health.out' && grep -q '\"remote_queue_dropped\":4' '$T/health.out'"
-echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=1" > "$HEALTH"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=1 event_gaps=0 events_missing=0" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "health reports local log write failures" sh -c \
 	"[ $rc -eq 1 ] && grep -q '\"local_log_failures\":1' '$T/health.out'"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=2 events_missing=7" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "health degrades when the daemon saw event-stream gaps" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"event_gaps\":2,\"events_missing\":7' '$T/health.out'"
+echo "remote_transport=udp xretention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "heartbeat keys match whole names only (xretention_state is not retention_state)" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"heartbeat_metrics\":\"unavailable\"' '$T/health.out'"
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+check "a heartbeat without the event-gap counters is incomplete" sh -c \
+	"[ $rc -eq 1 ] && grep -q '\"heartbeat_metrics\":\"unavailable\"' '$T/health.out'"
 echo "remote_transport=udp remote_state=disabled" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "health marks incomplete daemon metrics unavailable" sh -c \

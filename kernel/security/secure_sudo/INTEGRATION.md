@@ -122,6 +122,8 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/lock_confidentiality` | rw (0600) | #16 while locked, also refuse lockdown's confidentiality class |
 | `/sys/kernel/secure_sudo/events_dropped` | r (0400) | #9 events lost because the ring was full (whole events are dropped, never parts of lines) |
 | `/sys/kernel/secure_sudo/audit_events_dropped` | r (0400) | #9 audit records refused by the audit backlog |
+| `/sys/kernel/secure_sudo/events_sequence` | r (0400) | #9 the last sequence number given to an event this boot |
+| `/sys/kernel/secure_sudo/events_boot_id` | r (0400) | #9 the `boot_id` this boot's event records carry |
 
 Kernel event lines use schema-v1 JSON: `schema_version`, per-boot random
 `boot_id`, per-boot `sequence`, `realtime_ns`, `monotonic_ns`, an event
@@ -143,6 +145,28 @@ task is not yet preserved, and some target fields remain descriptive labels
 rather than a fully typed PID/UID identity. `audit_events_dropped` counts
 calls for which the audit subsystem did not provide an event buffer; it is not
 a complete audit backlog accounting interface.
+
+Sequence numbers are given under the ring lock, in the order records enter
+the ring, starting at 1 each boot. Because the ring drops the oldest whole
+records, the records a reader sees form contiguous runs, and any jump in
+`sequence` is exactly the records lost to a full ring. `events_dropped` also
+counts events raised before securityfs was up, which never got a number.
+
+`secure-sudod` turns loss into records of its own, written to the local log
+and forwarded like kernel events, with `"source":"secure-sudod"`:
+
+* `event_stream`: the first record of a boot it had not seen. Carries the
+  new and previous `boot_id`, and the last sequence seen in the previous
+  boot.
+* `event_gap`: `first_missing`..`last_missing` for a jump in the sequence,
+  with `kernel_events_dropped` at that moment.
+* `event_sequence_error`: a number that did not increase.
+
+The daemon keeps its position in `/var/lib/secure_sudo/event-cursor`, so
+records lost while it was stopped are reported when it restarts. After a
+daemon crash a gap can be overstated by a few records, but never hidden.
+`secure-sudo health` reports `event_gaps`/`events_missing` and degrades
+while they are non-zero.
 
 The ring is 64 KiB and each complete JSON line is capped at 640 bytes. It has
 no producer-side rate limit: on saturation it discards oldest whole records,
