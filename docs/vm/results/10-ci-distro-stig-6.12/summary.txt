@@ -1,0 +1,66 @@
+GitHub Actions, job distro-vm, two runs on 2026-10-31 (branch
+stig/grub-unrestricted-boot, merged as PR #7). From the job logs; the full
+reports are each run's distro-vm-results artifact.
+
+Kernel: linux-6.12.114 (kernel.org, signature-verified), packaged by
+`install.sh build-kernel` from the Ubuntu 24.04 guest's config with
+SS_LOCALMOD, as 6.12.114-secure-sudo. Guest: verified Ubuntu 24.04 cloud
+image, QEMU/KVM, SeaBIOS. SSG 0.1.78 (datastream hash checked),
+profile stig with tests/vm/distro/stig-vm-tailoring.xml.
+
+Before these runs (runs 41219127471, 41226978753): site steps, remediation
+and rescan completed, then the hardened guest never came back from its
+reboot. Cause: the site's GRUB password restricts Ubuntu's "Advanced
+options" submenu, and install.sh had put the default kernel inside it
+(SECURITY_REVIEW #51). Fixed in install.sh (GRUB_DISABLE_SUBMENU=true in its
+drop-in, verify check).
+
+Run 41237968131 (commit 37e8a59)
+  https://github.com/Shatoshinakamoto/KernelPatch/actions/runs/41237968131
+  run-install-test.sh: 52/52 (new check: both armed entries are top-level)
+  run-stig-test.sh: 15/16
+    ok   install, trial boot, commit, site steps (ufw on, GRUB password with
+         --unrestricted entries, chrony, audit offload), remediation
+    ok   install.sh verify: "GRUB password set; saved_entry boots without it"
+    ok   the hardened guest reboots, runs 6.12.114-secure-sudo, secure_sudo
+         and AppArmor active
+    FAIL release gate: pass=213 fail=4 error=0 n/a=8 notchecked=5; one fail
+         not in the expectation file: file_permissions_var_log_stig. Cause:
+         stig-harden.sh's own reports under /var/log/secure_sudo/stig were
+         0644, written after the OSB-07 tightening (OSCAP_BUGS OSB-22).
+
+Run 41243002797 (commit 745f3c5, the merged code)
+  https://github.com/Shatoshinakamoto/KernelPatch/actions/runs/41243002797
+  run-install-test.sh: passed (52 checks)
+  run-stig-test.sh: 16/16
+    ok 1  fresh guest boots
+    ok 2  install-kernel + userspace succeed
+    ok 3  trial boot of 6.12.114-secure-sudo verified and committed
+    ok 4  running the secure_sudo kernel
+    ok 5  site steps applied (ufw limits ssh and is on, GRUB password with
+          unrestricted entries, chrony server, audit offload job)
+    ok 6  tester can reach root through sudo
+    ok 7  baseline scan, remediation and rescan ran to the end
+    ok 8  the default boot entry needs no GRUB password (install.sh verify)
+    ok 9  the hardened guest reboots
+    ok 10 after hardening it still runs the secure_sudo kernel
+    ok 11 secure_sudo and AppArmor both active after hardening
+    ok 12 final scan ran (no /var/log file wider than 0640 was listed)
+    ok 13 the independent checks (OSB-19) were recorded with the final scan
+    ok 14 STIG release gate passes on the VM result
+    ok 15 no evaluation errors
+    ok 16 apparmor_configured evaluates (no error) and passes
+
+  Final scan, scanner alone: pass=215 fail=2 error=0 notapplicable=8
+  notchecked=5 (notselected=409). With the independent checks (the gate's
+  view): pass=214 fail=3.
+    fail encrypt_partitions    allowed: the test VM disk is not LUKS (OSB-12);
+                               the scanner said pass, the independent check
+                               says fail (OSB-19)
+    fail is_fips_mode_enabled  allowed: accepted by Pheonix 2026-10-26
+    fail service_sssd_enabled  allowed: accepted by Pheonix 2026-10-26
+    notchecked (manual review, OSB-14): account_temp_expire_date,
+      auditd_audispd_configure_sufficiently_large_partition,
+      ensure_sudo_group_restricted, only_allow_dod_certs,
+      ufw_only_required_services
+  STIG gate release: pass

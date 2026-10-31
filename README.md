@@ -188,12 +188,17 @@ In short:
   falls back to the old kernel when not committed, passes the four recovery
   drills, rolls back and uninstalls cleanly. Recorded runs:
   [docs/vm/results/](docs/vm/results/).
-* **Not yet booted:** the 6.12 LTS default (compiled against its headers
-  only), UEFI / Secure Boot, other distros, and real hardware. Run
-  [docs/HARDWARE_SMOKE_TEST.md](docs/HARDWARE_SMOKE_TEST.md) on each machine
-  model before relying on it there.
+* **6.12 LTS, the installer's default, in CI** (GitHub Actions, KVM): 126
+  in-kernel checks pass; the same install/fallback/commit/drills/removal run
+  passes on Ubuntu 24.04; and after DISA STIG hardening the guest reboots
+  into secure_sudo with AppArmor and the STIG release gate passes (only the
+  allowed fails: unencrypted test disk, FIPS, sssd).
+* **Not yet booted:** UEFI / Secure Boot, other distros, and real hardware.
+  Run [docs/HARDWARE_SMOKE_TEST.md](docs/HARDWARE_SMOKE_TEST.md) on each
+  machine model before relying on it there.
 * **Build and tests:** `ci/build-gate.sh` (lint, `-Werror` builds, header and
-  in-tree kernel builds, every test suite, reproducible package) passes
-  locally; the GitHub workflow is written but has not run yet.
+  in-tree kernel builds, every test suite, reproducible package) runs on
+  GitHub for every push and pull request; the VM jobs run weekly and on
+  demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots).
+  (findings #35–#47 came from v12's tests and boots, #48–#51 since).

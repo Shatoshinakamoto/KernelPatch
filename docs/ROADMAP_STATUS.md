@@ -26,7 +26,7 @@ nothing is pushed from here.
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
 | P0-2 tests | partly | 556 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
-| P0-3 boot proof | partly | 6.12.114 with secure_sudo: 126/126 in-kernel checks (initramfs, KVM) and the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run 51/51, both in CI; not UEFI, other distros or hardware |
+| P0-3 boot proof | partly | 6.12.114 with secure_sudo, all in CI: 126/126 in-kernel checks (initramfs, KVM), the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run (52 checks), and the STIG run 16/16: the hardened guest reboots and the release gate passes; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
@@ -145,12 +145,15 @@ one-way lock (every knob kind refuses, modules and tracing BPF refused).
 Results: `docs/vm/results/02-*`, `03-*`.
 
 STIG release gate: `tests/oscap/stig-gate.sh` (39 checks in `tests/oscap/`) compares an
-OpenSCAP result rule by rule with `tests/oscap/ubuntu2404-stig.expect`. The
-VM release run reached 206 pass / 11 fail / 0 error after two remediation
-passes; every remaining rule is classified in
-[OSCAP_BUGS.md §5](OSCAP_BUGS.md#5-release-run-in-a-vm-v12-2026-10-26), and
-the fixes it led to are in this release. The final VM rescan with those
-fixes has not run yet, so the gate has **not** yet passed on a VM result.
+OpenSCAP result rule by rule with `tests/oscap/ubuntu2404-stig.expect`.
+**It passes on a VM result** since 2026-10-31 (CI run 41243002797, 6.12.114,
+`docs/vm/results/10-ci-distro-stig-6.12/`): final scan after the hardened
+reboot 215 pass / 2 fail / 0 error, and with the independent checks the
+three fails are the allowed ones (`encrypt_partitions` on the unencrypted
+test disk, FIPS and sssd, accepted). The v12 VM run before it reached 206
+pass / 11 fail / 0 error after two remediation passes; every rule left then
+is classified in
+[OSCAP_BUGS.md §5](OSCAP_BUGS.md#5-release-run-in-a-vm-v12-2026-10-26).
 The run also found that the scanner cannot evaluate `encrypt_partitions` on
 Ubuntu 24.04 (false pass, OSB-19); the gate now uses an independent check
 for it and refuses a release result without one.
@@ -178,7 +181,8 @@ What has been booted, under QEMU with SeaBIOS (TCG here, KVM in CI;
 | current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
 | same | Ubuntu 24.04, STIG remediation | remediation ran; the run was cut off before the post-hardening reboot (`07-distro-stig/run-stig-test.tap` ends at check 6), so a reboot of a hardened guest was **not** shown. An earlier version of this row said it was |
-| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest did not come back** (2026-10-31, twice). Cause: the GRUB password held the boot at Ubuntu's restricted "Advanced options" submenu, where the installer had put the default kernel (SECURITY_REVIEW #51). Fixed: in run 41237968131 the hardened guest reboots into the secure_sudo kernel with AppArmor active; the release gate then had one unexplained failure, `file_permissions_var_log_stig`, caused by the hardening script's own reports (OSB-22, fixed) |
+| `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest did not come back** (2026-10-31, twice). Cause: the GRUB password held the boot at Ubuntu's restricted "Advanced options" submenu, where the installer had put the default kernel (SECURITY_REVIEW #51). Fixed: in run 41237968131 the hardened guest reboots into the secure_sudo kernel with AppArmor active; the release gate then had one unexplained failure, `file_permissions_var_log_stig`, caused by the hardening script's own reports (OSB-22) |
+| same, with both fixes (run 41243002797) | Ubuntu 24.04, STIG hardened, rebooted | **16/16**: reboots into secure_sudo with AppArmor; the STIG release gate passes (`10-ci-distro-stig-6.12/`) |
 
 Known platform exclusions, recorded rather than claimed:
 
@@ -195,8 +199,6 @@ Missing for *Done*:
 * No UEFI, Secure Boot, MOK enrollment or TPM test (no OVMF/KVM here).
 * No VM of Fedora, openSUSE or Arch; no real hardware.
   [HARDWARE_SMOKE_TEST.md](HARDWARE_SMOKE_TEST.md) is the plan for that.
-* The VM STIG run has not yet ended on a scan with no unexplained failures
-  (above).
 
 ### P0-5 Transactional install, upgrade and recovery — done (Ubuntu 24.04)
 

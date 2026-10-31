@@ -32,6 +32,7 @@ Profile `xccdf_org.ssgproject.content_profile_stig`, 230 rules evaluated.
 | Fresh rescan | v11, 2026-10-26 | **61** | **1** | 1 | 164 | 3 |
 | Bugs re-created for the regression test (§3) | v11 | — | 5 | 1 | — | 3 |
 | `stig-harden.sh --post-patch-only` | v11 | **61** | **1** | 1 | 164 | 3 |
+| Fresh VM, two passes, hardened reboot, final scan (CI, KVM) | 2026-10-31, run 41243002797 | **215** | **2** | **0** | 8 | 5 |
 
 The one remaining **fail** is *Encrypt Partitions* (OSB-12), which no container
 can pass. The **error** is AppArmor (OSB-13). The three **not checked** are
@@ -71,7 +72,7 @@ manual-review controls (OSB-14).
 | **OSB-08** | `/usr/bin/env: bad interpreter: Permission denied` | The project tree is on a `noexec` mount. | Run as `bash stig-harden.sh`; the installer and docs do. |
 | **OSB-09** | Scan tally empty or wrong under `set -o pipefail`. | `scan()` passed its result through a pipe and re-ran `oscap` a second time just to count. | `scan()` sets a global `SCAN_RESULT` and counts from the XML it just wrote: no second scan, no pipe. |
 | **OSB-10** | The post-remediation tally never printed. | The final `scan after` was redirected to `/dev/null`. | Redirect removed; every pass prints its tally and a Markdown summary is written (`summary-<ts>.md`). |
-| **OSB-22** | `file_permissions_var_log_stig` fails on the first scan after `--remediate` although the OSB-07 step tightened `/var/log` just before remediation's last scan (CI VM run, 6.12.114, 2026-10-31: the only failure the expectation file does not explain). | Our reports. The default `--outdir` is under `/var/log`, and the "after" scan's result, report and cross-check and the summary are written after the OSB-07 step, with mode 0644. The rule wants every file under `/var/log` at 0640 or stricter. | Everything `stig-harden.sh` writes to its outdir is 0600 (umask 077 for its own writes, not for the remediation it runs). The VM run prints every `/var/log` file the rule would flag after the final scan. |
+| **OSB-22** | `file_permissions_var_log_stig` fails on the first scan after `--remediate` although the OSB-07 step tightened `/var/log` just before remediation's last scan (CI VM run, 6.12.114, 2026-10-31: the only failure the expectation file does not explain). | Our reports. The default `--outdir` is under `/var/log`, and the "after" scan's result, report and cross-check and the summary are written after the OSB-07 step, with mode 0644. The rule wants every file under `/var/log` at 0640 or stricter. | Everything `stig-harden.sh` writes to its outdir is 0600 (umask 077 for its own writes, not for the remediation it runs). The VM run prints every `/var/log` file the rule would flag after the final scan. Verified: the next CI VM run (41243002797) lists none and passes the rule. |
 
 ### Cannot pass inside a container (documented, not patchable here)
 
@@ -179,6 +180,16 @@ The run was stopped after pass 2: the post-remediation scan was cut off by
 the build host's 2-hour job limit, and the final rescan after the fixes below
 was skipped to ship v12. **The fixes below are therefore not yet confirmed by
 a VM scan**; the next run of the workflow's weekly (or on-demand) STIG job is that check.
+
+**Confirmed in CI on 2026-10-31** (run 41243002797, 6.12.114 under KVM,
+[`docs/vm/results/10-ci-distro-stig-6.12/`](vm/results/10-ci-distro-stig-6.12/)):
+the final scan after the hardened reboot is 215 pass / 2 fail / 0 error /
+8 not applicable / 5 not checked, and with the independent checks the
+fails are `encrypt_partitions` (OSB-12), `is_fips_mode_enabled` and
+`service_sssd_enabled`, all allowed. **The release gate passes.** Every
+other rule in the table below now ends at pass or at manual review. Two
+more problems were found on the way: SECURITY_REVIEW #51 (a GRUB password
+held every boot at Ubuntu's restricted submenu) and OSB-22.
 
 Every rule not at pass after pass 2, by rule ID:
 
