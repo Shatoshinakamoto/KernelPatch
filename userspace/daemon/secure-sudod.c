@@ -24,6 +24,7 @@
  * (/usr/libexec/secure-sudo/{apply-net,quarantine}.sh) to keep this core small
  * and auditable.
  */
+#define _GNU_SOURCE		/* O_PATH */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -50,14 +51,20 @@
 #define EVENTS   "/sys/kernel/security/secure_sudo/events"
 #define SYSFS    "/sys/kernel/secure_sudo"
 #define CONFIG   "/etc/secure_sudo/secure-sudo.conf"
+#ifndef LOGDIR
 #define LOGDIR   "/var/log/secure_sudo"
+#endif
 #define STATEDIR "/var/lib/secure_sudo"
 #define HEALTH_FILE STATEDIR "/daemon.health"
 #define RETENTION_HOLD STATEDIR "/retention.hold"
 #define MANIFEST STATEDIR "/manifest"
+#ifndef QUARANTINE
 #define QUARANTINE STATEDIR "/quarantine"
+#endif
 #define HELPER_NET  "/usr/libexec/secure-sudo/apply-net.sh"
+#ifndef HELPER_QUAR
 #define HELPER_QUAR "/usr/libexec/secure-sudo/quarantine.sh"
+#endif
 #define HELPER_PBOX "/usr/bin/secure-sudo-pheonixbox"	/* #21 PheonixBox */
 #define REMOTE_QUEUE_MAX_RECORDS 4096
 #ifndef REMOTE_QUEUE
@@ -825,97 +832,466 @@ static void syslog_line(const char *fmt, ...)
 		write_log(g_cfg, buf, n);
 }
 
-/* Parse an event line for "cooldown: UID <n> blocked ..." and act. */
-static void maybe_cooldown(const char *line)
-{
-	const char *p = strstr(line, "cooldown: UID ");
-	unsigned uid;
+/*
+ * ---- reading kernel events ----
+ *
+ * Each ring line is one schema-v1 JSON object written by ss_log.c. The
+ * daemon acts on two of them as root: it kills a UID's sudo/su processes
+ * (cooldown) and quarantines or deletes a file (TimeVault). Earlier
+ * versions found both by searching the whole decoded message for
+ * "cooldown: UID " or "timevault: denied exec ". A message often carries
+ * a path the user chose, so a file named, say,
+ *   /home/u/x/timevault: denied exec /usr/bin/sudo (hash mismatch)
+ * showing up in any other denial was enough to make the daemon quarantine
+ * /usr/bin/sudo. Now the action is chosen only from the typed fields,
+ * whose values are kernel constants. The cooldown UID comes from
+ * target_uid. The TimeVault path is taken from a message that must match
+ * the kernel's format from its first byte to its last, and never from a
+ * truncated record.
+ */
+struct ss_ev {
+	long long schema;		/* schema_version, -1 if absent */
+	char event_type[64];
+	char operation[32];
+	char decision[24];
+	char reason[64];
+	char message[1024];		/* JSON-decoded */
+	long long target_uid;		/* -1 if null or absent */
+	int truncated;			/* 1 / 0, -1 if absent */
+};
 
-	if (!p)
-		return;
-	if (sscanf(p, "cooldown: UID %u blocked", &uid) == 1)
-		kill_offenders((uid_t)uid);
+static const char *json_ws(const char *p)
+{
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+		p++;
+	return p;
 }
 
-static void event_message(const char *record, char *out, size_t size)
+static int hexval(char c)
 {
-	const char *p = strstr(record, "\"message\":\"");
-	size_t n = 0;
-
-	if (!p) {
-		snprintf(out, size, "%s", record);
-		return;
-	}
-	p += strlen("\"message\":\"");
-	while (*p && *p != '"' && n + 1 < size) {
-		if (*p == '\\' && p[1] == 'u' && strlen(p) >= 6 &&
-		    p[2] == '0' && p[3] == '0') {
-			int hi, lo;
-			char a = p[4], b = p[5];
-
-			hi = a >= '0' && a <= '9' ? a - '0' :
-			     a >= 'a' && a <= 'f' ? a - 'a' + 10 :
-			     a >= 'A' && a <= 'F' ? a - 'A' + 10 : -1;
-			lo = b >= '0' && b <= '9' ? b - '0' :
-			     b >= 'a' && b <= 'f' ? b - 'a' + 10 :
-			     b >= 'A' && b <= 'F' ? b - 'A' + 10 : -1;
-			if (hi >= 0 && lo >= 0) {
-				out[n++] = (char)((hi << 4) | lo);
-				p += 6;
-				continue;
-			}
-		}
-		if (*p == '\\' && p[1])
-			p++;
-		out[n++] = *p++;
-	}
-	out[n] = '\0';
+	return c >= '0' && c <= '9' ? c - '0' :
+	       c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+	       c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
 }
 
 /*
- * #13 TimeVault anti-tamper quarantine. When the kernel denies an exec because
- * a listed binary's hash no longer matches ("hash mismatch") or an unlisted
- * binary tried to run ("not on allowlist"), the kernel has already STOPPED the
- * exec; here we move the offending file aside - compressed into the quarantine
- * folder (vault_action=quarantine) or deleted (vault_action=wipe). The event
- * text is: `timevault: denied exec <path> (<reason>)`.
+ * Parse the JSON string at @p (which points at its opening quote). With
+ * @out, store the decoded bytes: ss_log.c writes bytes >= 0x80 as \u00XX,
+ * so those become the original byte again. Returns the position after the
+ * closing quote, or NULL if the string is malformed or does not fit.
  */
-static int run_helper(const char *helper, const char *arg);	/* defined below */
-
-static void maybe_quarantine_denied(const struct cfg *c, const char *line)
+static const char *json_string(const char *p, char *out, size_t size)
 {
-	const char *p = strstr(line, "timevault: denied exec ");
-	const char *close;
-	char path[1024];
-	size_t len;
-	struct stat st;
+	size_t n = 0;
 
-	if (!p)
-		return;
-	p += strlen("timevault: denied exec ");
-	/* The path runs up to the " (<reason>)" suffix. */
-	close = strstr(p, " (");
-	if (!close || *p != '/')
-		return;				/* no path, or unresolvable marker */
-	/* Act only on a genuine tamper/unknown-binary denial. */
-	if (!strstr(close, "(hash mismatch)") &&
-	    !strstr(close, "(not on allowlist)"))
-		return;
-	len = (size_t)(close - p);
-	if (len == 0 || len >= sizeof(path))
-		return;
-	memcpy(path, p, len);
+	if (*p++ != '"')
+		return NULL;
+	while (*p != '"') {
+		char c = *p++;
+
+		if (!c || (unsigned char)c < 0x20)
+			return NULL;
+		if (c == '\\') {
+			c = *p++;
+			switch (c) {
+			case '"': case '\\': case '/': break;
+			case 'b': c = '\b'; break;
+			case 'f': c = '\f'; break;
+			case 'n': c = '\n'; break;
+			case 'r': c = '\r'; break;
+			case 't': c = '\t'; break;
+			case 'u': {
+				int h[4], i;
+
+				for (i = 0; i < 4; i++)
+					if ((h[i] = hexval(p[i])) < 0)
+						return NULL;
+				p += 4;
+				/* only the kernel's byte escapes are meaningful */
+				c = h[0] || h[1] ? '?' : (char)(h[2] << 4 | h[3]);
+				if (!c)
+					return NULL;	/* no NUL inside a value */
+				break;
+			}
+			default:
+				return NULL;
+			}
+		}
+		if (out) {
+			if (n + 1 >= size)
+				return NULL;
+			out[n++] = c;
+		}
+	}
+	if (out)
+		out[n] = '\0';
+	return p + 1;
+}
+
+/* Skip any JSON value (nested objects and arrays included). */
+static const char *json_skip(const char *p, int depth)
+{
+	p = json_ws(p);
+	if (depth > 8)
+		return NULL;
+	if (*p == '"')
+		return json_string(p, NULL, 0);
+	if (*p == '{' || *p == '[') {
+		char close = *p == '{' ? '}' : ']';
+
+		p = json_ws(p + 1);
+		if (*p == close)
+			return p + 1;
+		for (;;) {
+			if (close == '}') {
+				p = json_string(json_ws(p), NULL, 0);
+				if (!p)
+					return NULL;
+				p = json_ws(p);
+				if (*p++ != ':')
+					return NULL;
+			}
+			p = json_skip(p, depth + 1);
+			if (!p)
+				return NULL;
+			p = json_ws(p);
+			if (*p == close)
+				return p + 1;
+			if (*p++ != ',')
+				return NULL;
+		}
+	}
+	if (!strncmp(p, "true", 4) || !strncmp(p, "null", 4))
+		return p + 4;
+	if (!strncmp(p, "false", 5))
+		return p + 5;
+	if (*p == '-' || (*p >= '0' && *p <= '9')) {
+		p++;
+		while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' ||
+		       *p == 'E' || *p == '+' || *p == '-')
+			p++;
+		return p;
+	}
+	return NULL;
+}
+
+static const char *json_int(const char *p, long long *out)
+{
+	char *end;
+
+	p = json_ws(p);
+	if (!strncmp(p, "null", 4)) {
+		*out = -1;
+		return p + 4;
+	}
+	if (*p < '0' || *p > '9')
+		return NULL;
+	errno = 0;
+	*out = strtoll(p, &end, 10);
+	if (errno || *end == '.' || *end == 'e' || *end == 'E')
+		return NULL;
+	return end;
+}
+
+/* Parse one kernel record. Returns 0 if it is a well-formed JSON object. */
+static int ev_parse(const char *rec, struct ss_ev *e)
+{
+	const char *p = json_ws(rec);
+
+	memset(e, 0, sizeof(*e));
+	e->schema = -1;
+	e->target_uid = -1;
+	e->truncated = -1;
+	if (*p++ != '{')
+		return -1;
+	p = json_ws(p);
+	if (*p == '}')
+		return *json_ws(p + 1) ? -1 : 0;
+	for (;;) {
+		char key[32];
+		char *dst = NULL;
+		size_t dsz = 0;
+
+		p = json_string(json_ws(p), key, sizeof(key));
+		if (!p)
+			return -1;
+		p = json_ws(p);
+		if (*p++ != ':')
+			return -1;
+		p = json_ws(p);
+		if (!strcmp(key, "event_type"))
+			dst = e->event_type, dsz = sizeof(e->event_type);
+		else if (!strcmp(key, "operation"))
+			dst = e->operation, dsz = sizeof(e->operation);
+		else if (!strcmp(key, "decision"))
+			dst = e->decision, dsz = sizeof(e->decision);
+		else if (!strcmp(key, "reason"))
+			dst = e->reason, dsz = sizeof(e->reason);
+		else if (!strcmp(key, "message"))
+			dst = e->message, dsz = sizeof(e->message);
+		if (dst && *p == '"')
+			p = json_string(p, dst, dsz);
+		else if (!strcmp(key, "schema_version"))
+			p = json_int(p, &e->schema);
+		else if (!strcmp(key, "target_uid"))
+			p = json_int(p, &e->target_uid);
+		else if (!strcmp(key, "truncated") && !strncmp(p, "true", 4))
+			e->truncated = 1, p += 4;
+		else if (!strcmp(key, "truncated") && !strncmp(p, "false", 5))
+			e->truncated = 0, p += 5;
+		else
+			p = json_skip(p, 0);
+		if (!p)
+			return -1;
+		p = json_ws(p);
+		if (*p == '}')
+			return *json_ws(p + 1) ? -1 : 0;
+		if (*p++ != ',')
+			return -1;
+	}
+}
+
+/* The kernel's brute-force block (ss_cooldown.c): 1 and the UID, else 0. */
+static int ev_cooldown_uid(const struct ss_ev *e, uid_t *uid)
+{
+	unsigned int u;
+	int end = 0;
+
+	if (e->schema != 1 || strcmp(e->event_type, "sudo_cooldown") ||
+	    strcmp(e->operation, "authenticate") ||
+	    strcmp(e->decision, "deny") || strcmp(e->reason, "failure_threshold"))
+		return 0;
+	if (e->target_uid >= 0 && e->target_uid <= 0xfffffffeLL) {
+		*uid = (uid_t)e->target_uid;
+		return 1;
+	}
+	/* Kernels before target_uid: the message is the kernel's own text, so
+	 * it can be matched from its first byte (never searched). */
+	if (sscanf(e->message, "cooldown: UID %u blocked from sudo %n", &u,
+		   &end) == 1 && end > 0) {
+		*uid = (uid_t)u;
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * A TimeVault exec denial for a tampered or unlisted binary: 1 and its
+ * path, else 0. ss_timevault.c writes "timevault: denied exec <path>
+ * (<reason>)" with the same <reason> as the typed field, so the path is
+ * exactly what lies between that prefix and that suffix.
+ */
+static int ev_vault_path(const struct ss_ev *e, char *path, size_t size)
+{
+	static const char pre[] = "timevault: denied exec ";
+	char suffix[sizeof(e->reason) + 4];
+	size_t len, slen;
+
+	if (e->schema != 1 || e->truncated != 0 ||
+	    strcmp(e->event_type, "time_vault") ||
+	    strcmp(e->operation, "execute") || strcmp(e->decision, "deny") ||
+	    (strcmp(e->reason, "hash mismatch") &&
+	     strcmp(e->reason, "not on allowlist")))
+		return 0;
+	if (strncmp(e->message, pre, sizeof(pre) - 1))
+		return 0;
+	snprintf(suffix, sizeof(suffix), " (%s)", e->reason);
+	len = strlen(e->message);
+	slen = strlen(suffix);
+	if (len < sizeof(pre) - 1 + slen ||
+	    strcmp(e->message + len - slen, suffix))
+		return 0;
+	len -= sizeof(pre) - 1 + slen;
+	if (!len || len >= size || e->message[sizeof(pre) - 1] != '/')
+		return 0;
+	memcpy(path, e->message + sizeof(pre) - 1, len);
 	path[len] = '\0';
-	/* Only touch a real regular file that still exists. */
-	if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode))
-		return;
+	return 1;
+}
 
+/* ---- #13 acting on a file without trusting its path ---- */
+
+static int run_helper_argv(const char *const argv[]);	/* defined below */
+
+/*
+ * Open the directory @path[0..len) names, one component at a time with
+ * O_NOFOLLOW, so no symlink anywhere on the way is followed. len 0 is "/".
+ */
+static int open_dir_nofollow(const char *path, size_t len)
+{
+	size_t i = 0;
+	int fd;
+
+	if (path[0] != '/')
+		return -1;
+	fd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+	while (fd >= 0 && i < len) {
+		char comp[256];
+		size_t j;
+		int next;
+
+		while (i < len && path[i] == '/')
+			i++;
+		if (i >= len)
+			break;
+		for (j = i; j < len && path[j] != '/'; j++)
+			;
+		if (j - i >= sizeof(comp) ||
+		    (j - i == 1 && path[i] == '.') ||
+		    (j - i == 2 && path[i] == '.' && path[i + 1] == '.')) {
+			close(fd);
+			errno = EINVAL;
+			return -1;
+		}
+		memcpy(comp, path + i, j - i);
+		comp[j - i] = '\0';
+		next = openat(fd, comp, O_PATH | O_DIRECTORY | O_NOFOLLOW |
+			      O_CLOEXEC);
+		close(fd);
+		fd = next;
+		i = j;
+	}
+	return fd;
+}
+
+/*
+ * Copy the open file @fd into a fresh root-only staging directory under
+ * QUARANTINE, keeping its name, owner, permission bits and times, and hand
+ * that copy to the quarantine helper (which archives it, records @origin
+ * as where it came from, and deletes the copy). Returns 0 once archived.
+ */
+static int vault_archive_copy(const char *origin, const char *base, int fd,
+			      const struct stat *st)
+{
+	char dir[512], staged[1024];
+	struct timespec times[2] = { st->st_atim, st->st_mtim };
+	struct stat ds;
+	char buf[65536];
+	ssize_t n;
+	int out, rc = -1;
+
+	if ((size_t)snprintf(dir, sizeof(dir), "%s/.incoming", QUARANTINE) >=
+	    sizeof(dir))
+		return -1;
+	if (mkdir(dir, 0700) != 0 && errno != EEXIST)
+		return -1;
+	if (lstat(dir, &ds) != 0 || !S_ISDIR(ds.st_mode) ||
+	    ds.st_uid != geteuid() || (ds.st_mode & 077))
+		return -1;
+	if ((size_t)snprintf(dir, sizeof(dir), "%s/.incoming/XXXXXX",
+			     QUARANTINE) >= sizeof(dir) || !mkdtemp(dir))
+		return -1;
+	if ((size_t)snprintf(staged, sizeof(staged), "%s/%s", dir, base) >=
+	    sizeof(staged))
+		goto out_dir;
+	out = open(staged, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		   0600);
+	if (out < 0)
+		goto out_dir;
+	if (lseek(fd, 0, SEEK_SET) != 0)
+		goto out_file;
+	while ((n = read(fd, buf, sizeof(buf))) > 0)
+		if (write_all(out, buf, (size_t)n) != 0)
+			goto out_file;
+	if (n < 0 || fsync(out) != 0)
+		goto out_file;
+	/* Best effort: the archive's metadata shows the original's. */
+	if (fchown(out, st->st_uid, st->st_gid) != 0 && geteuid() == 0)
+		goto out_file;
+	if (fchmod(out, st->st_mode & 0777) != 0 || futimens(out, times) != 0)
+		goto out_file;
+	rc = 0;
+out_file:
+	if (close(out) != 0)
+		rc = -1;
+	if (rc == 0) {
+		const char *argv[] = { HELPER_QUAR, "--origin", origin, staged,
+				       NULL };
+		struct stat left;
+
+		rc = run_helper_argv(argv);
+		if (rc != 0)
+			syslog_line("helper %s for %s failed (status %d)",
+				    HELPER_QUAR, origin, rc);
+		/* The helper deletes the copy only after checking the archive. */
+		else if (lstat(staged, &left) == 0 || errno != ENOENT)
+			rc = -1;
+	}
+	unlink(staged);
+out_dir:
+	rmdir(dir);
+	return rc ? -1 : 0;
+}
+
+/*
+ * Quarantine (vault_action=quarantine) or delete (wipe) the regular file
+ * at @path. @path is text from a kernel event or a directory walk: it
+ * named the file then, but the owner of any directory on the way may since
+ * have swapped that directory for a symlink so the same text names, say,
+ * /etc/shadow. So the path is resolved without following any symlink, the
+ * file is archived from the descriptor that was checked, and the name is
+ * removed through its pinned parent directory only while it still refers
+ * to that same inode. Returns 0 once the file is dealt with.
+ */
+static int vault_act(const struct cfg *c, const char *path)
+{
+	const char *slash = strrchr(path, '/');
+	const char *base = slash ? slash + 1 : "";
+	struct stat st, now;
+	int dfd, fd = -1, rc = -1;
+
+	if (path[0] != '/' || !*base || !strcmp(base, ".") ||
+	    !strcmp(base, ".."))
+		return -1;
+	dfd = open_dir_nofollow(path, (size_t)(slash - path));
+	if (dfd < 0) {
+		syslog_line("timevault: %s not acted on: a directory on its path is missing or is a symlink",
+			    path);
+		return -1;
+	}
+	fd = openat(dfd, base, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
+		goto out;		/* gone, a symlink, or not a regular file */
 	syslog_line("timevault: quarantining tampered/unlisted binary %s (action=%s)",
 		    path, c->vault_action);
-	if (!strcmp(c->vault_action, "wipe"))
-		unlink(path);
-	else if (run_helper(HELPER_QUAR, path) != 0)
-		syslog_line("timevault: quarantine of %s failed; file left in place", path);
+	if (strcmp(c->vault_action, "wipe") &&
+	    vault_archive_copy(path, base, fd, &st) != 0) {
+		syslog_line("timevault: quarantine of %s failed; file left in place",
+			    path);
+		goto out;
+	}
+	if (fstatat(dfd, base, &now, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    now.st_dev != st.st_dev || now.st_ino != st.st_ino) {
+		syslog_line("timevault: %s was replaced while being quarantined; left in place",
+			    path);
+		goto out;
+	}
+	if (unlinkat(dfd, base, 0) != 0) {
+		syslog_line("timevault: cannot remove %s: %s", path,
+			    strerror(errno));
+		goto out;
+	}
+	rc = 0;
+out:
+	if (fd >= 0)
+		close(fd);
+	close(dfd);
+	return rc;
+}
+
+/* Act on one complete ring line, after it has been logged. */
+static void handle_event(const struct cfg *c, const char *line)
+{
+	struct ss_ev e;
+	char path[1024];
+	uid_t uid;
+
+	if (ev_parse(line, &e) != 0)
+		return;			/* not a kernel record: never acted on */
+	if (ev_cooldown_uid(&e, &uid))
+		kill_offenders(uid);
+	if (ev_vault_path(&e, path, sizeof(path)))
+		vault_act(c, path);
 }
 
 /* ---- #10 network mode ---- */
@@ -939,15 +1315,15 @@ static int read_sysfs_str(const char *name, char *out, size_t n)
 	return 0;
 }
 
-/* Run a helper and wait for it. Returns its exit status (128 + signal if it
- * was killed, -1 if it could not be started). */
-static int run_helper_quiet(const char *helper, const char *arg)
+/* Run a helper (argv[0]) and wait for it. Returns its exit status (128 +
+ * signal if it was killed, -1 if it could not be started). */
+static int run_helper_argv(const char *const argv[])
 {
 	pid_t pid = fork();
 	int st, rc = -1;
 
 	if (pid == 0) {
-		execl(helper, helper, arg, (char *)NULL);
+		execv(argv[0], (char *const *)argv);
 		_exit(127);
 	}
 	if (pid > 0 && waitpid(pid, &st, 0) == pid) {
@@ -959,15 +1335,13 @@ static int run_helper_quiet(const char *helper, const char *arg)
 	return rc;
 }
 
-/* As run_helper_quiet(), and a non-zero result is logged. */
-static int run_helper(const char *helper, const char *arg)
+static int run_helper_quiet(const char *helper, const char *arg)
 {
-	int rc = run_helper_quiet(helper, arg);
+	const char *argv[] = { helper, arg, NULL };
 
-	if (rc != 0)
-		syslog_line("helper %s %s failed (status %d)", helper, arg, rc);
-	return rc;
+	return run_helper_argv(argv);
 }
+
 
 /* ---- #21 PheonixBox periodic scan+repair ----
  * Run `secure-sudo-pheonixbox scan --quiet` on a timer. The helper is a no-op
@@ -1108,7 +1482,9 @@ static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
 
 		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
 			continue;
-		snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
+		if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir,
+				     de->d_name) >= sizeof(path))
+			continue;	/* never act on a cut-off path */
 		if (lstat(path, &st) != 0)
 			continue;
 		if (S_ISDIR(st.st_mode)) {
@@ -1125,13 +1501,10 @@ static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
 		/* New or changed file while the vault is engaged. */
 		syslog_line("timevault: %s %s (action=%s)",
 			    prev[0] ? "changed" : "new", path, c->vault_action);
-		if (!strcmp(c->vault_action, "wipe")) {
-			unlink(path);
-		} else if (run_helper(HELPER_QUAR, path) != 0) {
+		if (vault_act(c, path) != 0) {
 			/* Not recorded: a file that could not be quarantined
 			 * must not become "known" and stop being flagged. */
-			syslog_line("timevault: quarantine of %s failed; file left in place, will retry",
-				    path);
+			syslog_line("timevault: %s left in place, will retry", path);
 			continue;
 		}
 		manifest_record(path, have);
@@ -1160,6 +1533,44 @@ static void vault_scan(const struct cfg *c)
 }
 
 /* ---- main loop ---- */
+
+/*
+ * A read of the ring returns whatever bytes are queued, so one record can
+ * end in the next read. Keep the unfinished tail and handle only complete
+ * lines: logging the two halves as separate lines would corrupt the record
+ * and lose the action it calls for.
+ */
+static char ev_buf[8192];
+static size_t ev_have;
+
+static void drain_events(const struct cfg *c, int fd)
+{
+	ssize_t n = read(fd, ev_buf + ev_have, sizeof(ev_buf) - 1 - ev_have);
+	char *line, *nl;
+
+	if (n <= 0)
+		return;
+	ev_have += (size_t)n;
+	ev_buf[ev_have] = '\0';
+	line = ev_buf;
+	while ((nl = memchr(line, '\n', ev_have - (size_t)(line - ev_buf)))) {
+		*nl = '\0';
+		if (nl > line) {
+			write_log(c, line, (size_t)(nl - line));
+			handle_event(c, line);
+		}
+		line = nl + 1;
+	}
+	ev_have -= (size_t)(line - ev_buf);
+	memmove(ev_buf, line, ev_have);
+	if (ev_have >= sizeof(ev_buf) / 2) {
+		/* No kernel record is this long: resynchronise. */
+		local_log_failures++;
+		syslog_line("secure-sudod: discarded %zu bytes of unterminated event data",
+			    ev_have);
+		ev_have = 0;
+	}
+}
 
 int main(void)
 {
@@ -1214,25 +1625,8 @@ int main(void)
 					strerror(errno));
 		}
 
-		if (rc > 0 && (pfd.revents & POLLIN)) {
-			char buf[4096];
-			ssize_t n = read(pfd.fd, buf, sizeof(buf) - 1);
-
-			if (n > 0) {
-				char *line, *save;
-
-				buf[n] = '\0';
-				for (line = strtok_r(buf, "\n", &save); line;
-				     line = strtok_r(NULL, "\n", &save)) {
-					char message[512];
-
-					write_log(&cfg, line, strlen(line));
-					event_message(line, message, sizeof(message));
-					maybe_cooldown(message);
-					maybe_quarantine_denied(&cfg, message);
-				}
-			}
-		}
+		if (rc > 0 && (pfd.revents & POLLIN))
+			drain_events(&cfg, pfd.fd);
 
 		/* Periodic work roughly every 5s. */
 		if (now - last_periodic >= 5) {

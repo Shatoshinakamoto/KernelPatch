@@ -138,10 +138,13 @@ static void record_failure(uid_t uid)
 		e->block_until = now + (unsigned long)blktime * HZ;
 		pr_warn_ratelimited("cooldown: UID %u blocked from sudo for %us (%u fails)\n",
 				    uid, blktime, e->fails);
-		ss_event_typed("sudo_cooldown", "user", "authenticate",
-			       "sudo", "deny", "failure_threshold",
-			       "cooldown: UID %u blocked from sudo %us after %u fails",
-			       uid, blktime, e->fails);
+		/* target_uid is what secure-sudod acts on (it kills this
+		 * UID's sudo/su processes); never make it parse the text. */
+		ss_event_typed_uid("sudo_cooldown", "user",
+				   make_kuid(&init_user_ns, uid), "authenticate",
+				   "sudo", "deny", "failure_threshold",
+				   "cooldown: UID %u blocked from sudo %us after %u fails",
+				   uid, blktime, e->fails);
 	}
 	spin_unlock(&fail_lock);
 }
