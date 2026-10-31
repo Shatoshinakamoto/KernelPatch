@@ -129,6 +129,9 @@ step site G "set -e
 	chmod 0755 /etc/grub.d/01_password
 	sed -i 's/^CLASS=\"--class gnu-linux --class gnu --class os\"/CLASS=\"--class gnu-linux --class gnu --class os --unrestricted\"/' /etc/grub.d/10_linux
 	grep -q -- '--unrestricted' /etc/grub.d/10_linux
+	# Test only: GRUB on the serial console as well, so a boot that stops in
+	# GRUB shows in the console log.
+	printf '%s\\n' 'GRUB_TERMINAL=\"console serial\"' 'GRUB_SERIAL_COMMAND=\"serial --unit=0 --speed=115200\"' > /etc/default/grub.d/90-ss-vmtest-serial.cfg
 	update-grub
 	grep -q '^set superusers' /boot/grub/grub.cfg
 	echo 'server 10.0.2.2 iburst maxpoll 16' > /etc/chrony/conf.d/site.conf
@@ -158,6 +161,12 @@ GT id -u > "$RES/tester-sudo.log" 2>&1; eq "tester can reach root through sudo" 
 SH='bash /root/ss/KernelPatch-merged/scripts/stig-harden.sh --tailoring /root/stig-vm-tailoring.xml'
 step remediate GTJOB "$SH --remediate --yes --outdir /var/log/secure_sudo/stig/remediate"
 check "baseline scan, remediation and rescan ran to the end" sh -c "[ $GRC -eq 0 ] && grep -q 'remediation complete' '$LAST'"
+# Before the reboot: with the GRUB password set, the default entry must boot
+# without it (install.sh keeps every kernel at the top level of the menu;
+# Ubuntu's Advanced submenu is never --unrestricted).
+step verify-hardened GT "$I verify"
+grep -E 'GRUB password|^verify:' "$LAST" | sed 's/^/# /'
+check "the default boot entry needs no GRUB password (install.sh verify)" sh -c "grep -q 'saved_entry boots without it' '$LAST' && ! grep -q 'needs it to boot' '$LAST'"
 # If the hardened guest does not answer after its reboot, the serial console
 # is all there is. A one-shot unit (removed once it has run) writes the
 # state of the services that decide whether SSH works to that console.

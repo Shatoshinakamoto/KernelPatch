@@ -42,7 +42,10 @@ firmware write, no partition change. Keep a root session open throughout
       Re-arm (`install.sh install-kernel`), boot it, `install.sh verify
       --commit`.
 - [ ] From the boot menu (hold `Shift` on BIOS, `Esc` on UEFI) the previous
-      kernel is listed under *Advanced options* and boots.
+      kernel is listed (at the top level) and boots.
+- [ ] With a GRUB password set (STIG `grub2_password`, `--unrestricted`
+      entries): `install.sh verify` says `saved_entry boots without it`,
+      and a reboot needs no password.
 
 ## 2. Secure Boot and MOK (UEFI machines with Secure Boot on)
 

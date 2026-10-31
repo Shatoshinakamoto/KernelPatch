@@ -104,6 +104,7 @@ check "the boot menu has the new kernel" G "grep -q 'vmlinuz-$REL ' /boot/grub/g
 check "the boot menu still has $PREV" G "grep -q 'vmlinuz-$PREV ' /boot/grub/grub.cfg"
 check "GRUB default stays on $PREV" G "grub-editenv list | grep -q '^saved_entry=.*gnulinux-$PREV-advanced'"
 check "the next boot (only) is the new kernel" G "grub-editenv list | grep -q '^next_entry=.*gnulinux-$REL-advanced'"
+check "both are top-level entries (no submenu a GRUB password would hold)" G "grub-editenv list | grep -q '^next_entry=.' && ! grub-editenv list | grep -qE '^(saved_entry|next_entry)=.*>'"
 gstep userspace "$I userspace --prebuilt /root/stage"
 check "userspace install succeeds" test "$GRC" -eq 0
 gstep verify-before-reboot "$I verify"

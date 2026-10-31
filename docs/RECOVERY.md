@@ -16,7 +16,8 @@ for the same reason.
 |---|---|---|
 | New kernel does not boot (trial) | Power-cycle; the previous kernel boots by itself | yes |
 | New kernel misbehaves after `verify --commit` | `install.sh rollback`, reboot | yes |
-| No running system to run that from | GRUB menu → Advanced options → previous kernel | no (cloud image has no menu timeout) |
+| No running system to run that from | GRUB menu → previous kernel | no (cloud image has no menu timeout) |
+| Every boot stops at a GRUB password prompt | Enter it once; then section 1, "GRUB password" | no (the cause was found and fixed in CI) |
 | Secure Boot rejects the kernel | Enroll the MOK, re-run `install-kernel` | no (VM boots BIOS) |
 | Package install interrupted / dpkg error | `dpkg --configure -a`, then `install.sh verify` or `install.sh uninstall` | partly (host suite) |
 | Wrong `admin_gid` (sudo users lose sudo) | Root session: fix, `secure-sudo lint`, `secure-sudo load` | yes |
@@ -42,11 +43,25 @@ reboots by itself after 10 seconds.
 * **Trouble after you committed it** (`install.sh verify --commit` made it the
   default): from the running system, `install.sh rollback` boots the previous
   kernel once; `install.sh rollback --default` makes it the default again.
-* **Cannot get to a running system:** pick the previous kernel in GRUB under
-  *Advanced options*. To see the menu, hold `Shift` (BIOS) or tap `Esc`
-  (UEFI) while booting; on images with `GRUB_TIMEOUT=0` use the serial or
-  hypervisor console. If GRUB itself is broken, boot rescue media, chroot into
+* **Cannot get to a running system:** pick the previous kernel in the GRUB
+  menu (the installer lists every kernel at the top level; without its
+  drop-in, Ubuntu keeps them under *Advanced options*). To see the menu,
+  hold `Shift` (BIOS) or tap `Esc` (UEFI) while booting; on images with
+  `GRUB_TIMEOUT=0` use the serial or hypervisor console. If GRUB itself is broken, boot rescue media, chroot into
   the root file system and run `update-grub`.
+* **GRUB password: every boot waits at a prompt.** With a GRUB superuser
+  (STIG `grub2_password`), any entry or submenu without `--unrestricted`
+  needs the password to boot. `install.sh verify` reports it (`saved_entry
+  needs it to boot`). Enter the password at the console once, then:
+  1. give the entries `--unrestricted` (on Debian/Ubuntu, add it to `CLASS`
+     in `/etc/grub.d/10_linux`);
+  2. run `install.sh install-kernel` again with the current installer, which
+     rewrites `/etc/default/grub.d/99-secure-sudo.cfg` with
+     `GRUB_DISABLE_SUBMENU=true` (Ubuntu's *Advanced options* submenu is
+     never `--unrestricted`); or add that line yourself, run `update-grub`
+     and `grub-set-default gnulinux-<release>-advanced-<uuid>` (the id from
+     `grep -o "gnulinux-[^']*-advanced-[^']*" /boot/grub/grub.cfg`);
+  3. `install.sh verify` shows `saved_entry boots without it`.
 * **Trial boot was not available** (preflight said so: not GRUB, or
   `GRUB_DEFAULT` is not `saved` on a non-Debian system, or `SS_TRIAL_BOOT=0`):
   the new kernel is the default; use the menu as above.
