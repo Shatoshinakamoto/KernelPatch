@@ -323,7 +323,9 @@ key-custody limitations.
 
 ## `userspace/daemon/helpers/evidence-verify.py`
 
-Invoked by `secure-sudo evidence-verify ARCHIVE.tar.gz [--trusted-key PUBLIC.pem]`.
+Invoked by `secure-sudo evidence-verify ARCHIVE.tar.gz [--trusted-key PUBLIC.pem]
+[--checkpoints COLLECTOR.log]`. `--checkpoints` matches the bundle's logs
+against the `log_checkpoint` records the remote collector received.
 It rejects unsafe archive members, verifies that the checksum manifest covers
 the payload, recomputes each exported log chain, and validates detached
 signatures against an independently supplied trusted public key. It never

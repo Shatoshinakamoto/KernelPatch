@@ -4,6 +4,7 @@
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -174,12 +175,103 @@ def verify_signature(public_key, message_path, signature_path):
         raise VerificationError("signature verification failed")
 
 
-def verify_bundle(archive, trusted_key):
+CHECKPOINT_LOG = re.compile(r"^[A-Za-z0-9._-]{1,64}\.log$")
+
+
+def load_checkpoints(path):
+    """log_checkpoint records as the collector received them.
+
+    Each line may carry a syslog header in front of the JSON record, so the
+    record is taken from the first "{" on the line. Lines that are not a
+    secure-sudod log_checkpoint are ignored.
+    """
+    found = []
+    try:
+        with open(path, "rb") as source:
+            for raw in source:
+                start = raw.find(b"{")
+                if start < 0 or b"log_checkpoint" not in raw:
+                    continue
+                try:
+                    record = json.loads(raw[start:].decode("utf-8", "strict"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if (not isinstance(record, dict) or
+                        record.get("source") != "secure-sudod" or
+                        record.get("event_type") != "log_checkpoint"):
+                    continue
+                log, lines, chain = (record.get("log"), record.get("lines"),
+                                     record.get("chain"))
+                if (not isinstance(log, str) or not CHECKPOINT_LOG.match(log) or
+                        not isinstance(lines, int) or lines < 0 or
+                        not isinstance(chain, str) or
+                        not re.fullmatch(r"[0-9a-f]{64}", chain)):
+                    raise VerificationError(
+                        "malformed log_checkpoint record in {}".format(path))
+                found.append((log, lines, chain))
+    except OSError as error:
+        raise VerificationError("cannot read checkpoints: {}".format(error))
+    return found
+
+
+def verify_checkpoints(chain, checkpoints):
+    """Check off-host checkpoints against the bundle's per-line chain.
+
+    `chain` is event-chain.txt, already proven to match the exported logs:
+    for every log it lists the chain value after each line. A checkpoint
+    (log, N, C) holds iff the value after line N of that log is C (or, for
+    N = 0, the log's starting value). Returns a list of report lines.
+    """
+    after = {}
+    for line in chain.decode("ascii").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2:
+            after.setdefault(parts[0], []).append(parts[1])
+    report, matched = [], 0
+    for log, lines, value in checkpoints:
+        if log not in after and lines > 0:
+            report.append("checkpoint {} line {}: log not in this bundle".format(log, lines))
+            continue
+        values = after.get(log, [])
+        if lines == 0:
+            start = hashlib.sha256(
+                b"secure_sudo-event-chain-v1\t" + log.encode("ascii") + b"\n"
+            ).hexdigest()
+            ok = value == start
+        elif lines > len(values):
+            raise VerificationError(
+                "{} has {} lines but an off-host checkpoint covers {}: the "
+                "log was truncated or replaced".format(log, len(values), lines))
+        else:
+            ok = values[lines - 1] == value
+        if not ok:
+            raise VerificationError(
+                "{} does not match the off-host checkpoint at line {}: the "
+                "log was changed after it was checkpointed".format(log, lines))
+        matched += 1
+    if checkpoints and not matched:
+        raise VerificationError("no off-host checkpoint covers a log in this bundle")
+    if matched:
+        last = {}
+        for log, lines, _ in checkpoints:
+            if log in after:
+                last[log] = max(last.get(log, 0), lines)
+        for log in sorted(last):
+            tail = len(after[log]) - last[log]
+            report.append("{}: lines 1-{} match an off-host checkpoint; {} later "
+                          "line(s) are not yet anchored".format(log, last[log], tail))
+    return matched, report
+
+
+def verify_bundle(archive, trusted_key, checkpoints=None):
     with tempfile.TemporaryDirectory(prefix="secure-sudo-verify-") as temp:
         root = Path(temp)
         extract_bundle(archive, root)
         manifest_path = verify_checksums(root)
         chain = verify_event_chain(root)
+        report = []
+        if checkpoints is not None:
+            _, report = verify_checkpoints(chain, checkpoints)
 
         manifest_hash_path = root / "bundle-manifest.sha256"
         manifest_signature = root / "bundle-manifest.sig"
@@ -208,6 +300,7 @@ def verify_bundle(archive, trusted_key):
                 final.flush()
                 verify_signature(trusted_key, final.name, chain_signature)
             verify_signature(trusted_key, manifest_hash_path, manifest_signature)
+        return report
 
 
 def main():
@@ -216,14 +309,22 @@ def main():
     )
     parser.add_argument("archive", help="evidence .tar.gz created by secure-sudo evidence-export")
     parser.add_argument("--trusted-key", help="trusted PEM public key for signed bundles")
+    parser.add_argument(
+        "--checkpoints",
+        help="log_checkpoint records as received by the remote collector; "
+             "each must match the bundle's logs")
     args = parser.parse_args()
 
     if args.trusted_key and not Path(args.trusted_key).is_file():
         parser.error("--trusted-key must name a readable public-key file")
     try:
-        verify_bundle(args.archive, args.trusted_key)
+        checkpoints = (load_checkpoints(args.checkpoints)
+                       if args.checkpoints else None)
+        report = verify_bundle(args.archive, args.trusted_key, checkpoints) or []
     except VerificationError as error:
         parser.exit(1, "secure-sudo evidence-verify: {}\n".format(error))
+    for line in report:
+        print("secure-sudo evidence-verify: " + line)
     print("secure-sudo evidence-verify: bundle integrity verified")
 
 

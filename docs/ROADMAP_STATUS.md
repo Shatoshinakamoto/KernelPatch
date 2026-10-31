@@ -30,10 +30,10 @@ nothing is pushed from here.
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
-| P1-1 | partly (active) | schema-v1 JSON events, boot/sequence/clock/actor fields, typed fields across denial producers, ring + audit loss counters; target identity and deferred actor attribution remain incomplete |
-| P1-2 | partly (active) | opt-in authenticated RFC 5425 TLS, bounded persistent queue/retry, and queue/error health reporting; collector acknowledgment and integration proof remain |
-| P1-3 | partly (active) | root-only evidence export with checksums, per-log hash chains and optional externally-held Ed25519 signing key; no periodic signed checkpoints or tabletop |
-| P1-4 | partly (active) | `secure-sudo health [--json]` validates the configured audit feed, fresh root-owned heartbeat/metrics, configured/live knobs, boot-bound last load outcome/counts/rejected setting names, event loss, local log failures, remote queue/errors and optional add-on/timer state including scan results/age; collector receipt remains |
+| P1-1 | partly (active) | schema-v1 JSON events with typed fields; sequence numbers given in ring order so gaps are exact; `events_sequence`/`events_boot_id`; the daemon logs `event_stream`/`event_gap` records and keeps a restart cursor; health shows gaps. Remaining: some targets are labels rather than typed PID/UID; long paths are only complete in `message`; deferred-work actor attribution |
+| P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
+| P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
+| P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
 | P1-5 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
@@ -367,18 +367,41 @@ the rest of the suite pass in the GitHub build gate.
 `secure-sudo evidence-export OUTPUT.tar.gz` creates a root-only bundle with
 logs, non-secret configuration snapshots, live knobs/counters, boot/kernel/LSM
 identity, service state, quarantine metadata and a SHA-256 manifest. It also
-builds per-log hash chains and can sign each final chain checkpoint and the
-checksum manifest with an operator-supplied Ed25519 key; the corresponding
-public key is included.
+builds per-log hash chains. With an operator-supplied Ed25519 key it signs
+the last log's final chain value and the checksum manifest, which covers
+every log and `event-chain.txt`; the corresponding public key is included.
+The chain is now computed in one Python pass, falling back to the shell
+loop, which took minutes for a 100k-line day; a test checks that both write
+the same chain.
+
+Off-host checkpoints (new):
+
+* `secure-sudod` keeps the same chain over its local log as it writes.
+* At start and every 5 minutes it logs and forwards a `log_checkpoint`
+  record with the log name, line count and chain value.
+* The collector's copies are the integrity anchor that is never stored on
+  the monitored host. `evidence-verify --checkpoints COLLECTOR.log` fails a
+  bundle whose log was edited or truncated after a checkpoint, and reports
+  how much of each log is anchored.
+* If the log changes underneath the daemon (appended, truncated or
+  replaced by anyone else), it records `log_modified`.
+* Daemon messages can no longer split into extra log lines.
+* Tests:
+  - the C chain is checked against an independent Python one;
+  - edited, truncated and malformed-checkpoint cases fail as they should.
 Quarantined file contents and key/token/password-named config files are not
 exported. The exporter leaves source evidence untouched.
 
 `docs/INCIDENT_RESPONSE.md` documents the root-only retention hold, external
 key custody/rotation steps, chain-of-custody records, and a tabletop procedure.
 The daemon preserves logs while the hold marker is valid and reports `held` or
-`hold_error` through health. Still missing for *Done*: periodic checkpoints
-signed off-host, stronger secret redaction review, and a completed
-chain-of-custody tabletop. Independent verification is
+`hold_error` through health. Still missing for *Done*:
+
+* A stronger review of secret redaction.
+* A completed chain-of-custody tabletop. People have to run it, with the
+  steps in INCIDENT_RESPONSE.md, now including the checkpoint check.
+* Checkpoints are anchored by the collector's copy, not signed. A host that
+  never forwards has only its own word, plus signed exports. Independent verification is
 implemented in `secure-sudo evidence-verify`; the test suite validates
 unsigned and signed bundles and rejects tampering, untrusted keys and unsafe
 archive paths.

@@ -324,6 +324,31 @@ int main(int argc, char **argv)
 		    "the heartbeat carries the gap counters and is renamed into place");
 	}
 
+	/* ---- P1-3: checkpoints, outside changes, one line per record ---- */
+	{
+		char lp[512];
+		FILE *f;
+
+		syslog_line("crafted\n{\"schema_version\":1,\"forged\":true}");
+		tap(log_contains("crafted?{\"schema_version\":1,\"forged\":true}") == 1,
+		    "a newline in a daemon message cannot start a forged record");
+		log_checkpoint(&cfg);
+		tap(log_contains("\"event_type\":\"log_checkpoint\"") == 1,
+		    "a log_checkpoint record is written");
+		todays_logpath(lp, sizeof(lp));
+		f = fopen(lp, "ae");
+		if (!f)
+			return 1;
+		fputs("written behind the daemon's back\n", f);
+		fclose(f);
+		syslog_line("after the outside write");
+		tap(log_contains("\"event_type\":\"log_modified\"") == 1,
+		    "a log changed outside the daemon is recorded (log_modified)");
+		log_checkpoint(&cfg);
+		tap(log_contains("\"event_type\":\"log_checkpoint\"") == 2,
+		    "the next checkpoint covers the file as it is now");
+	}
+
 	printf("1..%d\n", n_test);
 	return n_fail ? 1 : 0;
 }

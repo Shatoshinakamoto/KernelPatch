@@ -120,9 +120,36 @@ if [[ -d $STATEDIR/quarantine ]]; then
 		> "$BUNDLE/quarantine/sha256sums.txt"
 fi
 
+# The per-line hash chain (checked by evidence-verify and matched against the
+# daemon's off-host log_checkpoint records). Python does this in one pass; the
+# shell fallback runs two processes per line, which took minutes for a
+# 100k-line day.
 : > "$BUNDLE/event-chain.txt"
 chain_count=0
+if command -v python3 >/dev/null 2>&1; then
+	python3 -I - "$BUNDLE/logs" "$BUNDLE/event-chain.txt" <<'PY'
+import hashlib, os, sys
+logs, out = sys.argv[1], sys.argv[2]
+names = sorted(n for n in os.listdir(logs)
+               if n.endswith(".log") and os.path.isfile(os.path.join(logs, n)))
+with open(out, "wb") as dst:
+    if not names:
+        c = hashlib.sha256(b"secure_sudo-event-chain-v1\tno-logs\n").hexdigest()
+        dst.write(b"no-logs\tFINAL\t" + c.encode() + b"\n")
+    for name in names:
+        bname = os.fsencode(name)
+        c = hashlib.sha256(b"secure_sudo-event-chain-v1\t" + bname + b"\n").hexdigest()
+        with open(os.path.join(logs, name), "rb") as src:
+            for raw in src:
+                line = raw[:-1] if raw.endswith(b"\n") else raw
+                c = hashlib.sha256(c.encode() + b"\t" + line + b"\n").hexdigest()
+                dst.write(bname + b"\t" + c.encode() + b"\n")
+        dst.write(bname + b"\tFINAL\t" + c.encode() + b"\n")
+PY
+	chain_count=-1
+fi
 for logfile in "$BUNDLE"/logs/*.log; do
+	[[ $chain_count -ge 0 ]] || break
 	[[ -f $logfile ]] || continue
 	chain_count=$((chain_count + 1))
 	chain=$(printf 'secure_sudo-event-chain-v1\t%s\n' "$(basename -- "$logfile")" |
@@ -135,7 +162,7 @@ for logfile in "$BUNDLE"/logs/*.log; do
 	printf '%s\tFINAL\t%s\n' "$(basename -- "$logfile")" "$chain" \
 		>> "$BUNDLE/event-chain.txt"
 done
-if [[ $chain_count -eq 0 ]]; then
+if [[ $chain_count -eq 0 ]]; then	# shell path, no logs
 	chain=$(printf 'secure_sudo-event-chain-v1\tno-logs\n' |
 		sha256sum | cut -d ' ' -f 1)
 	printf 'no-logs\tFINAL\t%s\n' "$chain" >> "$BUNDLE/event-chain.txt"

@@ -704,17 +704,156 @@ static void forward_remote(const struct cfg *c, const char *line, size_t len)
 	send_remote(c, line, len);
 }
 
+/*
+ * ---- P1-3: hash chain over the local log, checkpointed off-host ----
+ *
+ * The daemon keeps the same per-file chain that `evidence-export` writes
+ * and `evidence-verify` checks: c0 = sha256("secure_sudo-event-chain-v1\t"
+ * NAME "\n"), then c = sha256(hex(c) "\t" LINE "\n") for every line. Every
+ * CHECKPOINT_SECS it logs and forwards a log_checkpoint record with the
+ * file name, line count and chain value. The copies at the collector are
+ * the anchor that is not stored only on this host: rewriting or truncating
+ * a log here afterwards no longer matches them (`evidence-verify
+ * --checkpoints`). The records also tell the collector the daemon is alive.
+ */
+#ifndef CHECKPOINT_SECS
+#define CHECKPOINT_SECS 300
+#endif
+static char chain_name[64];		/* log file the chain covers */
+static char chain_hex[65];
+static unsigned long long chain_lines;
+static unsigned long long chain_bytes;	/* file size the chain accounts for */
+static int chain_ok;			/* 0: re-read the file before use */
+
+static void sha256_bytes_hex(const void *a, size_t alen, const void *b,
+			     size_t blen, const void *c, size_t clen,
+			     char out[65])
+{
+	unsigned char d[EVP_MAX_MD_SIZE];
+	unsigned int dlen = 0, i;
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+	out[0] = '\0';
+	if (!ctx)
+		return;
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+	    EVP_DigestUpdate(ctx, a, alen) == 1 &&
+	    EVP_DigestUpdate(ctx, b, blen) == 1 &&
+	    EVP_DigestUpdate(ctx, c, clen) == 1 &&
+	    EVP_DigestFinal_ex(ctx, d, &dlen) == 1)
+		for (i = 0; i < dlen && i < 32; i++)
+			snprintf(out + 2 * i, 3, "%02x", d[i]);
+	EVP_MD_CTX_free(ctx);
+}
+
+static void chain_step(const char *line, size_t len)
+{
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	unsigned char d[EVP_MAX_MD_SIZE];
+	unsigned int dlen = 0, i;
+
+	if (!ctx) {
+		chain_ok = 0;
+		return;
+	}
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+	    EVP_DigestUpdate(ctx, chain_hex, 64) == 1 &&
+	    EVP_DigestUpdate(ctx, "\t", 1) == 1 &&
+	    EVP_DigestUpdate(ctx, line, len) == 1 &&
+	    EVP_DigestUpdate(ctx, "\n", 1) == 1 &&
+	    EVP_DigestFinal_ex(ctx, d, &dlen) == 1 && dlen == 32) {
+		for (i = 0; i < dlen; i++)
+			snprintf(chain_hex + 2 * i, 3, "%02x", d[i]);
+		chain_lines++;
+		chain_bytes += len + 1;
+	} else {
+		chain_ok = 0;
+	}
+	EVP_MD_CTX_free(ctx);
+}
+
+/* Start the chain for @name and replay what @path already holds. */
+static void chain_sync(const char *path, const char *name)
+{
+	char head[128];
+	FILE *f;
+	char *line = NULL;
+	size_t cap = 0;
+	ssize_t n;
+	int len;
+
+	snprintf(chain_name, sizeof(chain_name), "%s", name);
+	len = snprintf(head, sizeof(head), "secure_sudo-event-chain-v1\t%s\n",
+		       name);
+	sha256_bytes_hex(head, (size_t)len, "", 0, "", 0, chain_hex);
+	chain_lines = 0;
+	chain_bytes = 0;
+	chain_ok = chain_hex[0] != '\0';
+	f = fopen(path, "re");
+	if (!f) {
+		if (errno != ENOENT)
+			chain_ok = 0;
+		return;
+	}
+	while (chain_ok && (n = getline(&line, &cap, f)) > 0) {
+		int nl = line[n - 1] == '\n';
+
+		chain_step(line, (size_t)(n - nl));
+		if (!nl)
+			chain_bytes--;	/* a last line without its newline */
+	}
+	if (ferror(f))
+		chain_ok = 0;
+	free(line);
+	fclose(f);
+}
+
+static const char *log_basename(const char *path)
+{
+	const char *b = strrchr(path, '/');
+
+	return b ? b + 1 : path;
+}
+
+static void daemon_record(const struct cfg *c, const char *type,
+			  const char *fmt, ...);
+
 static void write_local_log(const struct cfg *c, const char *line, size_t len)
 {
-	char path[512];
+	char path[512], clean[2048];
+	unsigned long long was = 0, found = 0;
+	struct stat st;
 	FILE *f;
-	int failed = 0, saved = 0;
+	int failed = 0, saved = 0, changed = 0;
 
+	while (len && line[len - 1] == '\n')
+		len--;
+	/* One record, one physical line: an embedded newline (a crafted file
+	 * name in a daemon message) must not start a forged record. */
+	if (memchr(line, '\n', len) || memchr(line, '\r', len)) {
+		size_t i;
+
+		if (len > sizeof(clean))
+			len = sizeof(clean);
+		for (i = 0; i < len; i++)
+			clean[i] = line[i] == '\n' || line[i] == '\r' ? '?' : line[i];
+		line = clean;
+	}
 	todays_logpath(path, sizeof(path));
+	if (!chain_ok || strcmp(chain_name, log_basename(path)))
+		chain_sync(path, log_basename(path));
 	f = fopen(path, "ae");
+	if (f && chain_ok && fstat(fileno(f), &st) == 0 &&
+	    (unsigned long long)st.st_size != chain_bytes) {
+		/* Someone else wrote, truncated or replaced the log since we
+		 * last did: note it, and chain what the file holds now. */
+		was = chain_bytes;
+		found = (unsigned long long)st.st_size;
+		changed = 1;
+		chain_sync(path, log_basename(path));
+	}
 	if (f) {
-		if (fwrite(line, 1, len, f) != len ||
-		    ((len == 0 || line[len - 1] != '\n') && fputc('\n', f) == EOF) ||
+		if (fwrite(line, 1, len, f) != len || fputc('\n', f) == EOF ||
 		    ferror(f))
 			failed = 1;
 		if (fclose(f) != 0)
@@ -725,10 +864,34 @@ static void write_local_log(const struct cfg *c, const char *line, size_t len)
 	if (failed) {
 		saved = errno ? errno : EIO;
 		local_log_failures++;
+		chain_ok = 0;		/* re-read the file: it may hold a partial line */
 		fprintf(stderr, "secure-sudod: cannot write local event log %s: %s\n",
 			path, strerror(saved));
+	} else if (chain_ok) {
+		chain_step(line, len);
 	}
-	(void)c;
+	if (changed)
+		daemon_record(c, "log_modified",
+			      "\"log\":\"%s\",\"expected_bytes\":%llu,"
+			      "\"found_bytes\":%llu", chain_name, was, found);
+}
+
+/* Log and forward a log_checkpoint record for today's log (P1-3). */
+
+static void log_checkpoint(const struct cfg *c)
+{
+	char path[512];
+
+	todays_logpath(path, sizeof(path));
+	if (!chain_ok || strcmp(chain_name, log_basename(path)))
+		chain_sync(path, log_basename(path));
+	if (!chain_ok)
+		return;
+	/* The values cover the lines before this record; the record itself
+	 * is the next line of the chain. */
+	daemon_record(c, "log_checkpoint",
+		      "\"log\":\"%s\",\"lines\":%llu,\"chain\":\"%s\"",
+		      chain_name, chain_lines, chain_hex);
 }
 
 static void write_log(const struct cfg *c, const char *line, size_t len)
@@ -958,6 +1121,11 @@ static void syslog_line(const char *fmt, ...)
 	va_end(ap);
 	if (n < 0)
 		return;
+	if ((size_t)n >= sizeof(buf))
+		n = sizeof(buf) - 1;
+	for (int i = 0; i < n; i++)	/* paths can hold any byte */
+		if ((unsigned char)buf[i] < 0x20 || buf[i] == 0x7f)
+			buf[i] = '?';
 	if (g_cfg)
 		write_log(g_cfg, buf, n);
 }
@@ -1522,7 +1690,8 @@ static void track_sequence(const struct cfg *c, const struct ss_ev *e)
 {
 	unsigned long long seq;
 
-	if (e->schema != 1 || !e->boot_id[0] || e->sequence <= 0)
+	if (e->schema != 1 || strlen(e->boot_id) != 32 ||
+	    strspn(e->boot_id, "0123456789abcdef") != 32 || e->sequence <= 0)
 		return;
 	seq = (unsigned long long)e->sequence;
 	if (strcmp(e->boot_id, ev_boot)) {
@@ -1868,6 +2037,7 @@ int main(void)
 	time_t last_periodic = 0;
 	time_t last_pbox = 0;
 	time_t last_health = 0;
+	time_t last_checkpoint = 0;
 
 	signal(SIGHUP, on_hup);
 	signal(SIGTERM, on_term);
@@ -1916,6 +2086,11 @@ int main(void)
 		if (rc > 0 && (pfd.revents & POLLIN))
 			drain_events(&cfg, pfd.fd);
 		maybe_flush_remote(&cfg, time(NULL));
+
+		if (now - last_checkpoint >= CHECKPOINT_SECS) {
+			last_checkpoint = now;
+			log_checkpoint(&cfg);
+		}
 
 		/* Periodic work roughly every 5s. */
 		if (now - last_periodic >= 5) {
