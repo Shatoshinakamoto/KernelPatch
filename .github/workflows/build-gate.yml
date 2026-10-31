@@ -70,6 +70,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space for the kernel build
+        run: |
+          # install.sh build-kernel wants ~20 GB; the runner image leaves
+          # ~12 GB. Drop preinstalled SDKs this job never uses.
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            /usr/local/share/powershell /usr/local/share/chromium
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
       - name: Tools
         run: |
           sudo apt-get update
