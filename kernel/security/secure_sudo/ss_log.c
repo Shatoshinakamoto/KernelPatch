@@ -62,6 +62,21 @@ u64 ss_audit_events_dropped(void)
 	return atomic64_read(&ss_audit_dropped);
 }
 
+/* Last sequence number given to a record this boot (0: none yet). */
+u64 ss_events_sequence(void)
+{
+	return atomic64_read(&ss_event_sequence);
+}
+
+/* This boot's event-stream id, as the records carry it (32 hex digits). */
+void ss_events_boot_id(char out[33])
+{
+	int i;
+
+	for (i = 0; i < (int)sizeof(ss_boot_id); i++)
+		snprintf(out + 2 * i, 3, "%02x", ss_boot_id[i]);
+}
+
 /*
  * Optional second sink: the kernel audit subsystem, so auditd / ausearch /
  * SIEM pipelines get every secure_sudo event as an AUDIT_KERNEL_OTHER record
@@ -177,10 +192,13 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	unsigned int uid;
 	bool truncated = false;
 	static const int field_budgets[] = { 32, 24, 64, 16, 40 };
-	const char *typed_values[5];
 
-	if (!READ_ONCE(ss_ring_ready))
+	if (!READ_ONCE(ss_ring_ready)) {
+		/* Before securityfs is up there is nowhere to put it: count
+		 * it, so the loss is visible rather than silent. */
+		atomic64_inc(&ss_ring_dropped);
 		return;
+	}
 
 	msg_len = vscnprintf(message, sizeof(message), fmt, args);
 	if (msg_len == sizeof(message) - 1)
@@ -212,16 +230,18 @@ static void ss_event_v(const struct ss_event_fields *fields,
 		else
 			event_type[type_len] = '\0';
 	}
-	typed_values[0] = fields ? fields->target : NULL;
-	typed_values[1] = fields ? fields->operation : NULL;
-	typed_values[2] = fields ? fields->object : NULL;
-	typed_values[3] = fields ? fields->decision : NULL;
-	typed_values[4] = fields ? fields->reason : NULL;
+	uid = from_kuid_munged(&init_user_ns, current_uid());
+	/*
+	 * Number, stamp and queue the record under the ring lock, so records
+	 * reach the ring in sequence order: a consumer can then treat any
+	 * jump in "sequence" as records lost (dropped from a full ring), not
+	 * as two CPUs racing between numbering and queueing.
+	 */
+	spin_lock_irqsave(&ss_ring_lock, flags);
 	ktime_get_real_ts64(&ts);
 	realtime_ns = (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 	monotonic_ns = ktime_get_ns();
 	seq = atomic64_inc_return(&ss_event_sequence);
-	uid = from_kuid_munged(&init_user_ns, current_uid());
 	n = scnprintf(line, sizeof(line),
 		      "{\"schema_version\":1,\"boot_id\":\"");
 	for (i = 0; i < (int)sizeof(ss_boot_id); i++)
@@ -237,15 +257,15 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	n += scnprintf(line + n, sizeof(line) - n,
 		       ",\"actor\":{\"pid\":%d,\"uid\":%u},",
 		       current->pid, uid);
-	n = ss_json_field(line, n, "target", typed_values[0],
+	n = ss_json_field(line, n, "target", fields ? fields->target : NULL,
 			  field_budgets[0], &truncated);
-	n = ss_json_field(line, n, "operation", typed_values[1],
+	n = ss_json_field(line, n, "operation", fields ? fields->operation : NULL,
 			  field_budgets[1], &truncated);
-	n = ss_json_field(line, n, "object", typed_values[2],
+	n = ss_json_field(line, n, "object", fields ? fields->object : NULL,
 			  field_budgets[2], &truncated);
-	n = ss_json_field(line, n, "decision", typed_values[3],
+	n = ss_json_field(line, n, "decision", fields ? fields->decision : NULL,
 			  field_budgets[3], &truncated);
-	n = ss_json_field(line, n, "reason", typed_values[4],
+	n = ss_json_field(line, n, "reason", fields ? fields->reason : NULL,
 			  field_budgets[4], &truncated);
 	n = ss_json_pid_field(line, n, "target_pid",
 			      fields && fields->target_pid_valid,
@@ -258,11 +278,6 @@ static void ss_event_v(const struct ss_event_fields *fields,
 			   &truncated);
 	n += scnprintf(line + n, sizeof(line) - n,
 		       ",\"truncated\":%s}\n", truncated ? "true" : "false");
-	line[n - 1] = '\0';
-	ss_audit_event(line);
-	line[n - 1] = '\n';
-
-	spin_lock_irqsave(&ss_ring_lock, flags);
 	/*
 	 * Make room by discarding the oldest WHOLE lines, so a reader never
 	 * starts mid-event, and count each one so consumers can see that
@@ -279,6 +294,9 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 
 	wake_up_interruptible(&ss_ring_wq);
+	/* the audit copy is made outside our lock */
+	line[n - 1] = '\0';
+	ss_audit_event(line);
 }
 
 void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...)

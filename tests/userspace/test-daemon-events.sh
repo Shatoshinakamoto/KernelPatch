@@ -24,6 +24,7 @@ if ! (cd "$ROOT" && ${CC:-cc} -O2 -Wall -Wextra -Werror \
 	-DLOGDIR="\"$T/log\"" -DQUARANTINE="\"$T/quarantine\"" \
 	-DHELPER_QUAR="\"$T/quarantine-wrapper.sh\"" \
 	-DREMOTE_QUEUE="\"$T/remote-queue\"" \
+	-DEVENT_CURSOR="\"$T/event-cursor\"" -DHEALTH_FILE="\"$T/daemon.health\"" \
 	-o "$T/test-daemon-events" tests/userspace/test-daemon-events.c \
 	-lssl -lcrypto); then
 	not_ok "daemon event harness builds (-Werror)"

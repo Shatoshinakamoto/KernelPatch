@@ -293,6 +293,25 @@ The new CA-rotation assertion has not yet been rerun. A build against upstream
 OpenSSL development headers remains unverified because those headers are
 unavailable here.
 
+Gap detection is now exact:
+
+* The kernel numbers records under the ring lock, in ring order, so a
+  jump in `sequence` is precisely the records a full ring dropped.
+* It exposes `events_sequence` and `events_boot_id`.
+* It counts events raised before securityfs was ready in
+  `events_dropped`; they used to vanish without trace.
+* `secure-sudod` writes `event_stream` records (a new boot, with the
+  previous boot's id and last sequence) and `event_gap` records into the
+  log and the forwarded stream.
+* It keeps a cursor, so loss while it was stopped is also reported.
+* Health shows `event_gaps`/`events_missing`.
+* Host tests cover gaps, repeats, restarts and reboots.
+* The in-kernel test now checks that surviving records are contiguous and
+  that the gap equals `events_dropped`. That check has not run in a VM yet.
+
+So a consumer can detect gaps, correlate events across a reboot, and parse
+records without the message text.
+
 Still missing for *Done*: target values are not consistently typed PID/UID
 identities and can be descriptive labels. Cross-process memory-access events
 now include target PID and UID, but other target identities remain partial;

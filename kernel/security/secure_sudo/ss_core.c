@@ -348,6 +348,29 @@ static ssize_t audit_events_dropped_show(struct kobject *k,
 static struct kobj_attribute audit_events_dropped_attr =
 	__ATTR_RO_MODE(audit_events_dropped, 0400);
 
+/* #9 the last sequence number given to an event this boot. With
+ * events_dropped it tells a reader how much of the stream it has seen. */
+static ssize_t events_sequence_show(struct kobject *k,
+				    struct kobj_attribute *a, char *buf)
+{
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)ss_events_sequence());
+}
+static struct kobj_attribute events_sequence_attr =
+	__ATTR_RO_MODE(events_sequence, 0400);
+
+/* #9 the boot_id every event record of this boot carries. */
+static ssize_t events_boot_id_show(struct kobject *k,
+				   struct kobj_attribute *a, char *buf)
+{
+	char id[33];
+
+	ss_events_boot_id(id);
+	return sysfs_emit(buf, "%s\n", id);
+}
+static struct kobj_attribute events_boot_id_attr =
+	__ATTR_RO_MODE(events_boot_id, 0400);
+
 static struct kobj_attribute lock_attr =
 	__ATTR(lock, 0600, lock_show, lock_store);
 static struct kobj_attribute lock_modules_attr =
@@ -360,6 +383,8 @@ static struct attribute *ss_core_attrs[] = {
 	&lock_confidentiality_attr.attr,
 	&events_dropped_attr.attr,
 	&audit_events_dropped_attr.attr,
+	&events_sequence_attr.attr,
+	&events_boot_id_attr.attr,
 	NULL,
 };
 

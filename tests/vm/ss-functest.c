@@ -562,6 +562,13 @@ static size_t drain_events(char *buf, size_t len)
 	return got;
 }
 
+static unsigned long long line_seq(const char *l)
+{
+	const char *p = strstr(l, "\"sequence\":");
+
+	return p ? strtoull(p + 11, NULL, 10) : 0;
+}
+
 static int line_is_event(const char *l)
 {
 	static const char prefix[] = "{\"schema_version\":1,\"boot_id\":\"";
@@ -983,8 +990,10 @@ static void t_events(void)
 	static char buf[1 << 18];
 	size_t n;
 	char *l, *save;
-	int lines = 0, bad = 0, i;
-	char dropped[64];
+	int lines = 0, bad = 0, i, ordered = 1;
+	char dropped[64], knobval[64], boot[40] = "";
+	unsigned long long before_seq = 0, before_drop = 0, first_seq = 0;
+	unsigned long long prev = 0, s;
 
 	knob_set("perf_guard", "1");
 	(void)drain_events(buf, sizeof(buf));
@@ -1015,16 +1024,45 @@ static void t_events(void)
 
 	/* Overflow the 64 KiB ring, then check that what the reader gets is
 	 * still whole lines and that the loss is counted. */
+	if (rd(KNOB "events_sequence", knobval, sizeof(knobval)) == 0)
+		before_seq = strtoull(knobval, NULL, 10);
+	if (rd(KNOB "events_dropped", dropped, sizeof(dropped)) == 0)
+		before_drop = strtoull(dropped, NULL, 10);
 	for (i = 0; i < 3000; i++)
 		as(&NONSUDO, do_perf, NULL);
 	n = drain_events(buf, sizeof(buf));
 	for (l = strtok_r(buf, "\n", &save); l; l = strtok_r(NULL, "\n", &save)) {
+		const char *b = strstr(l, "\"boot_id\":\"");
+
 		lines++;
 		if (!line_is_event(l)) {
 			if (bad++ == 0)
 				diag("partial line after wrap: '%.60s'", l);
+			continue;
 		}
+		s = line_seq(l);
+		if (!first_seq)
+			first_seq = s;
+		if (prev && s != prev + 1)
+			ordered = 0;
+		prev = s;
+		if (b && !boot[0])
+			snprintf(boot, sizeof(boot), "%.32s", b + 11);
 	}
+	/* P1-1: numbers are given in ring order, so what survives is one
+	 * contiguous run, and the records before it are exactly the dropped
+	 * ones. */
+	tap(ordered && lines > 0, "#9 surviving records have consecutive sequence numbers");
+	if (rd(KNOB "events_dropped", dropped, sizeof(dropped)) == 0)
+		tap(first_seq == before_seq + (strtoull(dropped, NULL, 10) - before_drop) + 1,
+		    "#9 the sequence gap equals events_dropped (first %llu, before %llu)",
+		    first_seq, before_seq);
+	tap(rd(KNOB "events_sequence", knobval, sizeof(knobval)) == 0 &&
+	    strtoull(knobval, NULL, 10) == prev,
+	    "#9 events_sequence is the last record's sequence (%llu)", prev);
+	tap(rd(KNOB "events_boot_id", knobval, sizeof(knobval)) == 0 &&
+	    boot[0] && !strncmp(knobval, boot, 32),
+	    "#9 events_boot_id matches the records' boot_id");
 	diag("read %zu bytes / %d lines after overflow", n, lines);
 	tap(n > 0 && n <= 64 * 1024, "#9 ring holds at most 64 KiB after overflow (%zu)", n);
 	tap(lines > 0 && bad == 0, "#9 after wrap every line read is a whole event (%d partial)", bad);
