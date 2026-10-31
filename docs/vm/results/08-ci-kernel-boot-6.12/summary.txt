@@ -1,0 +1,21 @@
+GitHub Actions run 41203196646, job kernel-boot (commit 1c9e129, 2026-10-31)
+https://github.com/Shatoshinakamoto/KernelPatch/actions/runs/41203196646
+
+Kernel: linux-6.12.114 from kernel.org, signature-verified by
+scripts/verify-kernel-source.sh; x86_64_defconfig + kvm_guest.config +
+tests/vm/kernel.config, built by tests/vm/build-test-kernel.sh.
+Guest: tests/vm/boot-test.sh, QEMU with KVM (-cpu host) on an ubuntu-24.04
+runner, RAM-only initramfs, tests/vm/ss-functest.c as PID 1.
+
+Console lines the script keeps (job log):
+
+booting 6.12.114 under kvm (timeout 900s)
+SS_LSM lockdown,capability,landlock,yama,secure_sudo
+SS_LOCKDOWN [none] integrity confidentiality
+SS_FUNCTEST_DONE pass=126 fail=0
+SS_KERNEL_PROBLEM [    0.029141] Speculative Return Stack Overflow: WARNING: See https://kernel.org/doc/html/latest/admin-guide/hw-vuln/srso.html for mitigation options.
+
+All 126 in-kernel checks passed. The job was marked failed only because the
+problem scan matched the bare "WARNING:" in the CPU's SRSO vulnerability
+notice (an AMD host CPU passed through to the guest), not a kernel WARN()
+splat. The scan now matches "WARNING: CPU:" and "cut here" instead.

@@ -25,8 +25,8 @@ nothing is pushed from here.
 | Item | Status | One line |
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
-| P0-2 tests | partly | 421 host checks and 118/118 in-kernel checks pass; STIG gate compares rule IDs; not yet required in CI |
-| P0-3 boot proof | partly | boots and runs on upstream 6.14 in Ubuntu 24.04 VMs (install 51/51, STIG run classified); not 6.12, UEFI, other distros or hardware |
+| P0-2 tests | partly | 531 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
+| P0-3 boot proof | partly | 6.12.114 boots with secure_sudo and passes 126/126 in-kernel checks (initramfs, KVM); the full Ubuntu 24.04 install was proven on 6.14 (51/51); not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
@@ -129,10 +129,12 @@ without root):
 | `tests/install/test-install.sh` | 106 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
-`tests/vm/boot-test.sh`): historical runs passed **118/118** on upstream 6.14,
-and again 118/118 with AppArmor stacked. The source now has an additional
-cross-process target-identity assertion and updated schema checks, so those
-recorded runs do not validate the current source; a new VM run is required.
+`tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **126/126** on
+6.12.114 under KVM on 2026-10-31 against the current source, including the
+cross-process target identity, the schema checks and the P1-1 sequence
+checks (`docs/vm/results/08-ci-kernel-boot-6.12/`). Earlier runs passed
+118/118 on upstream 6.14, and 118/118 with AppArmor stacked; the stacked
+configuration has not been re-run on 6.12.
 They cover registration and stacking, knob defaults,
 modes and bounds, setid/setgroups/userns, setuid-exec allowlist, command
 blacklist (incl. hard links), `/tmp` and memfd exec, `/dev/mem`, packet
@@ -173,6 +175,7 @@ What has been booted, all under QEMU/TCG with SeaBIOS
 |---|---|---|
 | v11 LSM, upstream 6.14 | initramfs | **panic** at boot (`Ran out of static slots`, SECURITY_REVIEW #35); fixed in v12, guarded by `ci/check-lsm-hooks.sh` |
 | v12 LSM, upstream 6.14 | initramfs, PID 1 test program | 118/118, and 118/118 with AppArmor stacked |
+| current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
 | same | Ubuntu 24.04, STIG remediation | boots again after full STIG hardening with secure_sudo and AppArmor active; scan results above |
 
@@ -288,19 +291,10 @@ ring reads are now reassembled (#49). Actor UIDs are logged in the initial
 user namespace. A `truncated` boolean
 reports when the event type, typed string, or message was shortened. The
 64 KiB ring caps lines at 640 bytes, discards oldest whole records on
-saturation, and exposes a loss counter. The earlier CLI revision
-passed 92/92 checks. The earlier 103-check suite's focused audit-feed,
-scan-outcome and boot-bound load-health assertions passed. Two retention-state
-health assertions have since been added, but the updated suite could not be
-run here because its build needs missing OpenSSL development headers; the
-ownership/load cases also require root. The evidence export/verification suite
-previously passed 13/13 checks.
-The daemon and TLS forwarding
-harness compile and the original local forwarding suite passed 8/8 using
-temporary OpenSSL API declarations against the installed runtime libraries.
-The new CA-rotation assertion has not yet been rerun. A build against upstream
-OpenSSL development headers remains unverified because those headers are
-unavailable here.
+saturation, and exposes a loss counter. The CLI/health, daemon-event,
+TLS-forwarding (CA rotation included) and evidence export/verify suites
+are built against the OpenSSL development headers and run as root in the
+CI gate on every push and pull request.
 
 Gap detection is now exact:
 
@@ -316,7 +310,7 @@ Gap detection is now exact:
 * Health shows `event_gaps`/`events_missing`.
 * Host tests cover gaps, repeats, restarts and reboots.
 * The in-kernel test now checks that surviving records are contiguous and
-  that the gap equals `events_dropped`. That check has not run in a VM yet.
+  that the gap equals `events_dropped`; it passed on 6.12.114 in CI.
 
 So a consumer can detect gaps, correlate events across a reboot, and parse
 records without the message text.
