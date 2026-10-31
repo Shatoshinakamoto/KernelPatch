@@ -90,7 +90,7 @@ Done:
   (SECURITY_REVIEW #41).
 * `.github/workflows/build-gate.yml` runs the same gate on every push and
   pull request against the installer's default kernel, fetched and verified
-  from kernel.org, plus a nightly distro VM job: the installer builds the
+  from kernel.org, plus weekly/on-demand VM jobs: the installer builds the
   kernel package, then the install/recovery/removal scenario and the STIG
   release gate run on fresh Ubuntu 24.04 guests.
 
@@ -106,7 +106,7 @@ Missing:
   headers, which GitHub moves forward (6.17, then 7.0 by 2026-10-31). Each
   move can break the gate with no change in this tree; the API shims for
   6.16 to 7.0 are in `secure_sudo.h`.
-* A whole 6.12.114 kernel image is built only by the nightly/on-demand
+* A whole 6.12.114 kernel image is built only by the weekly/on-demand
   `kernel-boot` and `distro-vm` jobs, not on every push.
 * The TODO names `6.12.48`; the installer default is now `6.12.114`, the
   newest 6.12 LTS point release available when this was done.
@@ -163,7 +163,7 @@ Missing:
 * The `no-audit`/`no-bpf`/`no-modules` variants are built, not booted.
 * Add-on monitor/enforce modes (`temporary/`) have build checks only.
 * The host suites run as root in the gate on every push and pull request.
-  The in-kernel tests run in the `kernel-boot` job (nightly and on demand)
+  The in-kernel tests run in the `kernel-boot` job (weekly and on demand)
   against 6.12.114 with secure_sudo built in.
 
 ### P0-3 Boot proof — partly
