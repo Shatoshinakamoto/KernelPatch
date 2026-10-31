@@ -177,7 +177,7 @@ and passes on a real host, as expected.
 The run was stopped after pass 2: the post-remediation scan was cut off by
 the build host's 2-hour job limit, and the final rescan after the fixes below
 was skipped to ship v12. **The fixes below are therefore not yet confirmed by
-a VM scan**; the next run of the workflow's nightly STIG job is that check.
+a VM scan**; the next run of the workflow's weekly (or on-demand) STIG job is that check.
 
 Every rule not at pass after pass 2, by rule ID:
 

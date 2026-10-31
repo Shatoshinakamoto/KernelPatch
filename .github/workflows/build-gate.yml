@@ -6,10 +6,11 @@
 # runner's installed headers. A release is made only from a passing run; the
 # gate record is kept as an artifact.
 #
-# Two VM jobs run nightly and on demand, only after the gate passes, and need
-# KVM. kernel-boot builds the installer's default kernel with secure_sudo
-# built in and runs the in-kernel tests (tests/vm/ss-functest.c) as PID 1 of
-# a throwaway guest. distro-vm (install/rollback/removal/recovery, then the
+# Two VM jobs run weekly and on demand, only after the gate passes, and need
+# KVM. Together they take about two hours of runner time, so not nightly.
+# kernel-boot builds the installer's default kernel with secure_sudo built in
+# and runs the in-kernel tests (tests/vm/ss-functest.c) as PID 1 of a
+# throwaway guest. distro-vm (install/rollback/removal/recovery, then the
 # STIG release gate on a fresh guest) takes about an hour.
 name: build-gate
 
@@ -24,7 +25,8 @@ on:
         options: [all, kernel-boot, distro-vm]
         default: all
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * *"   # the gate, nightly
+    - cron: "17 5 * * 0"   # the gate and the VM jobs, weekly (Sunday)
 
 permissions:
   contents: read
@@ -72,7 +74,7 @@ jobs:
 
   kernel-boot:
     if: >-
-      github.event_name == 'schedule' ||
+      (github.event_name == 'schedule' && github.event.schedule == '17 5 * * 0') ||
       (github.event_name == 'workflow_dispatch' && inputs.vm != 'distro-vm')
     needs: gate
     runs-on: ubuntu-24.04
@@ -115,7 +117,7 @@ jobs:
 
   distro-vm:
     if: >-
-      github.event_name == 'schedule' ||
+      (github.event_name == 'schedule' && github.event.schedule == '17 5 * * 0') ||
       (github.event_name == 'workflow_dispatch' && inputs.vm != 'kernel-boot')
     needs: gate
     runs-on: ubuntu-24.04

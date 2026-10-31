@@ -256,8 +256,11 @@ never pass in release mode; a listed rule missing from the results fails
 | `ci/check-lsm-hooks.sh` | Fails if any LSM hook is registered twice (the v11 boot panic) |
 
 The GitHub workflow `.github/workflows/build-gate.yml` runs the gate on every
-push and pull request, and nightly the distro VM scenario followed by the
-STIG release gate in a fresh guest (written locally; not yet run on GitHub).
+push and pull request and nightly. Weekly (Sunday) and on demand it also
+runs two VM jobs after the gate: `kernel-boot` (6.12.114 with secure_sudo,
+the in-kernel tests as PID 1) and `distro-vm` (the distro install scenario,
+then the STIG release gate in a fresh guest). A manual run's `vm` input picks
+`all`, `kernel-boot` or `distro-vm`.
 
 ## `tests/`
 
