@@ -1430,6 +1430,9 @@ uninstall() {
 	if [ -d "$sd/quarantine" ]; then
 		log "kept /var/lib/secure_sudo/quarantine (TimeVault evidence); delete it yourself when done"
 	fi
+	if [ -d "$sd/policy" ]; then
+		log "kept /var/lib/secure_sudo/policy (policy change history and snapshots); delete it yourself when done"
+	fi
 
 	if [ "$kept" -eq 0 ] && [ -z "$(m_list K)" ]; then
 		rm -rf "$STATE"; rmdir "$SS_ROOT/var/lib/secure_sudo" 2>/dev/null || true

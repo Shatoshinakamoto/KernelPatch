@@ -202,7 +202,11 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     bypass/limitation, and validation test; out-of-scope protections are not
     implied by feature names or compliance mappings.
 
-- [ ] **P1-6: Add policy preview, snapshot, and change history.**
+- [x] **P1-6: Add policy preview, snapshot, and change history.**
+  - Done 2026-11-01: `secure-sudo diff` / `load --dry-run`, `snapshot`,
+    `history`, `restore` (docs/COMMANDS.md, RECOVERY.md 4g); every load,
+    set, lock and restore snapshots first and is recorded;
+    tests/userspace/test-cli.sh.
   - Provide a non-mutating policy lint/preview and a versioned, integrity-
     checked snapshot of both disk configuration and live kernel state before
     changes or lock engagement.

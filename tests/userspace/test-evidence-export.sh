@@ -215,4 +215,10 @@ refute_with "G2: a root that changes mid-engagement is flagged" \
 refute_with "G2: --timevault with no root in the collector's records fails" \
 	"no TimeVault root" \
 	python3 "$VERIFY" "$T/tv-ok.tar.gz" --timevault "$T/tv-empty.log"
+# ---- P1-6: the policy change history travels with the bundle ----
+mkdir -p "$T/state/policy"
+echo '{"v":1,"action":"load","result":"partial","prev":"0"}' > "$T/state/policy/history.jsonl"
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/ph.tar.gz" >/dev/null 2>&1
+check "P1-6: the bundle carries the policy change history" sh -c \
+	"tar -xzOf '$T/ph.tar.gz' --wildcards '*/live/policy-history.jsonl' | grep -q '\"result\":\"partial\"'"
 tap_done

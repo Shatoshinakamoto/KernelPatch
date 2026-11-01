@@ -129,6 +129,8 @@ sudo ./install/install.sh verify        # check what was installed
 sudo reboot                             # the new kernel boots ONCE; the old one stays default
 sudo ./install/install.sh verify --commit   # happy with it: make it the default
 sudo secure-sudo lint && sudo secure-sudo load   # check, then apply /etc/secure_sudo/*
+sudo secure-sudo diff                         # what a load changes (after an edit)
+sudo secure-sudo history; sudo secure-sudo restore ID   # who changed what; go back
 ```
 
 If the new kernel does not come up, the next boot is the previous kernel by
