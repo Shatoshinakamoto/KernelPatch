@@ -39,7 +39,7 @@ means its denials run after the stacked majors have had their say.
 | `secure_sudo.h` | shared config, `ss_cred_is_sudo()`, per-subsystem init decls |
 | `ss_core.c`     | LSM registration (`DEFINE_LSM`), defaults, sysfs root, helpers |
 | `ss_creds.c`    | Protection #1: non-sudo UID/GID switch block + userns gate; #1b setid-exec gate + `setid_exec_allow` |
-| `ss_exec.c`     | Protection #2: command blacklist (securityfs, inode+path match) |
+| `ss_exec.c`     | Protection #2: command blacklist (securityfs, inode+path+content match) |
 | `ss_firmware.c` | Protection #3: firmware/flash + raw-memory access block |
 | `ss_tpm.c`      | Protection #5: block TPM clear (ppi/request) |
 | `ss_ram.c`      | Protection #7: RAM-spike detection -> drop caches |
@@ -48,7 +48,7 @@ means its denials run after the stacked majors have had their say.
 | `ss_log.c`      | Protection #9: event ring drained via securityfs `events` |
 | `ss_node.c`     | Protection #11: NodeJS child guard (defines the LSM task blob) |
 | `ss_cooldown.c` | Protection #8: sudo brute-force cooldown (PAM-fed) |
-| `ss_driver.c`   | Protection #6: driver blacklist (SHA-256 / name); exports `ss_sha256_file()` |
+| `ss_driver.c`   | Protection #6: driver blacklist (SHA-256 / file name / module name via a module notifier); exports `ss_sha256_file()` |
 | `ss_timevault.c`| Protection #13: TimeVault exec allowlist + pkg-mgr deny |
 | `ss_home.c`     | Protection #4: confine non-sudo writes to home (file_open + path_*) |
 | `ss_binvault.c` | Protection #17: BinaryVault (freeze executables and libraries) |
@@ -90,13 +90,13 @@ script and security-review documentation.
 | `/sys/kernel/secure_sudo/timevault_strict_mmap` | rw | #13 also gate PROT_EXEC mmap (shared libraries) while engaged |
 | `/sys/kernel/secure_sudo/timevault_denied` | r | #13 count of denied exec attempts |
 | `/sys/kernel/security/secure_sudo/events` | r | #9 kernel event stream (blocking read + poll) |
-| `/sys/kernel/security/secure_sudo/blacklist` | rw (root) | #2 absolute paths non-sudo users may not exec (matched by device+inode+generation and path) |
+| `/sys/kernel/security/secure_sudo/blacklist` | rw (root) | #2 absolute paths non-sudo users may not exec (matched by device+inode+generation, path, and the SHA-256 of each listed file taken at write time, so a copy elsewhere is refused) |
 | `/sys/kernel/security/secure_sudo/setid_exec_allow` | rw (root) | #1b absolute paths of setuid/setgid/file-cap binaries non-sudo users may still run |
 | `/sys/kernel/security/secure_sudo/tmp_exec_allow` | rw (root) | #12 scratch-tree exec/mmap exemptions (prefix match) |
 | `/sys/kernel/security/secure_sudo/node_allowed_children` | rw (root) | #11 basenames node/SEA may spawn |
 | `/sys/kernel/security/secure_sudo/node_sea_binaries` | rw (root) | #11 registered SEA/pkg binary paths |
 | `/sys/kernel/security/secure_sudo/sudo_auth` | w (root) | #8 PAM feed: `fail <uid>` / `ok <uid>` |
-| `/sys/kernel/security/secure_sudo/driver_blacklist` | rw (root) | #6 blacklisted module SHA-256 hashes and/or names |
+| `/sys/kernel/security/secure_sudo/driver_blacklist` | rw (root) | #6 blacklisted module SHA-256 hashes and/or names; a name matches the file name and the module's own name (`-` and `_` equal), checked before the module's init runs |
 | `/sys/kernel/security/secure_sudo/timevault_allow` | rw (root) | #13 allowlist: `path` or `path <sha256>`, max 16384 entries / 4 MiB, whole list per single write; manage with `secure-sudo vault-allow` |
 | `/sys/kernel/secure_sudo/block_home_write` | rw | #4 confine non-sudo writes to home (opt-in) |
 | `/sys/kernel/security/secure_sudo/home_map` | rw (root) | #4 `<uid> <home-path>` per line |

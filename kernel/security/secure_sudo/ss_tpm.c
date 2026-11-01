@@ -74,6 +74,10 @@ int ss_tpm_file_open(struct file *file)
 	if (!IS_ERR(p) && is_tpm_ppi_request(p)) {
 		pr_warn_ratelimited("blocked TPM ppi/request write %s (boot with secure_sudo.tpm_maint=1 to allow)\n",
 				    p);
+		ss_event_typed_self("tpm_guard", "current_process", "write", p,
+				    "deny", "tpm_clear_request",
+				    "tpm: denied ppi/request write %s by UID %u", p,
+				    from_kuid(&init_user_ns, current_uid()));
 		ret = -EPERM;
 	}
 

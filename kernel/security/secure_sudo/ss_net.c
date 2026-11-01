@@ -37,6 +37,12 @@ int ss_net_socket_create(int family, int type, int protocol, int kern)
 	if (family == AF_PACKET || type == SOCK_RAW) {
 		pr_warn_ratelimited("host mode: denied raw/packet socket (family=%d type=%d)\n",
 				    family, type);
+		ss_event_typed_self("network_guard", "current_process",
+				    "create_socket",
+				    family == AF_PACKET ? "AF_PACKET" : "SOCK_RAW",
+				    "deny", "host_mode",
+				    "net: host mode denied raw/packet socket family %d type %d",
+				    family, type);
 		return -EPERM;
 	}
 	return 0;

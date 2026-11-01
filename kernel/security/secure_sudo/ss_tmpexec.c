@@ -115,9 +115,11 @@ static bool path_allowed(const char *p)
 }
 
 /* Common decision for every hook. @is_mmap relaxes the memfd case only. */
-static int tmp_check(const struct path *path, const char *what, bool is_mmap)
+static int tmp_check(const struct path *path, const char *what,
+		     const char *op, bool is_mmap)
 {
 	bool tmpfs_rule = READ_ONCE(ss_cfg.block_tmpfs_exec);
+	const char *why = "path_unresolvable";
 	char *buf, *p;
 	int ret = 0;
 
@@ -146,19 +148,24 @@ static int tmp_check(const struct path *path, const char *what, bool is_mmap)
 		    (tmpfs_rule && on_tmpfs(path))) &&	/* or any tmpfs, if strict */
 		   !path_allowed(p)) {			/* and not on the allowlist */
 		ret = -EPERM;			/* deny exec from a scratch tree */
+		why = under_tmp_tree(p) ? "scratch_tree" : "tmpfs";
 	}
 
-	if (ret)
+	if (ret) {
 		pr_warn_ratelimited("non-sudo UID %u denied %s from scratch tree: %s\n",
 				    from_kuid(&init_user_ns, current_uid()),
 				    what, p);
+		ss_event_typed_self("tmp_exec", "current_user", op, p, "deny", why,
+				    "tmpexec: UID %u denied %s of %s",
+				    from_kuid(&init_user_ns, current_uid()), what, p);
+	}
 	kfree(buf);
 	return ret;
 }
 
 int ss_tmp_bprm(struct linux_binprm *bprm)
 {
-	return tmp_check(&bprm->file->f_path, "exec", false);
+	return tmp_check(&bprm->file->f_path, "exec", "execute", false);
 }
 
 int ss_tmp_mmap(struct file *file, unsigned long reqprot,
@@ -168,7 +175,7 @@ int ss_tmp_mmap(struct file *file, unsigned long reqprot,
 		return 0;		/* anonymous mapping */
 	if (!(prot & PROT_EXEC))
 		return 0;
-	return tmp_check(&file->f_path, "PROT_EXEC mmap", true);
+	return tmp_check(&file->f_path, "PROT_EXEC mmap", "mmap_exec", true);
 }
 
 int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
@@ -176,7 +183,7 @@ int ss_tmp_mprotect(struct vm_area_struct *vma, unsigned long reqprot,
 {
 	if (!vma->vm_file || !(prot & PROT_EXEC) || (vma->vm_flags & VM_EXEC))
 		return 0;
-	return tmp_check(&vma->vm_file->f_path, "mprotect(PROT_EXEC)", true);
+	return tmp_check(&vma->vm_file->f_path, "mprotect(PROT_EXEC)", "mprotect_exec", true);
 }
 
 

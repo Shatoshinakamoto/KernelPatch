@@ -70,6 +70,7 @@
 #include <syslog.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <openssl/evp.h>
 #include <zlib.h>
 
@@ -273,53 +274,80 @@ out:
 }
 
 /* ------------------------------ ACLs ------------------------------------- */
-/* Best-effort POSIX ACL capture/restore via getfacl/setfacl if present. */
-
-static int have_tool(const char *t)
+/*
+ * Best-effort POSIX ACL capture/restore via getfacl/setfacl if present.
+ *
+ * The tools are run directly (fork + execvp), never through a shell: a
+ * protected directory can hold files whose names its owner chose, and a
+ * name such as  a';touch$IFS/x;'  used to be run as a root command when it
+ * was pasted into a quoted shell line (SECURITY_REVIEW #55).
+ *
+ * Runs argv with stdout to @out (NULL: /dev/null) and stderr to /dev/null.
+ * Returns the exit status, or -1 if the tool could not be started.
+ */
+static int run_tool(char *const argv[], const char *out)
 {
-	char cmd[128];
+	pid_t pid = fork();
+	int st;
 
-	snprintf(cmd, sizeof(cmd), "command -v %s >/dev/null 2>&1", t);
-	return system(cmd) == 0;
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+		int o = out ? open(out, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW |
+				   O_CLOEXEC, 0600) : null;
+
+		if (null < 0 || o < 0)
+			_exit(127);
+		dup2(null, STDIN_FILENO);
+		dup2(o, STDOUT_FILENO);
+		dup2(null, STDERR_FILENO);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	if (waitpid(pid, &st, 0) < 0 || !WIFEXITED(st))
+		return -1;
+	return WEXITSTATUS(st) == 127 ? -1 : WEXITSTATUS(st);
 }
 
 static void acl_capture(const char *abspath)
 {
-	char ap[PATH_MAX], cmd[PATH_MAX * 2];
-
-	if (!have_tool("getfacl"))
-		return;
-	blob_path(abspath, ap, sizeof(ap), ACLS, ".acl");
+	char ap[PATH_MAX];
 	/* -p keeps leading slash; --absolute-names avoids path rewriting. */
-	snprintf(cmd, sizeof(cmd),
-		 "getfacl -p --absolute-names -- '%s' > '%s' 2>/dev/null",
-		 abspath, ap);
-	if (system(cmd) == 0)
+	char *argv[] = { "getfacl", "-p", "--absolute-names", "--",
+			 (char *)abspath, NULL };
+
+	blob_path(abspath, ap, sizeof(ap), ACLS, ".acl");
+	if (run_tool(argv, ap) == 0)
 		chmod(ap, 0600);
+	else
+		unlink(ap);		/* no getfacl, or it failed: keep no stub */
 }
 
 static void acl_restore(const char *abspath)
 {
-	char ap[PATH_MAX], cmd[PATH_MAX * 2];
+	char ap[PATH_MAX], opt[PATH_MAX + 16];
+	char *argv[] = { "setfacl", opt, NULL };
 	struct stat st;
-	int rc;
 
-	if (!have_tool("setfacl"))
-		return;
 	blob_path(abspath, ap, sizeof(ap), ACLS, ".acl");
 	if (stat(ap, &st) != 0)
 		return;
-	snprintf(cmd, sizeof(cmd), "setfacl --restore='%s' 2>/dev/null", ap);
-	rc = system(cmd);
-	(void)rc;			/* best-effort ACL restore */
+	snprintf(opt, sizeof(opt), "--restore=%s", ap);
+	(void)run_tool(argv, NULL);	/* best-effort ACL restore */
 }
 
 /* --------------------------- config + walk ------------------------------- */
 
+/*
+ * The manifest is one line per file with the path last, so a path with
+ * whitespace or any control character (a newline would start a forged
+ * manifest line) cannot be stored safely and is skipped.
+ */
 static int path_has_ws(const char *p)
 {
 	for (; *p; p++)
-		if (*p == ' ' || *p == '\t')
+		if (*p == ' ' || (unsigned char)*p < 0x20 || *p == 0x7f)
 			return 1;
 	return 0;
 }
@@ -337,7 +365,8 @@ static void walk_path(const char *path, file_cb cb, void *ctx, int depth)
 		return;
 	if (S_ISREG(st.st_mode)) {
 		if (path_has_ws(path))
-			fprintf(stderr, "secure-sudo pheonixbox: skipping path with whitespace: %s\n", path);
+			fprintf(stderr, "secure-sudo pheonixbox: skipping path with whitespace "
+				"or a control character\n");
 		else
 			cb(path, ctx);
 		return;
@@ -422,6 +451,9 @@ static int do_snapshot(void)
 	char tmp[] = STORE "/.manifest.XXXXXX";
 	int fd;
 
+	/* The parent may not exist yet on a host where nothing else of
+	 * secure_sudo has written state; mkdir(STORE) alone then failed. */
+	mkdir("/var/lib/secure_sudo", 0755);
 	mkdir(STORE, 0700);
 	mkdir(BLOBS, 0700);
 	mkdir(ACLS, 0700);

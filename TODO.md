@@ -187,7 +187,10 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
 
 ## P1 — improve safe operation and response
 
-- [ ] **P1-5: Define a testable threat model and supported deployment profile.**
+- [x] **P1-5: Define a testable threat model and supported deployment profile.**
+  - Done 2026-11-01: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). The
+    promises it found the code did not keep are listed under "Doc promises
+    to build" below.
   - State explicitly that the design trusts the install-time administrator
     and does not by itself defeat a compromised kernel, trusted root before
     lock, physical attacker, malicious/compromised firmware, or an attacker
@@ -355,6 +358,35 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     deprecation policy.
   - **Done when:** maintainers can respond to a kernel regression or
     vulnerability with a tracked, testable release process.
+
+## Doc promises to build
+
+Pheonix's rule (2026-11-01): when a doc promises more than the code does,
+that is a missing feature to build, not a sentence to delete. Each doc says
+"not built yet" until the feature lands. Found while writing
+[docs/THREAT_MODEL.md §7](docs/THREAT_MODEL.md#7-promises-not-yet-kept-work-to-build).
+
+- [ ] **G1: Node SEA auto-detection** (FEATURE_MAP #11). Find Node single-
+  executable (and pkg) binaries by their fuse marker in configured
+  directories, at `load` and on a timer, and register them in
+  `node_sea_binaries`. **Done when:** a test SEA binary is found and
+  registered and the Node guard applies to it without manual listing.
+- [ ] **G2: TimeVault Merkle tree** (FEATURE_MAP #13). Build a Merkle tree
+  over the manifest; log and forward its root each scan. **Done when:** a
+  collector can tell a rewritten manifest from a legitimate rescan, and a
+  test proves a changed entry changes the root.
+- [ ] **G3: TPM2-sealed OTP secret** (FEATURE_MAP #15). Seal the OTP key to
+  the TPM when one is present, root-only key file as the fallback.
+  **Done when:** the OTP verifies with a sealed key in a swtpm VM and falls
+  back cleanly without a TPM.
+- [ ] **G4: TPM clear through `/dev/tpm*`** (README #5). Only the PPI route
+  is blocked; an LSM cannot read TPM command bytes. Needs Pheonix's call on
+  the approach (lockout authorization at install, an opener allowlist for
+  `/dev/tpm*`, or both).
+
+Built during P1-5 because the docs already promised them: blacklist copies
+(#2), module-name checks (#6, #19), and events for five silent controls
+(SECURITY_REVIEW #54, #56).
 
 ## Suggested execution order
 

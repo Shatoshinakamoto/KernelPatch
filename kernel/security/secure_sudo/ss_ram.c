@@ -85,6 +85,10 @@ static void ram_work_fn(struct work_struct *w)
 		last_drop_jiffies = now;
 		pr_info("ram: usage %lu%% >= %u%% - dropping caches\n",
 			used_pct, max_pct);
+		ss_event_typed("ram_guard", "system", "drop_caches", "page_cache",
+			       "enforce", "memory_threshold",
+			       "ram: usage %lu%% >= %u%%, dropping caches",
+			       used_pct, max_pct);
 		do_drop_caches();
 	}
 

@@ -33,6 +33,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/reboot.h>
 #include <sys/resource.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
@@ -42,6 +43,7 @@
 #include <sys/uio.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #include <grp.h>
 #include <dirent.h>
@@ -52,7 +54,8 @@
 #define ADMIN_GID 27
 
 static int n_test, n_fail;
-static char modpath[512];
+static char modpath[512];	/* test_module.ko */
+static char hwsimpath[512];	/* mac80211_hwsim.ko: a module RadioGuard knows */
 
 static void tap(int pass, const char *fmt, ...)
 {
@@ -143,7 +146,10 @@ static int copy_file(const char *from, const char *to, mode_t mode)
 
 	if (in < 0)
 		return -errno;
-	out = open(to, O_WRONLY | O_CREAT | O_TRUNC, mode);
+	/* "busybox --install -s" leaves a symlink for every applet name
+	 * (dpkg, su, ...): replace it rather than write through it. */
+	unlink(to);
+	out = open(to, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode);
 	if (out < 0) {
 		close(in);
 		return -errno;
@@ -154,6 +160,17 @@ static int copy_file(const char *from, const char *to, mode_t mode)
 	close(in);
 	close(out);
 	return chmod(to, mode) ? -errno : 0;
+}
+
+/* Make @path a different program: valid ELF, one byte longer. */
+static void append_byte(const char *path)
+{
+	int fd = open(path, O_WRONLY | O_APPEND);
+
+	if (fd < 0 || write(fd, "x", 1) != 1)
+		printf("# append to %s failed: %s\n", path, strerror(errno));
+	if (fd >= 0)
+		close(fd);
 }
 
 /* ------------------------------------------------- run as another user */
@@ -472,9 +489,9 @@ static int do_ptrace(void *a)
 	return r;
 }
 
-static int load_finit(void)
+static int load_finit_named(const char *path, const char *name)
 {
-	int fd = open(modpath, O_RDONLY | O_CLOEXEC), r = 0;
+	int fd = open(path, O_RDONLY | O_CLOEXEC), r = 0;
 
 	if (fd < 0)
 		return errno;
@@ -482,14 +499,24 @@ static int load_finit(void)
 		r = errno;
 	close(fd);
 	if (!r)
-		syscall(SYS_delete_module, "test_module", O_NONBLOCK);
+		syscall(SYS_delete_module, name, O_NONBLOCK);
 	return r;
 }
 
-static int load_init(void)
+static int load_finit_path(const char *path)
+{
+	return load_finit_named(path, "test_module");
+}
+
+static int load_finit(void)
+{
+	return load_finit_path(modpath);
+}
+
+static int load_init_path(const char *path, const char *name)
 {
 	struct stat st;
-	int fd = open(modpath, O_RDONLY | O_CLOEXEC), r = 0;
+	int fd = open(path, O_RDONLY | O_CLOEXEC), r = 0;
 	void *img;
 
 	if (fd < 0 || fstat(fd, &st))
@@ -504,11 +531,17 @@ static int load_init(void)
 		r = errno;
 	free(img);
 	if (!r)
-		syscall(SYS_delete_module, "test_module", O_NONBLOCK);
+		syscall(SYS_delete_module, name, O_NONBLOCK);
 	return r;
 }
 
-static int find_module(const char *dir, int depth)
+static int load_init(void)
+{
+	return load_init_path(modpath, "test_module");
+}
+
+static int find_module(const char *dir, const char *want, char *out,
+		       size_t outlen, int depth)
 {
 	DIR *d = opendir(dir);
 	struct dirent *e;
@@ -521,11 +554,11 @@ static int find_module(const char *dir, int depth)
 		if (e->d_name[0] == '.')
 			continue;
 		snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
-		if (!strcmp(e->d_name, "test_module.ko")) {
-			snprintf(modpath, sizeof(modpath), "%s", p);
+		if (!strcmp(e->d_name, want)) {
+			snprintf(out, outlen, "%s", p);
 			found = 1;
 		} else if (e->d_type == DT_DIR) {
-			found = find_module(p, depth + 1);
+			found = find_module(p, want, out, outlen, depth + 1);
 		}
 	}
 	closedir(d);
@@ -620,6 +653,38 @@ static int line_is_event(const char *l)
 	       strstr(l, "\"message\":\"") && l[strlen(l) - 1] == '}';
 }
 
+/* The first record in @buf of @type whose text also contains @needle. */
+static char *find_event_with(char *buf, const char *type, const char *needle)
+{
+	char want[80], *l, *save;
+
+	snprintf(want, sizeof(want), "\"event_type\":\"%s\"", type);
+	for (l = strtok_r(buf, "\n", &save); l; l = strtok_r(NULL, "\n", &save))
+		if (strstr(l, want) && strstr(l, needle))
+			return l;
+	return NULL;
+}
+
+/* Discard the ring, so the next saw_deny() sees only what follows. */
+static void events_reset(void)
+{
+	static char junk[1 << 16];
+
+	(void)drain_events(junk, sizeof(junk));
+}
+
+/* Was a well-formed deny record of @type containing @needle raised since
+ * events_reset()? */
+static int saw_deny(const char *type, const char *needle)
+{
+	static char evbuf[1 << 16];
+	char *ev;
+
+	drain_events(evbuf, sizeof(evbuf));
+	ev = find_event_with(evbuf, type, needle);
+	return ev && strstr(ev, "\"decision\":\"deny\"") && line_is_event(ev);
+}
+
 /* ============================================================== tests */
 
 static void t_registration(void)
@@ -671,7 +736,11 @@ static void t_defaults(void)
 		{ "block_tmpfs_exec", "0" }, { "timevault", "0" }, { "prguard_enabled", "0" },
 		{ "bpf_guard", "0" }, { "bpf_lock_tracing", "1" }, { "perf_guard", "0" },
 		{ "sysctl_guard", "0" }, { "binaryvault", "0" }, { "audit_events", "0" },
-		{ "admin_gid", "unset" },
+		{ "admin_gid", "unset" }, { "block_home_write", "0" },
+		{ "ram_spike_enabled", "0" }, { "sudo_cooldown_enabled", "1" },
+		{ "block_wifi", "0" }, { "block_bluetooth", "0" }, { "ethernet_only", "0" },
+		{ "prguard_observe", "0" }, { "timevault_strict_mmap", "0" },
+		{ "timevault_allow_autoupdate", "1" }, { "lock_confidentiality", "0" },
 	};
 	unsigned int i;
 
@@ -780,17 +849,35 @@ static void t_blacklist(void)
 	int r;
 
 	copy_file("/bin/busybox", "/bin/bltest", 0755);
+	append_byte("/bin/bltest");	/* not byte-identical to /bin/busybox */
 	tap(wr(SECFS "blacklist", "/bin/bltest\n") == 0, "#2 blacklist /bin/bltest");
+	events_reset();
 	r = as(&NONSUDO, do_exec, "/bin/bltest");
 	tap(DENIED(r), "#2 non-sudo exec of a blacklisted binary denied (got %d)", r);
+	tap(saw_deny("command_blacklist", "\"object\":\"/bin/bltest\""),
+	    "#2 the denial is logged as a typed event");
 	r = as(&NONSUDO, do_exec, "/bin/busybox");
 	tap(r == 0, "#2 other binaries still run (got %d)", r);
 	if (link("/bin/bltest", "/bin/bltest-link") == 0) {
+		events_reset();
 		r = as(&NONSUDO, do_exec, "/bin/bltest-link");
 		tap(DENIED(r), "#2 a hard link to the blacklisted inode is denied too (got %d)", r);
+		tap(saw_deny("command_blacklist", "\"reason\":\"blacklisted_inode\""),
+		    "#2 the hard-link denial is logged as an inode match");
 	} else {
 		tap(0, "#2 create a hard link for the inode test (%s)", strerror(errno));
 	}
+	/* A copy is a new inode at a new path: the content match catches it. */
+	copy_file("/bin/bltest", "/bin/bltest-copy", 0755);
+	events_reset();
+	r = as(&NONSUDO, do_exec, "/bin/bltest-copy");
+	tap(DENIED(r), "#2 a copy of the blacklisted binary at another path is denied (got %d)", r);
+	tap(saw_deny("command_blacklist", "\"reason\":\"blacklisted_content\""),
+	    "#2 the copy denial is logged as a content match");
+	append_byte("/bin/bltest-copy");
+	r = as(&NONSUDO, do_exec, "/bin/bltest-copy");
+	tap(r == 0, "#2 a changed copy is a different program and runs (documented limit) (got %d)", r);
+	unlink("/bin/bltest-copy");
 	r = as(&ROOT, do_exec, "/bin/bltest");
 	tap(r == 0, "#2 root may exec a blacklisted binary (got %d)", r);
 	wr(SECFS "blacklist", "\n");
@@ -805,10 +892,16 @@ static void t_tmpexec(void)
 	int r;
 
 	copy_file("/bin/busybox", "/tmp/bb", 0755);
+	events_reset();
 	r = as(&NONSUDO, do_exec, "/tmp/bb");
 	tap(DENIED(r), "#12 non-sudo exec from /tmp denied (got %d)", r);
+	tap(saw_deny("tmp_exec", "\"object\":\"/tmp/bb\""),
+	    "#12 the exec denial is logged as a typed event");
+	events_reset();
 	r = as(&NONSUDO, do_mmap_exec, "/tmp/bb");
 	tap(DENIED(r), "#12 non-sudo PROT_EXEC mmap of a /tmp file denied (got %d)", r);
+	tap(saw_deny("tmp_exec", "\"operation\":\"mmap_exec\""),
+	    "#12 the mmap denial is logged as a typed event");
 	r = as(&ROOT, do_exec, "/tmp/bb");
 	tap(r == 0, "#12 root may exec from /tmp (got %d)", r);
 	tap(wr(SECFS "tmp_exec_allow", "/tmp/bb\n") == 0, "#12 allowlist /tmp/bb");
@@ -839,8 +932,11 @@ static void t_firmware(void)
 		return;
 	}
 	chmod("/dev/mem", 0666);	/* so only the LSM can say no */
+	events_reset();
 	r = as(&rawio, do_open_ro, "/dev/mem");
 	tap(DENIED(r), "#3 non-sudo open of /dev/mem denied despite mode 0666 + CAP_SYS_RAWIO (got %d)", r);
+	tap(saw_deny("firmware_guard", "\"object\":\"raw_memory_device\""),
+	    "#3 the denial is logged as a typed event");
 	r = as(&ROOT, do_open_ro, "/dev/mem");
 	tap(r == 0, "#3 root may open /dev/mem (got %d)", r);
 	knob_set("block_flash", "0");
@@ -858,8 +954,11 @@ static void t_net(void)
 	r = as(&rawcap, do_packet_socket, NULL);
 	tap(r == 0, "#10 monitor mode: packet socket allowed with CAP_NET_RAW (got %d)", r);
 	tap(knob_set("net_mode", "host") == 0, "#10 net_mode=host");
+	events_reset();
 	r = as(&rawcap, do_packet_socket, NULL);
 	tap(r == EPERM, "#10 host mode: packet socket denied (got %d)", r);
+	tap(saw_deny("network_guard", "\"object\":\"AF_PACKET\""),
+	    "#10 the denial is logged as a typed event");
 	r = as(&ROOT, do_packet_socket, NULL);
 	tap(r == EPERM, "#10 host mode applies to root too (got %d)", r);
 	knob_set("net_mode", "monitor");
@@ -960,6 +1059,12 @@ static void t_modules(void)
 	tap(wr(SECFS "driver_blacklist", "test_module.ko\n") == 0, "#6 blacklist module by name");
 	r = load_finit();
 	tap(r == EPERM, "#6 name-blacklisted module refused via finit_module (got %d)", r);
+	r = load_init();
+	tap(r == EPERM, "#6 name-blacklisted module refused via init_module (no file name) (got %d)", r);
+	copy_file(modpath, "/tmp/renamed-mod.ko", 0644);
+	r = load_finit_path("/tmp/renamed-mod.ko");
+	tap(r == EPERM, "#6 a renamed copy is refused by the module's own name (got %d)", r);
+	unlink("/tmp/renamed-mod.ko");
 	if (sha256_of(modpath, hash) == 0) {
 		snprintf(line, sizeof(line), "%s\n", hash);
 		tap(wr(SECFS "driver_blacklist", line) == 0, "#6 blacklist module by SHA-256");
@@ -973,6 +1078,462 @@ static void t_modules(void)
 	wr(SECFS "driver_blacklist", "\n");
 	r = load_finit();
 	tap(r == 0, "#6 cleared blacklist: module loads again (got %d)", r);
+}
+
+/*
+ * P1-5: the controls below had no in-kernel test before the threat model
+ * (docs/THREAT_MODEL.md) mapped each control to one. Each checks the denial
+ * and the legitimate path next to it, then puts the policy back.
+ */
+
+static int do_create(void *a)
+{
+	int fd = open(a, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+	if (fd < 0)
+		return errno;
+	close(fd);
+	return unlink(a) ? errno : 0;
+}
+
+static int do_mkdir(void *a)
+{
+	if (mkdir(a, 0755))
+		return errno;
+	return rmdir(a) ? errno : 0;
+}
+
+static int do_open_wr(void *a)
+{
+	int fd = open(a, O_WRONLY);
+
+	if (fd < 0)
+		return errno;
+	close(fd);
+	return 0;
+}
+
+static void t_home(void)
+{
+	int r;
+
+	mkdir("/home", 0755);
+	mkdir("/home/u1000", 0700);
+	if (chown("/home/u1000", USER, USER))
+		diag("chown /home/u1000: %s", strerror(errno));
+	mkdir("/srv", 0755);
+	mkdir("/srv/hw", 0777);
+	chmod("/srv/hw", 0777);		/* so only the LSM can say no */
+	r = as(&NONSUDO, do_create, "/srv/hw/f");
+	tap(r == 0, "#4 block_home_write=0: non-sudo may write a mode-0777 directory (got %d)", r);
+	tap(wr(SECFS "home_map", "1000 /home/u1000\n") == 0, "#4 home_map 1000 -> /home/u1000");
+	tap(knob_set("block_home_write", "1") == 0, "#4 block_home_write=1");
+	r = as(&NONSUDO, do_create, "/srv/hw/f");
+	tap(DENIED(r), "#4 non-sudo file write outside its home denied despite mode 0777 (got %d)", r);
+	r = as(&NONSUDO, do_mkdir, "/srv/hw/d");
+	tap(DENIED(r), "#4 non-sudo mkdir outside its home denied (got %d)", r);
+	r = as(&NONSUDO, do_create, "/home/u1000/f");
+	tap(r == 0, "#4 non-sudo write inside its own home allowed (got %d)", r);
+	r = as(&NONSUDO, do_create, "/tmp/ss-home-f");
+	tap(r == 0, "#4 /tmp stays writable (got %d)", r);
+	r = as(&ROOT, do_create, "/srv/hw/f");
+	tap(r == 0, "#4 root is not confined (got %d)", r);
+	tap(wr(SECFS "home_write_allow", "/srv/hw\n") == 0, "#4 home_write_allow /srv/hw");
+	r = as(&NONSUDO, do_create, "/srv/hw/f");
+	tap(r == 0, "#4 an allowlisted prefix becomes writable (got %d)", r);
+	wr(SECFS "home_write_allow", "\n");
+	wr(SECFS "home_map", "\n");
+	knob_set("block_home_write", "0");
+}
+
+/* How many times @needle appears in the kernel log; -1 if it is unreadable. */
+static int klog_count(const char *needle)
+{
+	static char kb[1 << 18];
+	int len = klogctl(3 /* SYSLOG_ACTION_READ_ALL */, kb, (int)sizeof(kb) - 1);
+	int n = 0;
+	char *p;
+
+	if (len <= 0)
+		return -1;
+	kb[len] = '\0';
+	for (p = kb; (p = strstr(p, needle)); p += strlen(needle))
+		n++;
+	return n;
+}
+
+static void t_ram(void)
+{
+	/* The 1% threshold is only ever set here, so this text is ours. */
+	static const char mark[] = ">= 1% - dropping caches";
+	int before = klog_count(mark), now = before, i;
+
+	knob_set("max_ram_percent", "1");
+	knob_set("check_interval_ms", "100");
+	knob_set("drop_cooldown_ms", "1000");
+	events_reset();
+	tap(knob_set("ram_spike_enabled", "1") == 0, "#7 ram_spike_enabled=1, threshold 1%");
+	/* The worker was last armed with the old 5 s interval. */
+	for (i = 0; i < 80 && now <= before; i++) {
+		usleep(100000);
+		now = klog_count(mark);
+	}
+	tap(before >= 0 && now > before,
+	    "#7 above the threshold the kernel worker drops caches (%d drop(s) logged)",
+	    now - before);
+	{
+		static char evbuf[1 << 16];
+		char *ev;
+
+		drain_events(evbuf, sizeof(evbuf));
+		ev = find_event_with(evbuf, "ram_guard", "\"operation\":\"drop_caches\"");
+		tap(ev && strstr(ev, "\"kernel_started\":true") && line_is_event(ev),
+		    "#7 the drop is logged as an event raised by the kernel worker");
+	}
+	knob_set("ram_spike_enabled", "0");
+	usleep(300000);
+	before = klog_count(mark);
+	usleep(1500000);
+	now = klog_count(mark);
+	tap(now == before, "#7 ram_spike_enabled=0: no further drops (%d)", now - before);
+	knob_set("max_ram_percent", "90");
+	knob_set("check_interval_ms", "5000");
+	knob_set("drop_cooldown_ms", "2000");
+}
+
+static void t_cooldown(void)
+{
+	static char buf[1 << 16];
+	const struct who other = { 1001, 1001, 0, {0}, 0 };
+	const char *kv_fail[2] = { SECFS "sudo_auth", "fail 1000" };
+	long long tuid = -1;
+	char *ev;
+	int r, i;
+
+	copy_file("/bin/busybox", "/bin/sudo", 0755);
+	copy_file("/bin/busybox", "/bin/sutool", 04755);
+	r = as(&NONSUDO, do_exec, "/bin/sudo");
+	tap(r == 0, "#8 no failures recorded: non-sudo may run sudo (got %d)", r);
+	r = as(&NONSUDO, do_write_file, kv_fail);
+	tap(DENIED(r), "#8 non-root cannot feed sudo_auth (got %d)", r);
+	for (i = 0; i < 4; i++)
+		wr(SECFS "sudo_auth", "fail 1000");
+	r = as(&NONSUDO, do_exec, "/bin/sudo");
+	tap(r == 0, "#8 4 failures (limit 5): sudo still runs (got %d)", r);
+	(void)drain_events(buf, sizeof(buf));
+	tap(wr(SECFS "sudo_auth", "fail 1000") == 0, "#8 5th failure reported");
+	drain_events(buf, sizeof(buf));
+	ev = find_event(buf, "sudo_cooldown");
+	tap(ev && line_num(ev, "\"target_uid\":", &tuid) && tuid == USER &&
+	    strstr(ev, "\"decision\":\"deny\""),
+	    "#8 block event names the user in target_uid (what secure-sudod kills by) (%lld)",
+	    tuid);
+	r = as(&NONSUDO, do_exec, "/bin/sudo");
+	tap(DENIED(r), "#8 in cooldown: sudo exec denied (got %d)", r);
+	r = as(&NONSUDO, do_exec, "/bin/sutool");
+	tap(DENIED(r), "#8 in cooldown: any setuid-root program denied too (got %d)", r);
+	r = as(&NONSUDO, do_exec, "/bin/busybox");
+	tap(r == 0, "#8 in cooldown: ordinary programs still run (got %d)", r);
+	r = as(&other, do_exec, "/bin/sudo");
+	tap(r == 0, "#8 another user is not affected (got %d)", r);
+	tap(wr(SECFS "sudo_auth", "ok 1000") == 0, "#8 a successful authentication is reported");
+	r = as(&NONSUDO, do_exec, "/bin/sudo");
+	tap(r == 0, "#8 after a success the block is lifted (got %d)", r);
+	unlink("/bin/sutool");
+	unlink("/bin/sudo");
+}
+
+/*
+ * Run @a (a copy of busybox whose name makes it a Node runtime) as "sh -c
+ * 'exec /bin/busybox true'": the shell is the Node process, /bin/busybox is
+ * the child it spawns. 0 = child ran; the shell exits 126 when its exec is
+ * refused; 250 = the runtime itself did not start.
+ */
+#define NODE_REFUSED(r) ((r) != 0 && (r) < 250)
+static int do_node_child(void *a)
+{
+	pid_t pid = fork();
+	int st;
+
+	if (pid == 0) {
+		char *argv[] = { "sh", "-c", "exec /bin/busybox true", NULL };
+		char *envp[] = { NULL };
+
+		execve(a, argv, envp);
+		_exit(250);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) < 0 || !WIFEXITED(st))
+		return 255;
+	return WEXITSTATUS(st);
+}
+
+static void t_node(void)
+{
+	static char buf[1 << 16];
+	long long apid = 0, tpid = -1;
+	char *ev;
+	int r;
+
+	mkdir("/srv", 0755);
+	mkdir("/srv/nodetest", 0755);
+	copy_file("/bin/busybox", "/srv/nodetest/node", 0755);
+	copy_file("/bin/busybox", "/srv/nodetest/app", 0755);
+	r = as(&NONSUDO, do_node_child, "/srv/nodetest/app");
+	tap(r == 0, "#11 an ordinary program may spawn children (got %d)", r);
+	(void)drain_events(buf, sizeof(buf));
+	r = as(&NONSUDO, do_node_child, "/srv/nodetest/node");
+	tap(NODE_REFUSED(r), "#11 a node process cannot spawn an unlisted child (got %d)", r);
+	drain_events(buf, sizeof(buf));
+	ev = find_event_with(buf, "node_guard", "\"object\":\"/bin/busybox\"");
+	tap(ev && strstr(ev, "\"decision\":\"deny\"") &&
+	    line_num(ev, "\"actor\":{\"pid\":", &apid) &&
+	    line_num(ev, "\"target_pid\":", &tpid) && apid == tpid,
+	    "#11 the denial is logged with the blocked child as object");
+	r = as(&ROOT, do_node_child, "/srv/nodetest/node");
+	tap(NODE_REFUSED(r), "#11 applies to root too (got %d)", r);
+	tap(wr(SECFS "node_allowed_children", "busybox\n") == 0, "#11 allow child basename busybox");
+	r = as(&NONSUDO, do_node_child, "/srv/nodetest/node");
+	tap(r == 0, "#11 an allowlisted child runs (got %d)", r);
+	tap(wr(SECFS "node_allowed_children", "\n") == 0 &&
+	    wr(SECFS "node_sea_binaries", "/srv/nodetest/app\n") == 0,
+	    "#11 register /srv/nodetest/app as a single-executable Node app");
+	r = as(&NONSUDO, do_node_child, "/srv/nodetest/app");
+	tap(NODE_REFUSED(r), "#11 a registered SEA binary is guarded like node (got %d)", r);
+	wr(SECFS "node_sea_binaries", "\n");
+	unlink("/srv/nodetest/node");
+	unlink("/srv/nodetest/app");
+	rmdir("/srv/nodetest");
+}
+
+static void t_binvault(void)
+{
+	int r, fd;
+
+	mkdir("/usr", 0755);
+	mkdir("/usr/lib", 0755);
+	copy_file("/bin/busybox", "/bin/bvtest", 0755);
+	copy_file("/bin/busybox", "/usr/lib/libbv.so.1", 0644);
+	fd = open("/bin/bvdata", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd >= 0)
+		close(fd);
+	tap(knob_set("binaryvault", "1") == 0, "#17 binaryvault=1");
+	r = do_open_wr("/bin/bvtest");
+	tap(r == EPERM, "#17 root cannot open an executable for writing (got %d)", r);
+	r = unlink("/bin/bvtest") ? errno : 0;
+	tap(r == EPERM, "#17 root cannot unlink an executable (got %d)", r);
+	r = rename("/bin/bvtest", "/bin/bvtest2") ? errno : 0;
+	tap(r == EPERM, "#17 root cannot rename an executable (got %d)", r);
+	r = link("/bin/bvtest", "/bin/bvlink") ? errno : 0;
+	tap(r == EPERM, "#17 root cannot hard-link an executable (got %d)", r);
+	r = chmod("/bin/bvtest", 0644) ? errno : 0;
+	tap(r == EPERM, "#17 root cannot chmod an executable (got %d)", r);
+	r = setxattr("/bin/bvtest", "trusted.ss_test", "x", 1, 0) ? errno : 0;
+	tap(r == EPERM, "#17 root cannot set an xattr on an executable (got %d)", r);
+	r = do_open_wr("/usr/lib/libbv.so.1");
+	tap(r == EPERM, "#17 a shared library without +x under /usr/lib is frozen too (got %d)", r);
+	r = do_open_wr("/bin/bvdata");
+	tap(r == 0, "#17 a plain data file stays writable (got %d)", r);
+	r = do_create("/bin/bvnew");
+	tap(r == 0, "#17 creating a new file is not blocked (got %d)", r);
+	r = as(&NONSUDO, do_exec, "/bin/bvtest");
+	tap(r == 0, "#17 frozen executables still run (got %d)", r);
+	tap(wr(SECFS "binvault_allow", "/bin/bvtest\n") == 0, "#17 binvault_allow /bin/bvtest");
+	r = do_open_wr("/bin/bvtest");
+	tap(r == 0, "#17 an allowlisted path is writable (got %d)", r);
+	wr(SECFS "binvault_allow", "\n");
+	knob_set("binaryvault", "0");
+	r = do_open_wr("/bin/bvtest");
+	tap(r == 0, "#17 binaryvault=0: the executable is writable again (got %d)", r);
+	unlink("/bin/bvtest");
+	unlink("/bin/bvdata");
+	unlink("/usr/lib/libbv.so.1");
+}
+
+static int do_bt_socket(void *a)
+{
+	int fd;
+
+	(void)a;
+	fd = socket(AF_BLUETOOTH, SOCK_RAW, 1 /* BTPROTO_HCI */);
+	if (fd < 0)
+		return errno;
+	close(fd);
+	return 0;
+}
+
+static void t_radio(void)
+{
+	static const char *const names[] = {
+		"/tmp/ssradio/bluetooth.ko", "/tmp/ssradio/cfg80211.ko",
+		"/tmp/ssradio/cfg80211.ko.zst", "/tmp/ssradio/mac80211-hwsim.ko",
+	};
+	int r, standin = 0, fd;
+	unsigned int i;
+
+	r = as(&ROOT, do_bt_socket, NULL);
+	tap(r != EPERM, "#19 radios allowed: AF_BLUETOOTH is not refused by secure_sudo (%s)",
+	    r ? strerror(r) : "socket created");
+	knob_set("block_bluetooth", "1");
+	r = as(&NONSUDO, do_bt_socket, NULL);
+	tap(r == EPERM, "#19 block_bluetooth=1: AF_BLUETOOTH socket denied (got %d)", r);
+	r = as(&ROOT, do_bt_socket, NULL);
+	tap(r == EPERM, "#19 block_bluetooth=1 applies to root too (got %d)", r);
+
+	if (access("/dev/rfkill", F_OK)) {
+		/* No rfkill driver in this kernel: the guard matches the path,
+		 * so a stand-in file at /dev/rfkill exercises the same check. */
+		fd = open("/dev/rfkill", O_WRONLY | O_CREAT, 0644);
+		if (fd >= 0) {
+			close(fd);
+			standin = 1;
+			diag("no /dev/rfkill in this kernel; using a stand-in file");
+		}
+	}
+	r = do_open_wr("/dev/rfkill");
+	tap(r == EPERM, "#19 radios blocked: root cannot write /dev/rfkill (got %d)", r);
+	r = do_open_ro("/dev/rfkill");
+	tap(r == 0, "#19 reading /dev/rfkill (rfkill list) still works (got %d)", r);
+
+	if (!modpath[0]) {
+		tap(0, "#19 test_module.ko available for the module-name checks");
+	} else {
+		mkdir("/tmp/ssradio", 0700);
+		for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+			copy_file(modpath, names[i], 0644);
+		r = load_finit_path(names[0]);
+		tap(r == EPERM, "#19 block_bluetooth=1: a module file named bluetooth.ko is refused (got %d)", r);
+		knob_set("block_bluetooth", "0");
+		knob_set("block_wifi", "1");
+		r = load_finit_path(names[1]);
+		tap(r == EPERM, "#19 block_wifi=1: cfg80211.ko refused (got %d)", r);
+		r = load_finit_path(names[2]);
+		tap(r == EPERM, "#19 block_wifi=1: the .ko.zst spelling is refused too (got %d)", r);
+		r = load_finit_path(names[3]);
+		tap(r == EPERM, "#19 block_wifi=1: mac80211-hwsim.ko (dash spelling) refused (got %d)", r);
+		r = load_finit();
+		tap(r == 0, "#19 block_wifi=1: other modules still load (got %d)", r);
+		knob_set("block_wifi", "0");
+		knob_set("ethernet_only", "1");
+		r = load_finit_path(names[1]);
+		tap(r == EPERM, "#19 ethernet_only=1 refuses Wi-Fi modules (got %d)", r);
+		r = as(&ROOT, do_bt_socket, NULL);
+		tap(r == EPERM, "#19 ethernet_only=1 refuses AF_BLUETOOTH (got %d)", r);
+		knob_set("ethernet_only", "0");
+		if (hwsimpath[0]) {
+			copy_file(hwsimpath, "/tmp/ssradio/renamed.ko", 0644);
+			knob_set("block_wifi", "1");
+			r = load_finit_named("/tmp/ssradio/renamed.ko", "mac80211_hwsim");
+			tap(r == EPERM, "#19 block_wifi=1: a renamed copy of mac80211_hwsim is refused by its module name (got %d)", r);
+			r = load_init_path("/tmp/ssradio/renamed.ko", "mac80211_hwsim");
+			tap(r == EPERM, "#19 block_wifi=1: init_module of the same bytes is refused too (got %d)", r);
+			knob_set("block_wifi", "0");
+			r = load_finit_named("/tmp/ssradio/renamed.ko", "mac80211_hwsim");
+			tap(r == 0, "#19 radios allowed: the renamed copy loads (got %d)", r);
+			unlink("/tmp/ssradio/renamed.ko");
+		} else {
+			tap(0, "#19 mac80211_hwsim.ko available for the module-name check");
+		}
+		/* The file-name check is about the file name only: this file
+		 * holds test_module, so with the radios allowed it loads. */
+		r = load_finit_path(names[1]);
+		tap(r == 0, "#19 radios allowed again: the same file loads (got %d)", r);
+		for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+			unlink(names[i]);
+		rmdir("/tmp/ssradio");
+	}
+	knob_set("block_bluetooth", "0");
+	knob_set("block_wifi", "0");
+	knob_set("ethernet_only", "0");
+	if (standin)
+		unlink("/dev/rfkill");
+}
+
+/*
+ * #13 TimeVault. Engaging it latches the lock, so the allowlist is loaded
+ * before t_lock and the vault is engaged after it, as the last test. The
+ * guest must still be able to run /bin/busybox afterwards (the init script
+ * calls dmesg, grep and poweroff), so busybox is on the list.
+ */
+static int tv_ready, tv_engaged, tv_busybox_ok;
+
+static void t_timevault_prepare(void)
+{
+	char hb[65], hf[65], list[512];
+	struct stat st;
+
+	/* The vault only runs root-owned binaries that are not group or world
+	 * writable. The initramfs keeps the builder's uid, so give the guest's
+	 * own programs the ownership a real system has. */
+	if (stat("/bin/busybox", &st) == 0 && st.st_uid != 0)
+		diag("initramfs files are owned by uid %u; making the guest's programs root-owned",
+		     (unsigned int)st.st_uid);
+	if (chown("/bin/busybox", 0, 0) || chmod("/bin/busybox", 0755) ||
+	    chown("/ss-functest", 0, 0) || chmod("/ss-functest", 0755))
+		diag("chown/chmod of the guest programs failed: %s", strerror(errno));
+	copy_file("/bin/busybox", "/bin/tvok", 0755);
+	copy_file("/bin/busybox", "/bin/tvbad", 0755);
+	copy_file("/bin/busybox", "/bin/dpkg", 0755);
+	copy_file("/bin/busybox", "/bin/tvmod", 0755);
+	tap(knob_set("timevault", "1") == -ENOENT && !strcmp(knob_get("timevault"), "0") &&
+	    !strcmp(knob_get("lock"), "0"),
+	    "#13 engaging with an empty allowlist is refused and does not lock");
+	if (sha256_of("/bin/busybox", hb) || sha256_of("/ss-functest", hf)) {
+		tap(0, "#13 sha256 of /bin/busybox and /ss-functest computed");
+		return;
+	}
+	/* tvmod is listed with busybox's hash, then changed. */
+	append_byte("/bin/tvmod");
+	snprintf(list, sizeof(list),
+		 "/bin/busybox %s\n/ss-functest %s\n/bin/tvok %s\n/bin/dpkg %s\n/bin/tvmod %s\n",
+		 hb, hf, hb, hb, hb);
+	tv_ready = wr(SECFS "timevault_allow", list) == 0;
+	tap(tv_ready, "#13 allowlist (path + SHA-256) loaded before the lock");
+}
+
+static void t_timevault(void)
+{
+	static char buf[1 << 16];
+	char v[64];
+	unsigned long long d0 = 0, d1 = 0;
+	char *ev;
+	int r;
+
+	if (!tv_ready) {
+		tap(0, "#13 allowlist was loaded before the lock");
+		return;
+	}
+	if (rd(KNOB "timevault_denied", v, sizeof(v)) == 0)
+		d0 = strtoull(v, NULL, 10);
+	(void)drain_events(buf, sizeof(buf));
+	tv_engaged = knob_set("timevault", "1") == 0 && !strcmp(knob_get("timevault"), "1");
+	tap(tv_engaged, "#13 the vault engages (on a locked box)");
+	r = as(&NONSUDO, do_exec, "/bin/busybox");
+	tv_busybox_ok = r == 0;
+	tap(tv_busybox_ok, "#13 an allowlisted binary with a matching hash runs (got %d)", r);
+	r = as(&NONSUDO, do_exec, "/bin/tvok");
+	tap(r == 0, "#13 a second copy listed with the same hash runs (got %d)", r);
+	r = as(&NONSUDO, do_exec, "/bin/tvbad");
+	tap(DENIED(r), "#13 a binary not on the allowlist is denied (got %d)", r);
+	r = as(&ROOT, do_exec, "/bin/tvbad");
+	tap(DENIED(r), "#13 the vault applies to root too (got %d)", r);
+	r = as(&ROOT, do_exec, "/bin/tvmod");
+	tap(DENIED(r), "#13 a listed path whose bytes changed is denied (got %d)", r);
+	r = as(&ROOT, do_exec, "/bin/dpkg");
+	tap(DENIED(r), "#13 a package manager is denied even when listed with its hash (got %d)", r);
+	r = as(&ROOT, do_memfd_exec, NULL);
+	tap(DENIED(r), "#13 fileless memfd exec is denied for root (got %d)", r);
+	r = do_open_wr("/bin/tvok");
+	tap(r == EPERM, "#13 root cannot open an allowlisted binary for writing (got %d)", r);
+	drain_events(buf, sizeof(buf));
+	ev = find_event_with(buf, "time_vault", "\"object\":\"/bin/tvbad\"");
+	tap(ev && strstr(ev, "\"reason\":\"not on allowlist\"") &&
+	    strstr(ev, "\"decision\":\"deny\""),
+	    "#13 the denial is logged with the path and reason (what secure-sudod quarantines by)");
+	if (rd(KNOB "timevault_denied", v, sizeof(v)) == 0)
+		d1 = strtoull(v, NULL, 10);
+	tap(d1 >= d0 + 5, "#13 timevault_denied counts the denials (+%llu)", d1 - d0);
+	tap(knob_set("timevault", "0") == -EPERM && !strcmp(knob_get("timevault"), "1"),
+	    "#13 an engaged vault cannot be disengaged before reboot");
 }
 
 struct churn { int id; };
@@ -1377,7 +1938,8 @@ int main(int argc, char **argv)
 	uname(&u);
 	diag("ss-functest on %s %s", u.sysname, u.release);
 	snprintf(mods, sizeof(mods), "/lib/modules/%s", u.release);
-	find_module(mods, 0);
+	find_module(mods, "test_module.ko", modpath, sizeof(modpath), 0);
+	find_module(mods, "mac80211_hwsim.ko", hwsimpath, sizeof(hwsimpath), 0);
 	if (modpath[0])
 		diag("test module: %s", modpath);
 
@@ -1394,12 +1956,27 @@ int main(int argc, char **argv)
 	t_sysctl();
 	t_prguard();
 	t_modules();
+	t_home();
+	t_ram();
+	t_cooldown();
+	t_node();
+	t_binvault();
+	t_radio();
 	t_concurrency();
 	t_events();
-	t_lock();		/* irreversible: keep last */
+	t_timevault_prepare();	/* the allowlist must be in before the lock */
+	t_lock();		/* irreversible from here on */
+	t_timevault();		/* engages TimeVault: keep last */
 
 	printf("1..%d\n", n_test);
 	printf("SS_FUNCTEST_DONE pass=%d fail=%d\n", n_test - n_fail, n_fail);
 	fflush(stdout);
+	if (tv_engaged && !tv_busybox_ok) {
+		/* The init script could not run dmesg or poweroff: stop here
+		 * rather than leave the guest to the boot-test timeout. */
+		diag("TimeVault blocks /bin/busybox; powering off from ss-functest");
+		sync();
+		reboot(RB_POWER_OFF);
+	}
 	return n_fail ? 1 : 0;
 }

@@ -67,10 +67,11 @@
  *     the daemon's ExecStartPre at early boot, the module load is denied from
  *     the start on a configured box; to clamp a radio that is already up on a
  *     running box, `rfkill block` it (or reboot) after setting the knob.
- *   - init_module(2) with a raw buffer carries no filename, so layer 1 matches
- *     only finit_module(2) (what modprobe actually uses). The #16 lock's
- *     `lock_modules` blocks *all* module loads and is the backstop for a truly
- *     locked appliance.
+ *   - Layer 1 reads the module's *file* name. A renamed copy, a compressed
+ *     module and init_module(2) with a raw buffer (no file at all) are caught
+ *     by layer 1b instead, which checks the module's own name just before its
+ *     init code runs. The #16 lock's `lock_modules` blocks *all* module loads
+ *     and stays the backstop for a truly locked appliance.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -171,6 +172,33 @@ int ss_radio_read_file(struct file *file, enum kernel_read_file_id id,
 	}
 	kfree(buf);
 	return ret;
+}
+
+/*
+ * LAYER 1b - the module's own name. A copy of cfg80211.ko saved as foo.ko
+ * passes the file-name check above, but the kernel still calls it cfg80211.
+ * The driver blacklist's module notifier (ss_driver.c) calls this just before
+ * any module's init code runs, so a renamed file, a compressed module and
+ * init_module(2) with a raw buffer are all caught.
+ */
+int ss_radio_module_coming(const char *modname)
+{
+	if (wifi_blocked() && name_in(modname, wifi_modules, ARRAY_SIZE(wifi_modules))) {
+		pr_warn("radio: refused Wi-Fi module %s (module name)\n", modname);
+		ss_event_typed_self("radio_guard", "module_loader", "load_module",
+				    modname, "deny", "wifi_disabled",
+				    "radio: refused Wi-Fi module %s (module name)", modname);
+		return -EPERM;
+	}
+	if (bt_blocked() && name_in(modname, bt_modules, ARRAY_SIZE(bt_modules))) {
+		pr_warn("radio: refused Bluetooth module %s (module name)\n", modname);
+		ss_event_typed_self("radio_guard", "module_loader", "load_module",
+				    modname, "deny", "bluetooth_disabled",
+				    "radio: refused Bluetooth module %s (module name)",
+				    modname);
+		return -EPERM;
+	}
+	return 0;
 }
 
 /* ------------- LAYER 2: deny AF_BLUETOOTH sockets when BT off ------------ */

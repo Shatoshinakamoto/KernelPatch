@@ -6,7 +6,8 @@ reconciled merge of the project's split-up v1 module and v2 LSM designs; see
 `kernel/security/secure_sudo/INTEGRATION.md` for the kernel wiring and the full
 runtime interface.
 
-Target kernel: **6.12 LTS**. Everything here is local; nothing is pushed.
+Target kernel: **6.12 LTS**. What each control defends against, what it
+needs, and where it stops: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Layout
 
@@ -33,6 +34,7 @@ docs/
   HARDWARE_SMOKE_TEST.md          the per-machine test plan VMs cannot replace
   ROADMAP_STATUS.md               where each Strategic TODO item stands, with evidence
   SECURITY_REVIEW.md              NIST-framed review: findings + fixes
+  THREAT_MODEL.md                 per control: threat, preconditions, limits, test
   STIG.md                         STIG/CIS tooling, control map, results
   OSCAP_BUGS.md                   every oscap bug, root cause, patch, before/after
   FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
@@ -52,7 +54,7 @@ tests/
   install/ userspace/ provenance/ oscap/   host suites (root-only parts say so)
   vm/                             in-kernel tests in QEMU (initramfs)
   vm/distro/                      full Ubuntu VM: install, trial boot, recovery, removal, STIG
-.github/workflows/build-gate.yml  CI for the gate and the VM jobs (written, not yet run on GitHub)
+.github/workflows/build-gate.yml  CI: the gate on every push/PR, VM jobs weekly + on demand
 temporary/                        opt-in add-ons (below)
 ```
 
@@ -63,11 +65,11 @@ temporary/                        opt-in add-ons (below)
 | # | Where | Protection |
 |---|-------|------------|
 | 1 | K | Block non-sudo UID/GID switching (setuid/setgid/setgroups) and unprivileged user namespaces. **1b:** deny non-sudo exec of setuid/file-cap binaries unless allowlisted. |
-| 2 | K | Command blacklist, matched by device + inode and path (not basename). |
+| 2 | K | Command blacklist, matched by device + inode, path, and content (SHA-256 of each entry, so a renamed copy is refused too). |
 | 3 | K | Block non-sudo firmware/flash access: `/dev/mem`, `/dev/port`, `/dev/mtd*`, `/dev/mei*`, and `/sys/firmware` writes. |
 | 4 | K | Confine non-sudo writes to home + scratch/device trees + an allowlist. Opt-in (aggressive). Built on `file_open` + the `path_*` hooks; both source versions used a `path_permission` hook that does not exist. |
 | 5 | K | Block TPM clear (`ppi/request`) for everyone unless booted with `secure_sudo.tpm_maint=1`. |
-| 6 | K | Driver blacklist / anti-BYOVD: SHA-256 + name checked at module load. |
+| 6 | K | Driver blacklist / anti-BYOVD: file SHA-256 + file name checked at load, and the module's own name checked before its init runs (catches renamed and compressed copies and `init_module(2)`). |
 | 7 | K | RAM-spike detection drops caches (`si_mem_available`, kernel worker). |
 | 8 | K + U | Sudo brute-force cooldown: PAM feeds failures, the kernel blocks, the daemon kills the offender. |
 | 9 | K + U | Versioned JSON security events with per-boot sequence/clock/actor metadata and visible ring/audit loss counters; the daemon writes dated, rotated logs. `secure-sudo health` reports loss and component status; `evidence-export` creates hash-chained, optionally externally signed bundles. |
@@ -80,7 +82,7 @@ temporary/                        opt-in add-ons (below)
 | 16 | K | One-way config lock until reboot (TimeVault latches it); blocks module loads, kexec and kernel-memory patching while locked. |
 | 17 | K | **BinaryVault:** freeze every executable + shared library (write/truncate/unlink/rename/hardlink/chmod/xattr) for all UIDs incl. root. Updates via a `secure_sudo.binvault_maint=1` maintenance reboot. See [docs/BINARYVAULT.md](docs/BINARYVAULT.md). |
 | 18 | U | **STIG / OpenSCAP:** `scripts/stig-harden.sh` scan + two-pass remediate + known-issue patches; real results: DISA Ubuntu 24.04 STIG 61 pass / 1 fail in a container and 206 pass / 11 fail / 0 error in a VM after two passes (each remaining rule classified; final VM rescan pending), CIS L2 Server 190 / 17. See [docs/STIG.md](docs/STIG.md) and [docs/OSCAP_BUGS.md](docs/OSCAP_BUGS.md). |
-| 19 | K | **RadioGuard:** Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch (refuses wireless/BT core modules, `AF_BLUETOOTH` sockets, `/dev/rfkill` writes). `secure-sudo radio ...` |
+| 19 | K | **RadioGuard:** Wi-Fi / Bluetooth lockdown + `ethernet_only` master switch (refuses wireless/BT modules by file and module name, `AF_BLUETOOTH` sockets, `/dev/rfkill` writes). `secure-sudo radio ...` |
 | 20 | K | **Process Runtime Guard:** denies cross-process ptrace / `process_vm_writev` / `/proc/pid/mem` tampering and W^X mappings, with a CLI-managed exemption list; optional `prguard_observe` memory-access feed. `secure-sudo prguard ...` |
 | 21 | U | **PheonixBox:** snapshot tamper protection + auto-repair for chosen files/dirs (SHA-256 manifest detects, compressed snapshot restores, permissions snapshot). See [docs/PHEONIXBOX.md](docs/PHEONIXBOX.md). |
 | 22 | K | **BPF & perf guard:** `bpf_guard` / `perf_guard` deny bpf(2) and perf_event_open to non-sudo users; `bpf_lock_tracing` (default on) refuses tracing-class BPF programs (kprobe, tracepoint, fentry, BPF-LSM, freplace) for everyone once the lock latches. |
@@ -201,4 +203,7 @@ In short:
   GitHub for every push and pull request; the VM jobs run weekly and on
   demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots, #48–#51 since).
+  (findings #35–#47 came from v12's tests and boots, #48–#57 since).
+* Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+  (P1-5); promises the code does not keep yet are tracked as features to
+  build in [TODO.md](TODO.md), "Doc promises to build".

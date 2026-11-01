@@ -10,8 +10,12 @@
  * hook is kernel_read_file with READING_MODULE, which fires for finit_module().
  *
  * A module is denied if its SHA-256 matches a blacklisted hash (the robust
- * match - a renamed copy is still caught) or its filename basename matches a
- * blacklisted name. Policy is fed through securityfs by the root-only CLI.
+ * match - a renamed copy is still caught) or a blacklisted name matches
+ * either its file name or the module's own name. The module's own name (what
+ * lsmod shows) is checked from a module notifier just before the module's
+ * init code runs, so it covers a renamed file, a compressed module and
+ * init_module(2) with a raw buffer alike; RadioGuard (#19) uses the same
+ * check. Policy is fed through securityfs by the root-only CLI.
  *
  * The hash is taken over the exact bytes the kernel is about to load, in the
  * kernel_post_read_file (finit_module) and kernel_post_load_data
@@ -47,6 +51,8 @@
 #include <linux/security.h>
 #include <linux/lsm_hooks.h>
 #include <linux/kernel_read_file.h>
+#include <linux/module.h>
+#include <linux/notifier.h>
 #include <crypto/sha2.h>
 
 #include "secure_sudo.h"
@@ -145,6 +151,66 @@ static bool name_blacklisted(const char *name)
 	mutex_unlock(&drv_lock);
 	return hit;
 }
+
+/*
+ * Module names are spelled with '_' (the kernel turns '-' into '_'), and a
+ * blacklist entry may be a file name ("foo-bar.ko.zst"). Compare the part
+ * before the first '.', with '-' read as '_'.
+ */
+static bool ss_modname_eq(const char *entry, const char *modname)
+{
+	for (; *entry && *entry != '.' && *modname; entry++, modname++)
+		if ((*entry == '-' ? '_' : *entry) != *modname)
+			return false;
+	return (!*entry || *entry == '.') && !*modname;
+}
+
+static bool modname_blacklisted(const char *modname)
+{
+	int i;
+	bool hit = false;
+
+	mutex_lock(&drv_lock);
+	for (i = 0; i < drv_nname; i++)
+		if (ss_modname_eq(drv_names[i], modname)) {
+			hit = true;
+			break;
+		}
+	mutex_unlock(&drv_lock);
+	return hit;
+}
+
+#ifdef CONFIG_MODULES
+/*
+ * MODULE_STATE_COMING runs in the loading task after the module is laid out
+ * and before its init function. An error here makes the load fail with that
+ * error and the module is freed, so nothing of it ever runs.
+ */
+static int ss_module_notify(struct notifier_block *nb, unsigned long state,
+			    void *data)
+{
+	struct module *mod = data;
+	int ret;
+
+	if (state != MODULE_STATE_COMING)
+		return NOTIFY_DONE;
+	ret = ss_radio_module_coming(mod->name);
+	if (!ret && READ_ONCE(drv_nname) && modname_blacklisted(mod->name)) {
+		pr_warn("driver-blacklist: blocked module %s by its own name\n",
+			mod->name);
+		ss_event_typed_self("driver_blacklist", "module_loader", "load_module",
+				    mod->name, "deny", "module_name_blacklist",
+				    "driver-blacklist: blocked module %s (module name)",
+				    mod->name);
+		ret = -EPERM;
+	}
+	return notifier_from_errno(ret);
+}
+
+static struct notifier_block ss_module_nb = {
+	.notifier_call = ss_module_notify,
+};
+#endif
 
 int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
 			       bool contents)
@@ -367,5 +433,11 @@ int ss_driver_secfs(struct dentry *dir)
 				   &drv_fops);
 	if (IS_ERR(d))
 		return PTR_ERR(d);
+#ifdef CONFIG_MODULES
+	/* No module can be loaded before userspace starts, so registering
+	 * here (late init) leaves no gap. */
+	return register_module_notifier(&ss_module_nb);
+#else
 	return 0;
+#endif
 }
