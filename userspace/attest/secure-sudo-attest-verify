@@ -16,6 +16,10 @@ no TPM and no secure_sudo install.
       attestation key must be the one already enrolled, so a re-enrollment
       cannot quietly swap the TPM.
 
+  secure-sudo-attest-verify policy BUNDLE
+      Show the policy the kernel measured (its log, replayed) and its digest,
+      for --allow-policy. Informational: it does not check the signature.
+
   secure-sudo-attest-verify verify BUNDLE --host HOST.json --nonce NONCE
                                    [--max-age SECONDS] [--json]
       Check a bundle against the enrolled host. Exit 0 only when every check
@@ -198,6 +202,117 @@ def check_quote(akpub, nonce_hex, report_bytes, tpm, quote, out):
     return a
 
 
+# TPM users that cannot extend a chosen digest into a PCR. Anything else on
+# tpm_openers (systemd-pcrextend, tpm2-abrmd and every client behind it,
+# tpm2-tools) lets root append made-up events to the policy log after the
+# lock, which the verifier cannot tell from the kernel's.
+SAFE_OPENERS = {
+    "/usr/bin/systemd-creds", "/usr/bin/systemd-cryptenroll",
+    "/usr/lib/systemd/systemd-cryptsetup", "/usr/lib/systemd/systemd-pcrlock",
+    "/usr/lib/systemd/systemd-tpm2-setup", "/usr/lib/systemd/systemd-measure",
+    "/usr/libexec/secure-sudo/secure-sudo-attest",
+}
+
+
+def check_extenders(report, kv, out):
+    """The reported tpm_openers text must be the one the kernel measured; then
+    no program on it may be able to extend arbitrary PCR values."""
+    try:
+        raw = base64.b64decode(report.get("tpm_openers_b64") or "", validate=True)
+        text = raw.decode("ascii") if raw else None
+    except (ValueError, UnicodeDecodeError):
+        text = None
+    want = kv.get(("list", "tpm_openers"))
+    if text is None or want is None:
+        out.append((False, "the report carries tpm_openers and the kernel measured it"))
+        return
+    ok = hashlib.sha256(text.encode()).hexdigest() == want
+    out.append((ok, "the reported tpm_openers is the list the kernel measured"))
+    if not ok:
+        return
+    progs = [l.strip() for l in text.splitlines()
+             if l.strip().startswith("/")]
+    bad = [p for p in progs if p not in SAFE_OPENERS]
+    if report.get("_accept_extenders"):
+        return
+    out.append((not bad, "no program on tpm_openers can extend the policy PCR%s" %
+                ("" if not bad else " (found %s; remove them before locking, "
+                 "or enroll with --accept-pcr-extenders)" % ", ".join(bad))))
+
+
+def replay_policy(report, pcrs, out):
+    """P2-1 part 2: replay the kernel's policy log (policy_log in securityfs).
+
+    Each extended entry is "IDX 1 SHA256(TEXT) TEXT"; the PCR is
+    SHA256(PCR || SHA256(TEXT)) per entry. A "foreign pcr V" marker means the
+    kernel found the PCR at V, not at its own value: something else extended
+    it. The policy is the state at the first lock event, and nothing may
+    follow the lock (the kernel refuses every change once locked, so an entry
+    after it was not made by the kernel). Returns (digest, locked, state).
+    """
+    try:
+        log = base64.b64decode(report.get("policy_log_b64") or "", validate=True).decode("ascii")
+    except (ValueError, UnicodeDecodeError):
+        log = ""
+    lines = log.splitlines()
+    hdr = lines[0].split() if lines else []
+    if len(hdr) < 2 or hdr[0] != "secure_sudo-policy-log" or hdr[1] != "v1":
+        out.append((False, "the report carries the kernel policy log"))
+        return None
+    h = dict(x.split("=", 1) for x in hdr[2:] if "=" in x)
+    pcr = h.get("pcr", "")
+    if pcr != str(report.get("policy_pcr")) or pcr not in pcrs:
+        out.append((False, "the policy PCR %s is in the quote" % (pcr or "?")))
+        return None
+    state = bytes(32)
+    events, pending, foreign, malformed = [], 0, 0, 0
+    for ln in lines[1:]:
+        parts = ln.split(" ", 3)
+        if len(parts) != 4 or len(parts[2]) != 64:
+            malformed += 1
+            continue
+        _, ext, dg, text = parts
+        if ext != "1":
+            pending += 1
+            continue
+        if pending or hashlib.sha256(text.encode()).hexdigest() != dg:
+            malformed += 1
+            continue
+        if text.startswith("foreign pcr "):
+            foreign += 1
+            try:
+                state = bytes.fromhex(text.split()[2])
+            except (IndexError, ValueError):
+                malformed += 1
+                continue
+        else:
+            events.append(text)
+        state = hashlib.sha256(state + bytes.fromhex(dg)).digest()
+    kv, locked, after = {}, False, 0
+    for text in events:
+        kind, _, rest = text.partition(" ")
+        name, _, value = rest.partition(" ")
+        if kind == "lock":
+            locked = True
+        elif kind == "list" and locked:
+            after += 1          # the kernel refuses every list write once locked
+        elif kind in ("knob", "list"):
+            kv[(kind, name)] = value    # knobs that only tighten still work locked
+        else:
+            malformed += 1
+    out.append((not malformed, "the kernel policy log is well formed"))
+    out.append((state.hex() == pcrs[pcr],
+                "the kernel policy log replays to the quoted PCR %s" % pcr))
+    out.append((not pending and h.get("overflow") == "0",
+                "every policy change is in the PCR (none pending, no overflow)"))
+    out.append((not foreign, "nothing but the kernel extended PCR %s" % pcr))
+    out.append((not after, "no list changed after the lock (the kernel refuses that)"))
+    check_extenders(report, kv, out)
+    canon = "secure_sudo-measured-policy-v1\n" + "".join(
+        "%s %s %s\n" % (k, n, v) for (k, n), v in sorted(kv.items())) + "locked %d\n" % locked
+    return hashlib.sha256(canon.encode()).hexdigest(), locked, kv
+
+
 def report_lines(out, failed):
     for ok, text in out:
         print("%s %s" % ("PASS" if ok else "FAIL", text))
@@ -215,13 +330,27 @@ def cmd_enroll(a):
     akpub = parse_public(akpub_b)
     out = []
     q = check_quote(akpub, a.nonce, report_bytes, tpm, quote, out)
+    prev = {}
     if a.previous:
         with open(a.previous) as f:
             prev = json.load(f)
         out.append((prev.get("ak_name") == akpub["name"],
                     "the attestation key is the one already enrolled (same TPM)"))
     out.append((report.get("secure_sudo_lsm") is True, "the secure_sudo LSM is active"))
-    out.append((bool(report.get("policy_sha256")), "the report carries a policy digest"))
+    measured = report.get("policy_source") == "measured"
+    golden = dict(tpm["pcrs"])
+    if measured:
+        report["_accept_extenders"] = bool(a.accept_pcr_extenders)
+        m = replay_policy(report, tpm["pcrs"], out)
+        policy = m[0] if m else ""
+        if m and a.require_lock:
+            out.append((m[1], "the policy is locked (measured)"))
+        golden.pop(str(report.get("policy_pcr")), None)
+    else:
+        policy = report.get("policy_sha256") or ""
+        out.append((bool(policy), "the report carries a policy digest"))
+    if a.previous and prev.get("policy_source") == "measured":
+        out.append((measured, "the kernel still measures the policy (no downgrade to reported)"))
     failed = sum(1 for ok, _ in out if not ok)
     if failed:
         report_lines(out, failed)
@@ -233,11 +362,14 @@ def cmd_enroll(a):
         "enrolled": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "ak_public": tpm["ak_public"],
         "ak_name": akpub["name"],
-        "golden_pcrs": tpm["pcrs"],
+        "golden_pcrs": golden,
+        "policy_source": "measured" if measured else "reported",
+        "policy_pcr": report.get("policy_pcr") if measured else None,
         "kernel": report.get("kernel"),
         "secure_boot": report.get("secure_boot"),
-        "allowed_policy_sha256": sorted(set([report["policy_sha256"]] + list(a.allow_policy or []))),
+        "allowed_policy_sha256": sorted(set([policy] + list(a.allow_policy or []))),
         "require_lock": bool(a.require_lock),
+        "accept_pcr_extenders": bool(a.accept_pcr_extenders),
         "reset_count": q["reset_count"],
     }
     tmp = a.out + ".tmp"
@@ -246,10 +378,30 @@ def cmd_enroll(a):
         f.write("\n")
     os.replace(tmp, a.out)
     report_lines(out, 0)
-    print("enrolled %s: kernel %s, PCRs %s, policy %s" % (
-        host["host"], host["kernel"], ",".join(sorted(tpm["pcrs"], key=int)),
-        report["policy_sha256"][:16]))
+    print("enrolled %s: kernel %s, boot PCRs %s, policy %s (%s)" % (
+        host["host"], host["kernel"], ",".join(sorted(golden, key=int)),
+        policy[:16], host["policy_source"]))
     return 0
+
+
+def cmd_policy(a):
+    """Show the measured policy in a bundle (not verified: use verify for that)."""
+    _, _, report, tpm, _ = load_bundle(a.bundle)
+    if report.get("policy_source") != "measured":
+        print("this bundle's policy is reported, not measured: digest %s" % report.get("policy_sha256"))
+        return 1
+    out = []
+    report["_accept_extenders"] = False
+    m = replay_policy(report, tpm.get("pcrs", {}), out)
+    for ok, text in out:
+        print("%s %s" % ("ok  " if ok else "BAD ", text))
+    if not m:
+        return 1
+    for (k, n), v in sorted(m[2].items()):
+        print("%s %s %s" % (k, n, v))
+    print("locked %d" % m[1])
+    print("measured_policy_sha256=%s" % m[0])
+    return 0 if all(ok for ok, _ in out) else 1
 
 
 def cmd_verify(a):
@@ -269,11 +421,25 @@ def cmd_verify(a):
                     ("" if not bad else " (PCR %s differ%s)" % (
                         ",".join(bad), "s" if len(bad) == 1 else ""))))
         out.append((report.get("secure_sudo_lsm") is True, "the secure_sudo LSM is active"))
-        out.append((report.get("policy_sha256") in host["allowed_policy_sha256"],
-                    "the active policy is an allowed one (reported digest %s)" %
-                    str(report.get("policy_sha256"))[:16]))
-        if host.get("require_lock"):
-            out.append((report.get("policy_locked") == 1, "the policy is locked"))
+        if host.get("policy_source") == "measured":
+            m = None
+            if report.get("policy_source") != "measured" or \
+                    report.get("policy_pcr") != host.get("policy_pcr"):
+                out.append((False, "the kernel measures the policy into PCR %s" % host.get("policy_pcr")))
+            else:
+                report["_accept_extenders"] = bool(host.get("accept_pcr_extenders"))
+                m = replay_policy(report, pcrs, out)
+            if m:
+                out.append((m[0] in host["allowed_policy_sha256"],
+                            "the active policy is an allowed one (measured digest %s)" % m[0][:16]))
+                if host.get("require_lock"):
+                    out.append((m[1], "the policy is locked (measured)"))
+        else:
+            out.append((report.get("policy_sha256") in host["allowed_policy_sha256"],
+                        "the active policy is an allowed one (reported digest %s)" %
+                        str(report.get("policy_sha256"))[:16]))
+            if host.get("require_lock"):
+                out.append((report.get("policy_locked") == 1, "the policy is locked"))
         if a.max_age:
             try:
                 t = time.mktime(time.strptime(report["time"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
@@ -304,7 +470,11 @@ def main():
     e.add_argument("--previous")
     e.add_argument("--require-lock", action="store_true")
     e.add_argument("--allow-policy", action="append", metavar="SHA256")
+    e.add_argument("--accept-pcr-extenders", action="store_true")
     e.set_defaults(fn=cmd_enroll)
+    pp = s.add_parser("policy")
+    pp.add_argument("bundle")
+    pp.set_defaults(fn=cmd_policy)
     v = s.add_parser("verify")
     v.add_argument("bundle")
     v.add_argument("--host", required=True)

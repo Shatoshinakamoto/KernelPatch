@@ -432,6 +432,18 @@ int ss_timevault_bprm(struct linux_binprm *bprm);
 int ss_firmware_file_open(struct file *file);
 int ss_tpm_file_open(struct file *file);
 int ss_tpm_secfs(struct dentry *dir);	/* G4 tpm_openers */
+
+/*
+ * P2-1 part 2: policy measurement (ss_measure.c). Each successful policy
+ * change is logged in policy_log and extended into a TPM PCR, so a remote
+ * verifier can replay what the kernel actually applied. Call these where
+ * the kernel's own copy of the new value takes effect, under the lock that
+ * orders that change (process context; may allocate, never fails).
+ */
+void ss_measure_knob(const char *name, const char *buf, size_t len);
+void ss_measure_list(const char *name, const void *text, size_t len);
+void ss_measure_lock(const char *why);
+int ss_measure_secfs(struct dentry *dir);
 int ss_timevault_file_open(struct file *file);
 int ss_home_file_open(struct file *file);
 int ss_binvault_file_open(struct file *file);

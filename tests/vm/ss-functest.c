@@ -17,6 +17,7 @@
  * Never run it on a real host: it rewrites policy and latches the lock.
  */
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/bpf.h>
@@ -1967,6 +1968,8 @@ static void t_tpm_prepare(void)
 	tap(rd(SECFS "tpm_openers", buf, sizeof(buf)) == 0 &&
 	    strstr(buf, "/usr/bin/systemd-creds\n"),
 	    "G4 tpm_openers starts with the defaults (systemd-creds, ...)");
+	tap(!strstr(buf, "systemd-pcrextend") && !strstr(buf, "tpm2-abrmd"),
+	    "P2-1 the defaults leave out PCR extenders (systemd-pcrextend, tpm2-abrmd)");
 	tap(maj > 0, "G4 the TPM driver core registered its major (%d)", maj);
 	unlink(TPMRM_NODE);
 	unlink(TPM0_NODE);
@@ -1981,7 +1984,7 @@ static void t_tpm_prepare(void)
 	tap(rd(SECFS "tpm_openers", buf, sizeof(buf)) == 0 &&
 	    strstr(buf, "/ss-functest"), "G4 tpm_openers reads back");
 	r = as(&ROOT, do_tpm_probe, TPMRM_NODE);
-	tap(r == ENXIO || r == ENODEV,
+	tap(r == ENXIO || r == ENODEV || (r == 0 && !access("/sys/class/tpm/tpm0", F_OK)),
 	    "G4 unlocked: any root program reaches the TPM driver (got %d)", r);
 }
 
@@ -1999,7 +2002,7 @@ static void t_tpm_locked(void)
 	r = as(&ROOT, do_tpm_probe, TPM0_NODE);
 	tap(r == EPERM, "G4 locked: ... nor tpm0, misc 10:224 (got %d)", r);
 	r = as(&ROOT, do_tpm_open, TPMRM_NODE);
-	tap(r == ENXIO || r == ENODEV,
+	tap(r == ENXIO || r == ENODEV || (r == 0 && !access("/sys/class/tpm/tpm0", F_OK)),
 	    "G4 locked: a program on tpm_openers still reaches the driver (got %d)", r);
 	r = as(&NONSUDO, do_tpm_probe, TPMRM_NODE);
 	tap(DENIED(r), "G4 locked: non-root unlisted program refused too (got %d)", r);
@@ -2012,6 +2015,267 @@ static void t_tpm_locked(void)
 	unlink(TPMRM_NODE);
 	unlink(TPM0_NODE);
 	unlink("/bin/tpmprobe");
+}
+
+/* ------------------------------------------- P2-1 policy measurement */
+
+/* A small SHA-256 (FIPS 180-4) so the test can check the kernel's digests
+ * and replay the PCR without linking a crypto library into a static binary. */
+static const uint32_t sha_k[64] = {
+	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+};
+#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void sha_block(uint32_t h[8], const unsigned char *p)
+{
+	uint32_t w[64], a, b, c, d, e, f, g, hh, t1, t2;
+	int i;
+
+	for (i = 0; i < 16; i++)
+		w[i] = (uint32_t)p[4 * i] << 24 | (uint32_t)p[4 * i + 1] << 16 |
+		       (uint32_t)p[4 * i + 2] << 8 | p[4 * i + 3];
+	for (; i < 64; i++)
+		w[i] = w[i - 16] + (ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3)) +
+		       w[i - 7] + (ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10));
+	a = h[0]; b = h[1]; c = h[2]; d = h[3]; e = h[4]; f = h[5]; g = h[6]; hh = h[7];
+	for (i = 0; i < 64; i++) {
+		t1 = hh + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25)) + ((e & f) ^ (~e & g)) + sha_k[i] + w[i];
+		t2 = (ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+		hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+	}
+	h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+}
+
+static void sha256(const void *data, size_t len, unsigned char out[32])
+{
+	uint32_t h[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+			  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+	const unsigned char *p = data;
+	unsigned char blk[64];
+	size_t i, rest = len % 64;
+	uint64_t bits = (uint64_t)len * 8;
+
+	for (i = 0; i + 64 <= len; i += 64)
+		sha_block(h, p + i);
+	memset(blk, 0, sizeof(blk));
+	memcpy(blk, p + i, rest);
+	blk[rest] = 0x80;
+	if (rest >= 56) {
+		sha_block(h, blk);
+		memset(blk, 0, sizeof(blk));
+	}
+	for (i = 0; i < 8; i++)
+		blk[63 - i] = (unsigned char)(bits >> (8 * i));
+	sha_block(h, blk);
+	for (i = 0; i < 32; i++)
+		out[i] = (unsigned char)(h[i / 4] >> (24 - 8 * (i % 4)));
+}
+
+static void to_hex(const unsigned char *b, size_t n, char *out)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		sprintf(out + 2 * i, "%02x", b[i]);
+}
+
+static int from_hex(const char *s, unsigned char *b, size_t n)
+{
+	size_t i;
+	unsigned int v;
+
+	for (i = 0; i < n; i++) {
+		if (sscanf(s + 2 * i, "%2x", &v) != 1)
+			return -1;
+		b[i] = (unsigned char)v;
+	}
+	return 0;
+}
+
+#define PLOG SECFS "policy_log"
+static char plog[1 << 18];
+
+/* The whole log (seq_file hands it out a page at a time). */
+static int plog_read(void)
+{
+	int fd = open(PLOG, O_RDONLY);
+	size_t n = 0;
+	ssize_t r;
+
+	if (fd < 0)
+		return -errno;
+	while (n < sizeof(plog) - 1 && (r = read(fd, plog + n, sizeof(plog) - 1 - n)) > 0)
+		n += (size_t)r;
+	close(fd);
+	plog[n] = '\0';
+	return 0;
+}
+
+static unsigned int plog_hdr(const char *key)
+{
+	char k[32], *p, *nl = strchr(plog, '\n');
+
+	snprintf(k, sizeof(k), " %s=", key);
+	p = strstr(plog, k);
+	return (p && (!nl || p < nl)) ? (unsigned int)strtoul(p + strlen(k), NULL, 10) : ~0u;
+}
+
+/* The event text of the entry @back from the end (0 = last), foreign
+ * markers skipped; "" if there is none. Works on a copy of plog. */
+static const char *plog_last(int back)
+{
+	static char copy[sizeof(plog)], t[256];
+	char *line, *end;
+	int f;
+
+	memcpy(copy, plog, sizeof(copy));
+	t[0] = '\0';
+	end = copy + strlen(copy);
+	while (end > copy) {
+		if (end[-1] == '\n')
+			*--end = '\0';
+		line = strrchr(copy, '\n');
+		line = line ? line + 1 : copy;
+		if (line != copy && !strstr(line, "F 1 ")) {
+			char *sp = line;
+
+			for (f = 0; f < 3 && sp; f++)
+				sp = strchr(sp + 1, ' ');
+			if (sp && back-- == 0) {
+				snprintf(t, sizeof(t), "%s", sp + 1);
+				return t;
+			}
+		}
+		end = line;
+	}
+	return t;
+}
+
+/* Wait for the worker to extend everything, then replay the log the way a
+ * verifier does and compare with the TPM's own PCR (sysfs pcr-sha256). */
+static void plog_replay_check(const char *when)
+{
+	unsigned char st[32] = { 0 }, dg[32], buf[64], seen[32];
+	char path[64], pcr[80], *line, *save = NULL, calc[65];
+	unsigned int i, bad = 0, foreign = 0, pcrn;
+
+	if (access("/sys/class/tpm/tpm0", F_OK)) {
+		diag("P2-1 no TPM in this guest: the PCR replay is not checked (%s)", when);
+		return;
+	}
+	/* Each entry costs a PCR read and an extend; a burst of ~1300 policy
+	 * writes (the tests above) takes a few seconds under KVM. Wait up to
+	 * a minute, and report how long it took. */
+	for (i = 0; i < 600; i++) {
+		plog_read();
+		if (plog_hdr("count") == plog_hdr("extended"))
+			break;
+		usleep(100000);
+	}
+	diag("P2-1 %s: %u entries extended after %u.%u s", when, plog_hdr("extended"),
+	     i / 10, i % 10);
+	tap(plog_hdr("count") == plog_hdr("extended"),
+	    "P2-1 %s: the worker extended every entry (count=%u extended=%u tpm=%d)", when,
+	    plog_hdr("count"), plog_hdr("extended"), (int)plog_hdr("tpm"));
+	pcrn = plog_hdr("pcr");
+	line = strchr(plog, '\n');
+	for (line = line ? strtok_r(line + 1, "\n", &save) : NULL; line;
+	     line = strtok_r(NULL, "\n", &save)) {
+		char idx[16], ext[4], hex[65];
+		int off = 0;
+
+		if (sscanf(line, "%15s %3s %64s %n", idx, ext, hex, &off) != 3 || !off) {
+			bad++;
+			continue;
+		}
+		if (strcmp(ext, "1"))	/* not in the PCR yet: the verifier skips it too */
+			continue;
+		sha256(line + off, strlen(line + off), dg);
+		to_hex(dg, 32, calc);
+		if (strcmp(calc, hex) && bad++ < 3)
+			diag("digest mismatch: %.200s", line);
+		if (!strncmp(line + off, "foreign pcr ", 12)) {
+			foreign++;
+			if (from_hex(line + off + 12, seen, 32) == 0)
+				memcpy(st, seen, 32);
+		}
+		memcpy(buf, st, 32);
+		memcpy(buf + 32, dg, 32);
+		sha256(buf, 64, st);
+	}
+	plog_read();
+	snprintf(path, sizeof(path), "/sys/class/tpm/tpm0/pcr-sha256/%u", pcrn);
+	tap(rd(path, pcr, sizeof(pcr)) == 0, "P2-1 %s: PCR %u readable", when, pcrn);
+	to_hex(st, 32, calc);
+	for (i = 0; pcr[i]; i++)
+		pcr[i] = (char)tolower((unsigned char)pcr[i]);
+	tap(!bad, "P2-1 %s: every log line's digest is sha256 of its text", when);
+	tap(!strcmp(calc, pcr), "P2-1 %s: the log replays to the TPM's PCR %u", when, pcrn);
+	if (strcmp(calc, pcr))
+		diag("replay %s, PCR %s", calc, pcr);
+	tap(!foreign, "P2-1 %s: nothing but the kernel extended PCR %u", when, pcrn);
+}
+
+static void t_measure(void)
+{
+	char want[160], blk[8192], old[16], hex[65];
+	const char *kv_ram[] = { KNOB "max_ram_percent", "50" };
+	unsigned char dg[32];
+	unsigned int n;
+	struct stat st;
+	int r;
+
+	tap(stat(PLOG, &st) == 0 && (st.st_mode & 0777) == 0400,
+	    "P2-1 policy_log exists, root read-only");
+	r = plog_read();
+	tap(r == 0 && !strncmp(plog, "secure_sudo-policy-log v1 pcr=", 30),
+	    "P2-1 policy_log has its header (%.70s)", plog);
+	r = as(&NONSUDO, do_open_ro, PLOG);
+	tap(r == EACCES || r == EPERM, "P2-1 a non-sudo user cannot read the log (got %d)", r);
+	tap(strstr(plog, " list tpm_openers ") != NULL,
+	    "P2-1 the boot-time tpm_openers defaults are measured");
+	if (!strstr(plog, " list tpm_openers "))
+		diag("policy_log: %.400s", plog);
+
+	snprintf(old, sizeof(old), "%s", knob_get("max_ram_percent"));
+	tap(knob_set("max_ram_percent", "77") == 0, "P2-1 set max_ram_percent 77");
+	plog_read();
+	tap(!strcmp(plog_last(0), "knob max_ram_percent 77"),
+	    "P2-1 a knob write is measured (last: %s)", plog_last(0));
+	n = plog_hdr("count");
+	knob_set("max_ram_percent", "77");
+	plog_read();
+	tap(plog_hdr("count") == n, "P2-1 the same value again adds nothing");
+	r = as(&NONSUDO, do_write_file, kv_ram);
+	plog_read();
+	tap(r != 0 && plog_hdr("count") == n, "P2-1 a refused write is not measured (got %d)", r);
+	knob_set("max_ram_percent", old);
+
+	tap(rd(SECFS "blacklist", blk, sizeof(blk) - 64) == 0, "P2-1 read the blacklist");
+	strcat(blk, "\n# measured\n");
+	tap(wr(SECFS "blacklist", blk) == 0, "P2-1 rewrite the blacklist");
+	sha256(blk, strlen(blk), dg);
+	to_hex(dg, 32, hex);
+	snprintf(want, sizeof(want), "list blacklist %s", hex);
+	plog_read();
+	tap(!strcmp(plog_last(0), want),
+	    "P2-1 a list write is measured as the sha256 of the text the kernel kept");
+	plog_replay_check("before the lock");
+}
+
+static void t_measure_locked(void)
+{
+	plog_read();
+	tap(!strcmp(plog_last(0), "lock lock_command 1") && !strcmp(plog_last(1), "knob lock 1"),
+	    "P2-1 locking is measured: knob lock 1, then the lock (last: %s)", plog_last(0));
+	plog_replay_check("after the lock");
 }
 
 static void t_lock(void)
@@ -2083,10 +2347,12 @@ int main(int argc, char **argv)
 	t_radio();
 	t_concurrency();
 	t_events();
+	t_measure();		/* P2-1: before the lock */
 	t_timevault_prepare();	/* the allowlist must be in before the lock */
 	t_tpm_prepare();	/* tpm_openers, likewise */
 	t_lock();		/* irreversible from here on */
 	t_tpm_locked();
+	t_measure_locked();
 	t_timevault();		/* engages TimeVault: keep last */
 
 	printf("1..%d\n", n_test);

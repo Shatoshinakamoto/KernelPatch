@@ -430,6 +430,7 @@ static ssize_t pg_write(struct file *file, const char __user *ubuf,
 	pg_count = new_count;
 	pg_text = text;
 	pg_text_len = count;
+	ss_measure_list("prguard_allow", text, count);
 	mutex_unlock(&pg_lock);
 
 	pg_free(old_list, old_count);

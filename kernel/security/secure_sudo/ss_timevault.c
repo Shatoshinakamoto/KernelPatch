@@ -771,6 +771,7 @@ static ssize_t tv_write(struct file *file, const char __user *ubuf,
 	tv_nautodirs = new_nad;
 	tv_text = text;
 	tv_text_len = count;
+	ss_measure_list("timevault_allow", text, count);
 	mutex_unlock(&tv_lock);
 
 	tv_free(old_list, old_count);

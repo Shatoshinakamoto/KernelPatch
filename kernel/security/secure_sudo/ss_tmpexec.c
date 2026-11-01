@@ -347,6 +347,7 @@ static ssize_t allow_write(struct file *file, const char __user *ubuf,
 	allow_count = new_count;
 	allow_text = text;
 	allow_text_len = count;
+	ss_measure_list("tmp_exec_allow", text, count);
 	mutex_unlock(&allow_lock);
 
 	free_allow(old_list, old_count);

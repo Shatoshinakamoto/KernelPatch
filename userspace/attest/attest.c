@@ -41,7 +41,7 @@
 #include <openssl/sha.h>
 
 #define DEFAULT_PCRS "0,1,2,3,4,5,7,8,9"
-#define REPORT_MAX (1024 * 1024)
+#define REPORT_MAX (8u << 20)	/* the policy log can be a few MiB */
 
 static ESYS_CONTEXT *ctx;
 static TSS2_TCTI_CONTEXT *tcti;
@@ -279,7 +279,7 @@ static int cmd_quote(const char *nonce_hex, const char *report, const char *pcrs
 	rlen = fread(rbuf, 1, REPORT_MAX, f);
 	if (!feof(f)) {
 		fclose(f);
-		die("--report is larger than 1 MiB");
+		die("--report is larger than 8 MiB");
 	}
 	fclose(f);
 

@@ -15,8 +15,11 @@
 #
 # The report's own fields are as trustworthy as root on this host at the
 # moment it runs; what the TPM signature proves is the PCR values (the boot
-# chain) and that the report is fresh and unaltered since signing. Which
-# PCRs mean what is in docs/ATTESTATION.md.
+# chain) and that the report is fresh and unaltered since signing. When the
+# kernel measures the policy, the report also carries its policy_log and
+# tpm_openers and the policy PCR is quoted, so the verifier can replay the
+# policy instead of trusting it. Which PCRs mean what is in
+# docs/ATTESTATION.md.
 #
 # Environment (tests): SS_ATTEST_BIN (the TPM tool), SS_ATTEST_CLI
 # (secure-sudo, for the policy digest), SS_ATTEST_ROOT (prefix for /proc and
@@ -79,16 +82,48 @@ if [ -r "$v" ]; then
 	esac
 fi
 [ -d "$R/sys/firmware/efi" ] || sb=no-efi
+# P2-1 part 2: the kernel's own policy log (every knob, list and lock it
+# applied, extended into one PCR). Wait up to 30 s for pending extends (a
+# full policy load is a few hundred TPM commands) so the log and the quoted
+# PCR agree; the verifier replays it.
+plog="$R/sys/kernel/security/secure_sudo/policy_log"
+psrc=reported; ppcr=""; plb=""; topen=null
+if [ -r "$plog" ]; then
+	i=0
+	while :; do
+		hdr="$(head -n1 "$plog")"
+		c="$(printf '%s' "$hdr" | sed -n 's/.* count=\([0-9]*\).*/\1/p')"
+		e="$(printf '%s' "$hdr" | sed -n 's/.* extended=\([0-9]*\).*/\1/p')"
+		[ -n "$c" ] && [ "$c" = "$e" ] && break
+		i=$((i + 1)); [ "$i" -ge 150 ] && break
+		sleep 0.2
+	done
+	ppcr="$(printf '%s' "$hdr" | sed -n 's/.* pcr=\([0-9]*\).*/\1/p')"
+	if [ -n "$ppcr" ]; then
+		psrc=measured
+		plb="$(base64 -w0 < "$plog")"
+		# the verifier checks this against the measured hash, then that
+		# nothing on it can extend the policy PCR
+		topen="\"$(base64 -w0 < "$R/sys/kernel/security/secure_sudo/tpm_openers" 2>/dev/null)\""
+	fi
+fi
 ev=null
 if [ -r "$R/sys/kernel/security/tpm0/binary_bios_measurements" ]; then
 	ev="\"$(sha256sum < "$R/sys/kernel/security/tpm0/binary_bios_measurements" | cut -d' ' -f1)\""
 fi
 
-printf '{"report_version":1,"time":"%s","host":"%s","kernel":"%s","boot_id":"%s","cmdline":"%s","secure_sudo_lsm":%s,"policy_sha256":"%s","policy_locked":%s,"policy_source":"reported","secure_boot":"%s","tpm_eventlog_sha256":%s}' \
+printf '{"report_version":1,"time":"%s","host":"%s","kernel":"%s","boot_id":"%s","cmdline":"%s","secure_sudo_lsm":%s,"policy_sha256":"%s","policy_locked":%s,"policy_source":"%s","policy_pcr":%s,"policy_log_b64":"%s","tpm_openers_b64":%s,"secure_boot":"%s","tpm_eventlog_sha256":%s}' \
 	"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(js "$host")" "$(js "$kernel")" \
 	"$(js "$boot_id")" "$(js "$cmdline")" "$lsm" "${psha:-}" "${plock:--1}" \
-	"$sb" "$ev" > "$T/report"
+	"$psrc" "${ppcr:-null}" "$plb" "$topen" "$sb" "$ev" > "$T/report"
 
+# the policy PCR is always quoted with the boot chain
+if [ -n "$ppcr" ]; then
+	case ",${PCRS:-0,1,2,3,4,5,7,8,9}," in
+	  *",$ppcr,"*) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9}" ;;
+	  *) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9},$ppcr" ;;
+	esac
+fi
 if [ -n "$PCRS" ]; then
 	"$BIN" quote --nonce "$NONCE" --report "$T/report" --pcrs "$PCRS" > "$T/tpm"
 else

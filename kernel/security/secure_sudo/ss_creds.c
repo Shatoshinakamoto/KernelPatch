@@ -471,6 +471,7 @@ static ssize_t sx_write(struct file *file, const char __user *ubuf,
 	sx_count = n;
 	sx_text = text;
 	sx_text_len = count;
+	ss_measure_list("setid_exec_allow", text, count);
 	mutex_unlock(&sx_lock);
 
 	sx_free(old_list, old_count);
