@@ -226,10 +226,10 @@ int ss_cooldown_bprm(struct linux_binprm *bprm)
 	if (IS_ERR(p) || is_priv_tool(bprm, base)) {
 		pr_warn_ratelimited("cooldown: UID %u denied %s (in cooldown)\n",
 				    uid, base);
-		ss_event_typed("sudo_cooldown", "user", "execute", base, "deny",
-			       "cooldown_active",
-			       "cooldown: UID %u denied %s (cooldown active)",
-			       uid, base);
+		ss_event_typed_self("sudo_cooldown", "user", "execute", base, "deny",
+				    "cooldown_active",
+				    "cooldown: UID %u denied %s (cooldown active)",
+				    uid, base);
 		ret = -EPERM;
 	}
 	kfree(buf);

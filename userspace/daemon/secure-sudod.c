@@ -1143,9 +1143,8 @@ static void syslog_line(const char *fmt, ...)
  * showing up in any other denial was enough to make the daemon quarantine
  * /usr/bin/sudo. Now the action is chosen only from the typed fields,
  * whose values are kernel constants. The cooldown UID comes from
- * target_uid. The TimeVault path is taken from a message that must match
- * the kernel's format from its first byte to its last, and never from a
- * truncated record.
+ * target_uid and the TimeVault path from object (P1-1), never from the
+ * message, and never from a truncated record.
  */
 struct ss_ev {
 	long long schema;		/* schema_version, -1 if absent */
@@ -1155,6 +1154,7 @@ struct ss_ev {
 	char operation[32];
 	char decision[24];
 	char reason[64];
+	char object[320];		/* JSON-decoded; the kernel caps it at 256 */
 	char message[1024];		/* JSON-decoded */
 	long long target_uid;		/* -1 if null or absent */
 	int truncated;			/* 1 / 0, -1 if absent */
@@ -1330,6 +1330,8 @@ static int ev_parse(const char *rec, struct ss_ev *e)
 			dst = e->decision, dsz = sizeof(e->decision);
 		else if (!strcmp(key, "reason"))
 			dst = e->reason, dsz = sizeof(e->reason);
+		else if (!strcmp(key, "object"))
+			dst = e->object, dsz = sizeof(e->object);
 		else if (!strcmp(key, "message"))
 			dst = e->message, dsz = sizeof(e->message);
 		if (dst && *p == '"')
@@ -1382,15 +1384,13 @@ static int ev_cooldown_uid(const struct ss_ev *e, uid_t *uid)
 
 /*
  * A TimeVault exec denial for a tampered or unlisted binary: 1 and its
- * path, else 0. ss_timevault.c writes "timevault: denied exec <path>
- * (<reason>)" with the same <reason> as the typed field, so the path is
- * exactly what lies between that prefix and that suffix.
+ * path, else 0. ss_timevault.c puts the resolved path in the typed object
+ * field. A record with any field cut short ("truncated":true) is never
+ * acted on, so a long path can only fail to act, never name another file.
  */
 static int ev_vault_path(const struct ss_ev *e, char *path, size_t size)
 {
-	static const char pre[] = "timevault: denied exec ";
-	char suffix[sizeof(e->reason) + 4];
-	size_t len, slen;
+	size_t len = strlen(e->object);
 
 	if (e->schema != 1 || e->truncated != 0 ||
 	    strcmp(e->event_type, "time_vault") ||
@@ -1398,19 +1398,9 @@ static int ev_vault_path(const struct ss_ev *e, char *path, size_t size)
 	    (strcmp(e->reason, "hash mismatch") &&
 	     strcmp(e->reason, "not on allowlist")))
 		return 0;
-	if (strncmp(e->message, pre, sizeof(pre) - 1))
+	if (!len || len >= size || e->object[0] != '/')
 		return 0;
-	snprintf(suffix, sizeof(suffix), " (%s)", e->reason);
-	len = strlen(e->message);
-	slen = strlen(suffix);
-	if (len < sizeof(pre) - 1 + slen ||
-	    strcmp(e->message + len - slen, suffix))
-		return 0;
-	len -= sizeof(pre) - 1 + slen;
-	if (!len || len >= size || e->message[sizeof(pre) - 1] != '/')
-		return 0;
-	memcpy(path, e->message + sizeof(pre) - 1, len);
-	path[len] = '\0';
+	memcpy(path, e->object, len + 1);
 	return 1;
 }
 

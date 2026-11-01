@@ -221,10 +221,10 @@ static int ss_pg_ptrace_traceme(struct task_struct *parent)
 
 	pr_warn_ratelimited("prguard: denied PTRACE_TRACEME (pid %d)\n",
 			    current->pid);
-	ss_event_typed("process_runtime_guard", "current_process",
-		       "ptrace_traceme", "process_memory", "deny",
-		       "tracer_not_allowlisted",
-		       "prguard: denied PTRACE_TRACEME pid %d", current->pid);
+	ss_event_typed_self("process_runtime_guard", "current_process",
+			    "ptrace_traceme", "process_memory", "deny",
+			    "tracer_not_allowlisted",
+			    "prguard: denied PTRACE_TRACEME pid %d", current->pid);
 	return -EPERM;
 }
 
@@ -243,10 +243,10 @@ static int wx_check(unsigned long prot, const char *what)
 	pr_warn_ratelimited("prguard: denied W^X %s by UID %u (pid %d)\n",
 			    what, from_kuid(&init_user_ns, current_uid()),
 			    current->pid);
-	ss_event_typed("process_runtime_guard", "current_process",
-		       "request_memory_protection", what, "deny",
-		       "write_execute_prohibited",
-		       "prguard: denied W^X %s pid %d", what, current->pid);
+	ss_event_typed_self("process_runtime_guard", "current_process",
+			    "request_memory_protection", what, "deny",
+			    "write_execute_prohibited",
+			    "prguard: denied W^X %s pid %d", what, current->pid);
 	return -EPERM;
 }
 

@@ -191,8 +191,8 @@ static void tv_deny(const char *what, const char *why)
 {
 	atomic_long_inc(&tv_denied);
 	pr_warn_ratelimited("timevault: denied %s (%s)\n", what, why);
-	ss_event_typed("time_vault", "current_user", "execute", what, "deny",
-		       why, "timevault: denied exec %s (%s)", what, why);
+	ss_event_typed_self("time_vault", "current_user", "execute", what, "deny",
+			    why, "timevault: denied exec %s (%s)", what, why);
 }
 
 int ss_timevault_bprm(struct linux_binprm *bprm)
@@ -314,10 +314,10 @@ int ss_timevault_file_open(struct file *file)
 		return 0;
 	if (tv_inode_listed(file_inode(file))) {
 		pr_warn_ratelimited("timevault: denied write-open of allowlisted file\n");
-		ss_event_typed("time_vault", "current_process", "write",
-			       "allowlisted_inode", "deny", "immutable_binary",
-			       "timevault: denied write to allowlisted inode %lu",
-			       file_inode(file)->i_ino);
+		ss_event_typed_self("time_vault", "current_process", "write",
+				    "allowlisted_inode", "deny", "immutable_binary",
+				    "timevault: denied write to allowlisted inode %lu",
+				    file_inode(file)->i_ino);
 		return -EPERM;
 	}
 	return 0;
@@ -412,17 +412,17 @@ static ssize_t timevault_store(struct kobject *k, struct kobj_attribute *a,
 		}
 		WRITE_ONCE(ss_cfg.timevault_enabled, true);
 		pr_warn("timevault: ENGAGED - exec restricted to allowlist\n");
-		ss_event_typed("time_vault", "current_user", "engage",
-			       "execution_allowlist", "enforce", NULL,
-			       "timevault: engaged");
+		ss_event_typed_self("time_vault", "current_user", "engage",
+				    "execution_allowlist", "enforce", NULL,
+				    "timevault: engaged");
 		ss_lock_engage("timevault");
 	} else {
 		if (ss_locked()) {
-			ss_event_typed("time_vault", "current_user", "disengage",
-				       "execution_allowlist", "deny",
-				       "configuration_locked",
-				       "timevault: refused disengage while locked (UID %u)",
-				       from_kuid(&init_user_ns, current_uid()));
+			ss_event_typed_self("time_vault", "current_user", "disengage",
+					    "execution_allowlist", "deny",
+					    "configuration_locked",
+					    "timevault: refused disengage while locked (UID %u)",
+					    from_kuid(&init_user_ns, current_uid()));
 			return -EPERM;
 		}
 		WRITE_ONCE(ss_cfg.timevault_enabled, false);

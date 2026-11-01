@@ -125,10 +125,10 @@ static int home_check(const char *path, const char *what)
 
 	pr_warn_ratelimited("home: non-sudo UID %u denied %s outside home: %s\n",
 			    uid, what, path);
-	ss_event_typed("home_write", "current_user", what, path, "deny",
-		       "outside_home_write_policy",
-		       "home: UID %u denied %s outside home: %s",
-		       uid, what, path);
+	ss_event_typed_self("home_write", "current_user", what, path, "deny",
+			    "outside_home_write_policy",
+			    "home: UID %u denied %s outside home: %s",
+			    uid, what, path);
 	return -EPERM;
 }
 

@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -569,6 +570,31 @@ static unsigned long long line_seq(const char *l)
 	return p ? strtoull(p + 11, NULL, 10) : 0;
 }
 
+/* The integer after @key in record @l; 0 if the key is missing or null. */
+static int line_num(const char *l, const char *key, long long *out)
+{
+	const char *p = l ? strstr(l, key) : NULL;
+	char *end;
+
+	if (!p)
+		return 0;
+	p += strlen(key);
+	*out = strtoll(p, &end, 10);
+	return end != p;
+}
+
+/* The first record in @buf (lines) with "event_type":"@type", NUL-ended. */
+static char *find_event(char *buf, const char *type)
+{
+	char want[80], *l, *save;
+
+	snprintf(want, sizeof(want), "\"event_type\":\"%s\"", type);
+	for (l = strtok_r(buf, "\n", &save); l; l = strtok_r(NULL, "\n", &save))
+		if (strstr(l, want))
+			return l;
+	return NULL;
+}
+
 static int line_is_event(const char *l)
 {
 	static const char prefix[] = "{\"schema_version\":1,\"boot_id\":\"";
@@ -580,6 +606,7 @@ static int line_is_event(const char *l)
 	       strstr(l, "\"monotonic_ns\":") &&
 	       strstr(l, "\"event_type\":") &&
 	       strstr(l, "\"actor\":{\"pid\":") &&
+	       strstr(l, "\"kernel_started\":") &&
 	       strstr(l, "\"target\":") &&
 	       strstr(l, "\"operation\":") &&
 	       strstr(l, "\"object\":") &&
@@ -994,6 +1021,7 @@ static void t_events(void)
 	char dropped[64], knobval[64], boot[40] = "";
 	unsigned long long before_seq = 0, before_drop = 0, first_seq = 0;
 	unsigned long long prev = 0, s;
+	long long apid = 0, tpid = -1, tuid = -1;
 
 	knob_set("perf_guard", "1");
 	(void)drain_events(buf, sizeof(buf));
@@ -1005,11 +1033,19 @@ static void t_events(void)
 	tap(strstr(buf, "\"event_type\":\"perf\"") &&
 	    strstr(buf, "\"operation\":\"perf_event_open\"") &&
 	    strstr(buf, "\"decision\":\"deny\"") &&
-	    strstr(buf, "\"target_pid\":null") &&
-	    strstr(buf, "\"target_uid\":null") &&
 	    strstr(buf, "\"truncated\":false") &&
 	    strstr(buf, "\"reason\":\"perf_guard\""),
 	    "#9 producer supplies typed event classification and decision");
+	/* P1-1: a denial of the calling task's own action names that task and
+	 * its user as the typed target (no label-only targets). */
+	tap(line_num(buf, "\"actor\":{\"pid\":", &apid) &&
+	    line_num(buf, "\"target_pid\":", &tpid) &&
+	    line_num(buf, "\"target_uid\":", &tuid) &&
+	    apid > 0 && tpid == apid && tuid == USER,
+	    "#9 a self-targeted denial carries typed target_pid/target_uid "
+	    "(pid %lld, actor %lld, uid %lld)", tpid, apid, tuid);
+	tap(strstr(buf, "\"kernel_started\":false}") != NULL,
+	    "#9 an ordinary process is not marked kernel_started");
 
 	knob_set("prguard_observe", "1");
 	(void)drain_events(buf, sizeof(buf));
@@ -1021,6 +1057,99 @@ static void t_events(void)
 	    !strstr(buf, "\"target_uid\":null"),
 	    "#9 cross-process memory events identify the target PID and UID");
 	knob_set("prguard_observe", "0");
+
+	/* P1-1: a path up to 256 bytes stays whole in the typed object field,
+	 * so a consumer never has to take it from the message. */
+	{
+		static const char comp[] =
+			"/a-directory-name-of-exactly-fifty-bytes-0123456789";
+		char path[300] = "/srv", file[320];
+		const char *kv[2] = { file, "x" };
+		char want[340], *ev;
+		int k, fd, r;
+
+		mkdir(path, 0755);
+		for (k = 0; k < 4; k++) {
+			strcat(path, comp);
+			mkdir(path, 0755);
+		}
+		snprintf(file, sizeof(file), "%s/target-file", path);
+		fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+		if (fd >= 0) {
+			fchmod(fd, 0666);
+			close(fd);
+		}
+		knob_set("block_home_write", "1");
+		(void)drain_events(buf, sizeof(buf));
+		r = as(&NONSUDO, do_write_file, kv);
+		knob_set("block_home_write", "0");
+		n = drain_events(buf, sizeof(buf));
+		ev = n ? find_event(buf, "home_write") : NULL;
+		snprintf(want, sizeof(want), "\"object\":\"%s\"", file);
+		tap(DENIED(r) && ev && strstr(ev, want) &&
+		    strstr(ev, "\"truncated\":false") && line_is_event(ev),
+		    "#9 a %zu-byte path is whole in object, record not truncated "
+		    "(write %d)", strlen(file), r);
+		diag("record: %.200s", ev ? ev : "(none)");
+		unlink(file);
+		for (k = 0; k < 4; k++) {
+			rmdir(path);
+			*strrchr(path, '/') = '\0';
+		}
+		rmdir(path);
+	}
+
+	/* P1-1 deferred work: a core-dump pipe handler is a process the kernel
+	 * starts itself. Its denials must say so (kernel_started), not pass
+	 * as the helper acting on its own. The handler is this program again
+	 * (see main), writing a protected sysctl. */
+	{
+		char self[256], pattern[300], old_pattern[256] = "", *ev = NULL;
+		const char *kv[2] = { "/proc/sys/kernel/core_pattern", pattern };
+		const char *kv_old[2] = { "/proc/sys/kernel/core_pattern", old_pattern };
+		ssize_t len = readlink("/proc/self/exe", self, sizeof(self) - 1);
+		int k;
+
+		if (len > 0) {
+			self[len] = '\0';
+			rd("/proc/sys/kernel/core_pattern", old_pattern,
+			   sizeof(old_pattern));
+			snprintf(pattern, sizeof(pattern), "|%s --core-helper", self);
+		}
+		if (len > 0 && do_write_file(kv) == 0) {
+			pid_t kid;
+
+			(void)drain_events(buf, sizeof(buf));
+			knob_set("sysctl_guard", "1");
+			kid = fork();
+			if (kid == 0) {
+				struct rlimit rl = { RLIM_INFINITY, RLIM_INFINITY };
+
+				setrlimit(RLIMIT_CORE, &rl);
+				prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+				abort();
+			}
+			if (kid > 0)
+				waitpid(kid, NULL, 0);
+			/* the handler runs asynchronously: give it up to 5 s */
+			for (k = 0; k < 50 && !ev; k++) {
+				n = drain_events(buf, sizeof(buf));
+				ev = n ? find_event(buf, "sysctl_guard") : NULL;
+				if (!ev)
+					usleep(100000);
+			}
+			knob_set("sysctl_guard", "0");
+			if (old_pattern[0])
+				do_write_file(kv_old);
+			tap(ev && strstr(ev, "\"kernel_started\":true") &&
+			    strstr(ev, "\"object\":\"/sys/kernel/kptr_restrict\"") &&
+			    line_num(ev, "\"target_uid\":", &tuid) && tuid == 0,
+			    "#9 a kernel-started helper's denial is marked kernel_started");
+			diag("helper record: %.200s", ev ? ev : "(none)");
+		} else {
+			tap(1, "# SKIP core_pattern not settable (%s)", strerror(errno));
+		}
+	}
 
 	/* Overflow the 64 KiB ring, then check that what the reader gets is
 	 * still whole lines and that the loss is counted. */
@@ -1107,8 +1236,11 @@ int main(int argc, char **argv)
 	struct utsname u;
 	char mods[300];
 
-	(void)argc;
-	(void)argv;
+	/* Run by the kernel as a core-dump pipe handler (t_events): try one
+	 * protected sysctl write, so secure_sudo logs a denial from a process
+	 * the kernel started, then let the core go unread. */
+	if (argc > 1 && !strcmp(argv[1], "--core-helper"))
+		return wr("/proc/sys/kernel/kptr_restrict", "2") ? 0 : 1;
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	uname(&u);
 	diag("ss-functest on %s %s", u.sysname, u.release);
