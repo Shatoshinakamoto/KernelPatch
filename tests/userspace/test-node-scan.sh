@@ -89,8 +89,10 @@ assert b.count(f + b':0') == 1
 open(p, 'wb').write(b.replace(f + b':0', f + b':1'))
 PY
 	scan --dry-run "$NODE" "$T/real" > "$T/real.out" 2>/dev/null
+	sed 's/^/# real: /' "$T/real.out"
+	# a CI runner's toolcache node is not root-owned: allow the third column
 	check "the real node binary ($("$NODE" --version)) is found as node" \
-		grep -qx "$NODE	node" "$T/real.out"
+		grep -qE "^$NODE	node(	not-root-owned)?\$" "$T/real.out"
 	check "a real node with the fuse flipped is found as sea" \
 		grep -qx "$T/real/my-sea-app	sea" "$T/real.out"
 	rm -rf "$T/real"
