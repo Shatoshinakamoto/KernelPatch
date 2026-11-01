@@ -96,11 +96,146 @@ certificate-verified RFC 5425 syslog and a bounded persistent retry queue.
 `secure-sudo health --json` reports transport state, queue backlog and drops;
 neither UDP datagram sends nor TLS stream writes claim collector persistence.
 
+Before writing anything, `load` takes a [snapshot](#secure-sudo-snapshot)
+of the configuration files and the live kernel state, and afterwards it
+appends a line to the [change history](#secure-sudo-history) (who, the lint
+result, how many settings differed, what was accepted and rejected). A
+partial load names the rejected settings and the snapshot to go back to:
+
+```
+secure-sudo: load INCOMPLETE: the kernel is running a partial policy (rejected:
+bpf_guard); fix the rejected lines and run load again, or `secure-sudo restore
+20261101T104942Z-418230117` to go back to the state before this load
+```
+
 ```sh
-sudo secure-sudo lint && sudo secure-sudo load
+sudo secure-sudo lint && sudo secure-sudo diff && sudo secure-sudo load
 ```
 
 Recovery from a policy that locks you out: [RECOVERY.md](RECOVERY.md).
+
+## `secure-sudo diff` (also `load --dry-run`)
+
+Preview a change (TODO P1-6): run lint, then compare every file `load` reads
+with what the running kernel holds, and print each difference. Nothing is
+written and no snapshot is taken.
+
+```
+  change    sudo_max_fails                     live 5 -> config 6
+  change    blacklist
+              + /usr/bin/socat
+              - /usr/bin/nc
+              (1 to add, 1 to remove)
+  unknown   bpf_guard                          live value unreadable
+diff: 2 change(s), 1 unreadable
+```
+
+Settings not in `secure-sudo.conf` are not shown (load leaves them alone).
+List entries are compared ignoring comments, blank lines, order and
+duplicates; at most 20 entries are shown per list. A value lint rejects is
+marked `(invalid: load rejects it)`. If lint finds an error, diff says load
+would refuse and still shows the differences. On a locked box it says the
+changes apply at the next boot. Right after a `load`, `diff: 0 change(s)`
+means the kernel runs exactly the configuration; anything else shows what a
+partial load did not apply.
+
+## `secure-sudo snapshot`
+
+| Command | What it does |
+|---|---|
+| `snapshot [create] [-m REASON]` | take a snapshot now |
+| `snapshot list` | id, reason, who, and whether the box was locked |
+| `snapshot show ID` | its metadata, files and hashes, and an integrity check |
+| `snapshot verify [ID]` | check one snapshot, or all of them |
+
+A snapshot is a directory `/var/lib/secure_sudo/policy/snapshots/ID/`
+(root-only) holding:
+
+* `disk/`: every file `load` reads from `/etc/secure_sudo/`, as it was;
+* `live/`: every kernel setting (`live/settings`) and list, as the kernel
+  reported them;
+* `meta`: format version, time, reason, uid, login uid and `SUDO_USER`,
+  kernel release, boot id, lock state, and the previous snapshot's id and
+  the SHA-256 of its `SHA256SUMS`;
+* `SHA256SUMS`: the hash of every file above.
+
+`load`, `restore`, `set`, `net`, `lock` and `timevault on` take one before
+they change anything (reasons `pre-load`, `pre-restore`, `pre-set`,
+`pre-lock`, `pre-timevault`). The newest 100 are kept. IDs are the UTC time
+plus nanoseconds, so they sort by age and are never reused.
+
+`verify` fails if a file was changed, removed or added, or if the previous
+snapshot's `SHA256SUMS` is no longer the one this snapshot recorded. A forger
+who edits a snapshot *and* rewrites its sums is caught by the next snapshot
+and by `history --verify`. Root can still rewrite everything consistently;
+the history's syslog copy, forwarded off the box, is the record that cannot
+be rewritten.
+
+## `secure-sudo history [-n N] [--json] [--verify]`
+
+Who changed policy and what happened (TODO P1-6). The records are kept in
+`/var/lib/secure_sudo/policy/history.jsonl` (root-only), one JSON object per
+`load`, `restore`, `set`, `lock`, `timevault` and manual `snapshot`:
+
+| Field | Meaning |
+|---|---|
+| `time`, `ts` | when (UTC; epoch seconds) |
+| `action` | `load`, `restore`, `set`, `lock`, `timevault`, `snapshot` |
+| `uid`, `loginuid`, `sudo_user` | who: the login uid survives `sudo`/`su` |
+| `result` | `complete`, `partial` (the kernel rejected something), `refused` (lint errors, locked, no LSM, bad snapshot), `rejected` (a single `set`) |
+| `lint_errors`, `changes` | lint errors, and how many settings/list entries differed from the kernel before the load |
+| `accepted`, `rejected`, `skipped`, `rejected_keys` | the kernel's verdicts |
+| `detail` | e.g. `sudo_max_fails = 9`, `--force despite lint errors` |
+| `snapshot`, `snapshot_sums` | the snapshot taken before the change, and its `SHA256SUMS` hash |
+| `restored_from` | the snapshot a restore put back |
+| `prev` | SHA-256 of the previous line (64 zeros for the first) |
+
+`history` prints the last 20 (`-n N`; `--json` prints the raw lines).
+`--verify` walks the chain and fails on an edited, removed or reordered
+line, or on a snapshot that no longer matches the hash recorded for it.
+Every record is also sent to syslog (`authpriv.notice`, tag `secure-sudo`,
+`policy_change {...}`), so a forwarding syslog keeps a copy off the box.
+`evidence-export` includes the file as `live/policy-history.jsonl`.
+
+## `secure-sudo restore ID [--no-load] [-y]`
+
+Return to a known-good policy (TODO P1-6) without editing files by hand:
+
+1. refuses while locked, unless `--no-load` (that only puts the files back,
+   for the next boot);
+2. checks the snapshot (`snapshot verify`) and refuses one that fails;
+3. shows what changes in `/etc/secure_sudo/`: each setting (`now 6 ->
+   snapshot 5`), each list entry, files it will create or remove;
+4. asks for `yes` (or `-y`);
+5. takes a `pre-restore` snapshot of the current state, so the restore can
+   be undone with `restore` again;
+6. writes the files atomically (a list file that the snapshot did not have
+   is removed, as `load` then clears that list);
+7. runs `load`, recorded as `action: restore` with `restored_from`.
+
+Restore puts back the *configuration files*; the kernel then gets them
+through the normal `load` (lint included). The `live/` part of a snapshot is
+the record of what the kernel ran, used for review and `diff`, not written
+back.
+
+## `secure-sudo contain ...`
+
+Incident containment (TODO P1-7); the runbook is
+[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) section 4.
+
+| Command | What it does |
+|---|---|
+| `contain network [--allow ADDR]... [--no-collector]` | drop all traffic except loopback, the `--allow` addresses, your SSH client and the `remote_syslog` collector (nft table `inet secure_sudo_contain`) |
+| `contain account USER [--terminate]` | lock and expire the account, freeze (or with `--terminate` kill) its processes; refuses UID 0 and your own account |
+| `contain process PID [--kill]` | freeze the process and its descendants and save its evidence (executable copy and hash, cmdline, environment, maps, open files, sockets); `--kill` kills after that |
+| `contain release network \| account USER \| process PID` | undo the step; the evidence stays |
+| `contain status` | what is contained now |
+
+Every action takes `--dry-run` (shows the plan, changes nothing) and asks
+for `yes` unless given `-y`; anything but `yes` exits 3 with nothing
+changed. State and evidence are under `/var/lib/secure_sudo/contain/`
+(root-only). Each action that ran is recorded in `secure-sudo history` as
+`contain` or `release`, with its arguments and whether it succeeded.
 
 ## `secure-sudo status`
 
@@ -322,6 +457,11 @@ unless you pass `-y`.
 sudo secure-sudo lock          # prompts "type yes"
 sudo secure-sudo lock -y       # no prompt (for scripts)
 ```
+
+The lock freezes the policy the kernel is *running*. If that differs from
+`/etc/secure_sudo/` (a partial load, a `set` that was not persisted), `lock`
+says so first; `secure-sudo diff` shows where. It takes a `pre-lock`
+snapshot (the frozen state) and records the lock in the history.
 
 ## `secure-sudo vault-allow <subcommand>`
 

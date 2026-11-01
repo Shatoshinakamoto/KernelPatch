@@ -23,7 +23,17 @@
  *                    PENDING flag is set, restore each listed file from its
  *                    backup before the system is fully up, then clear the flag.
  *   apply-now --i-understand-the-risk - operator-only live restore.
+ *   refresh REASON - re-baseline after a legitimate change, logging every
+ *                    file that changed (CRITICAL, shipped off-box). Run by the
+ *                    package-manager and kernel hooks (hooks/), so a kernel,
+ *                    initramfs or GRUB update is not mistaken for tampering
+ *                    and rolled back at the next boot. No baseline yet: does
+ *                    nothing.
  *   status         - show state.
+ *
+ * A scan while a package manager holds its lock (dpkg, rpm) is deferred:
+ * /boot is being rewritten on purpose, and the hook re-baselines when the
+ * transaction ends.
  *
  * Config: /etc/secure_sudo/addons/bootguard.conf
  */
@@ -43,8 +53,15 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 
-#define CONF		"/etc/secure_sudo/addons/bootguard.conf"
-#define STATEDIR	"/var/lib/secure_sudo/addons/bootguard"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef BG_CONF
+#define BG_CONF		"/etc/secure_sudo/addons/bootguard.conf"
+#endif
+#ifndef BG_STATEDIR
+#define BG_STATEDIR	"/var/lib/secure_sudo/addons/bootguard"
+#endif
+#define CONF		BG_CONF
+#define STATEDIR	BG_STATEDIR
 #define MANIFEST	STATEDIR "/manifest"
 #define DEF_BACKUP	STATEDIR "/backups"
 #define RESTORE_LIST	STATEDIR "/restore.list"
@@ -197,6 +214,93 @@ static int backup_bucket(const struct cfg *c, char *out, size_t n)
 	return store_bucket(root, c->rotate, out, n);
 }
 
+/* path -> hash of a manifest, for refresh's change report */
+struct mf_ent { char *path; char sha[65]; };
+struct mf { struct mf_ent *e; size_t n; };
+
+static int mf_cmp(const void *a, const void *b)
+{
+	return strcmp(((const struct mf_ent *)a)->path,
+		      ((const struct mf_ent *)b)->path);
+}
+
+static void mf_load(const char *file, struct mf *m)
+{
+	FILE *f = fopen(file, "re");
+	char *line = NULL, *sp;
+	size_t cap = 0, mcap = 0;
+	ssize_t len;
+
+	m->e = NULL;
+	m->n = 0;
+	if (!f)
+		return;
+	while ((len = getline(&line, &cap, f)) >= 0) {
+		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+			line[--len] = '\0';
+		sp = strchr(line, ' ');
+		if (!sp || sp - line != 64)
+			continue;
+		if (m->n == mcap) {
+			struct mf_ent *g = realloc(m->e, (mcap = mcap ? mcap * 2 : 256) *
+						   sizeof(*m->e));
+			if (!g)
+				break;
+			m->e = g;
+		}
+		memcpy(m->e[m->n].sha, line, 64);
+		m->e[m->n].sha[64] = '\0';
+		m->e[m->n].path = strdup(sp + 1);
+		if (m->e[m->n].path)
+			m->n++;
+	}
+	free(line);
+	fclose(f);
+	if (m->n)
+		qsort(m->e, m->n, sizeof(*m->e), mf_cmp);
+}
+
+static void mf_free(struct mf *m)
+{
+	size_t i;
+
+	for (i = 0; i < m->n; i++)
+		free(m->e[i].path);
+	free(m->e);
+}
+
+/* Log every difference between two manifests; returns how many. */
+static size_t mf_report(const struct mf *old, const struct mf *new,
+			const char *reason)
+{
+	size_t i = 0, j = 0, n = 0;
+
+	while (i < old->n || j < new->n) {
+		int c = i >= old->n ? 1 : j >= new->n ? -1 :
+			strcmp(old->e[i].path, new->e[j].path);
+
+		if (c == 0) {
+			if (strcmp(old->e[i].sha, new->e[j].sha)) {
+				ssl_crit("BOOT baseline refreshed (%s): %s changed %.12s -> %.12s",
+					 reason, new->e[j].path, old->e[i].sha,
+					 new->e[j].sha);
+				n++;
+			}
+			i++;
+			j++;
+		} else if (c < 0) {
+			ssl_crit("BOOT baseline refreshed (%s): %s removed", reason,
+				 old->e[i++].path);
+			n++;
+		} else {
+			ssl_crit("BOOT baseline refreshed (%s): %s added", reason,
+				 new->e[j++].path);
+			n++;
+		}
+	}
+	return n;
+}
+
 static int cmd_baseline(void)
 {
 	struct cfg c;
@@ -205,8 +309,10 @@ static int cmd_baseline(void)
 	int fd;
 
 	load_cfg(&c);
-	mkdir("/var/lib/secure_sudo", 0700);
-	mkdir("/var/lib/secure_sudo/addons", 0700);
+	if (!strncmp(STATEDIR, "/var/lib/secure_sudo/", 21)) {
+		mkdir("/var/lib/secure_sudo", 0700);
+		mkdir("/var/lib/secure_sudo/addons", 0700);
+	}
 	mkdir(STATEDIR, 0700);
 
 	if (backup_bucket(&c, bucket, sizeof(bucket)) != 0) {
@@ -241,6 +347,50 @@ static int cmd_baseline(void)
 	return 0;
 }
 
+/*
+ * After a legitimate change (a package transaction, a kernel install):
+ * re-baseline and log, CRITICAL, every file that changed, so the change is on
+ * record off-box. A staged restore from before the change is dropped: it
+ * would put the old files back. No baseline yet: BootGuard is not in use.
+ */
+static int cmd_refresh(const char *reason)
+{
+	struct mf old, now;
+	char why[64];
+	size_t i, j = 0, changed;
+	int rc;
+
+	for (i = 0; reason && reason[i] && j + 1 < sizeof(why); i++)
+		if (isalnum((unsigned char)reason[i]) || strchr("._-", reason[i]))
+			why[j++] = reason[i];
+	why[j] = '\0';
+	if (!j)
+		snprintf(why, sizeof(why), "manual");
+	if (access(MANIFEST, F_OK) != 0) {
+		printf("bootguard: no baseline; nothing to refresh\n");
+		return 0;
+	}
+	mf_load(MANIFEST, &old);
+	rc = cmd_baseline();
+	if (rc == 0) {
+		mf_load(MANIFEST, &now);
+		changed = mf_report(&old, &now, why);
+		mf_free(&now);
+		if (access(PENDING, F_OK) == 0) {
+			unlink(PENDING);
+			unlink(RESTORE_LIST);
+			ssl_crit("BOOT staged restore DROPPED by refresh (%s): it "
+				 "predates the change", why);
+		}
+		ssl_info("refresh (%s): %zu file(s) changed since the last baseline",
+			 why, changed);
+		printf("bootguard: refreshed (%s): %zu file(s) changed\n", why,
+		       changed);
+	}
+	mf_free(&old);
+	return rc;
+}
+
 /* Stage a restore: write restore.list (dst<TAB>blob) and drop PENDING. */
 static int stage_restore(const struct cfg *c, const char *dst, FILE *rl)
 {
@@ -267,6 +417,16 @@ static int cmd_scan(void)
 	size_t checked = 0, tampered = 0, staged = 0;
 
 	load_cfg(&c);
+	{
+		char lock[PATH_MAX];
+
+		if (ssaddon_pkg_busy(lock, sizeof(lock))) {
+			ssl_info("scan deferred: a package manager holds %s", lock);
+			printf("bootguard: scan deferred: a package manager is "
+			       "running (%s)\n", lock);
+			return 0;
+		}
+	}
 	f = fopen(MANIFEST, "re");
 	if (!f) {
 		fprintf(stderr, "bootguard: no baseline - run `baseline` first\n");
@@ -437,6 +597,7 @@ static void usage(void)
 "  scan             check vs baseline; stage a restore for NEXT BOOT on tamper\n"
 "  restore-staged   apply a staged restore if PENDING (run early at boot)\n"
 "  apply-now --i-understand-the-risk   operator-only LIVE restore\n"
+"  refresh [REASON] re-baseline after a legitimate change, logging what changed\n"
 "  status           show state\n"
 "\nStage-and-apply-at-boot by design: the live boot partition is not rewritten\n"
 "mid-run. Config: " CONF "\n");
@@ -460,6 +621,8 @@ int main(int argc, char **argv)
 		return cmd_scan();
 	if (!strcmp(argv[1], "restore-staged"))
 		return cmd_restore_staged();
+	if (!strcmp(argv[1], "refresh"))
+		return cmd_refresh(argc > 2 ? argv[2] : "manual");
 	if (!strcmp(argv[1], "apply-now"))
 		return cmd_apply_now(argc, argv);
 	if (!strcmp(argv[1], "status"))

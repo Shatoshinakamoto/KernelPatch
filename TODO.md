@@ -202,7 +202,11 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     bypass/limitation, and validation test; out-of-scope protections are not
     implied by feature names or compliance mappings.
 
-- [ ] **P1-6: Add policy preview, snapshot, and change history.**
+- [x] **P1-6: Add policy preview, snapshot, and change history.**
+  - Done 2026-11-01: `secure-sudo diff` / `load --dry-run`, `snapshot`,
+    `history`, `restore` (docs/COMMANDS.md, RECOVERY.md 4g); every load,
+    set, lock and restore snapshots first and is recorded;
+    tests/userspace/test-cli.sh.
   - Provide a non-mutating policy lint/preview and a versioned, integrity-
     checked snapshot of both disk configuration and live kernel state before
     changes or lock engagement.
@@ -214,6 +218,17 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     files blindly.
 
 - [ ] **P1-7: Create incident-response runbooks and safe containment modes.**
+  - Partly done 2026-11-01: docs/INCIDENT_RESPONSE.md (triage, evidence,
+    containment, escalation, recovery, rebuild, and an inventory of every
+    automatic kill/wipe/restore/quarantine) and `secure-sudo contain`
+    (dry run, confirmation, evidence first, release; tests/userspace/
+    test-contain.sh).
+  - Built 2026-11-01: guardrail tests for every destructive add-on
+    (tests/userspace/test-addons.sh, 31 checks) and package/kernel hooks
+    that re-baseline BootGuard/DriverGuard after an update. The tests found
+    three real bugs, fixed (SECURITY_REVIEW #64-#66). Code-complete;
+    remaining: a people-run tabletop exercise (INCIDENT_RESPONSE.md 9),
+    which is the "done when" test and cannot be run by CI.
   - Document triage, evidence preservation, network isolation, account
     containment, process quarantine, policy lock, escalation, recovery, and
     post-incident rebuild steps.
@@ -388,7 +403,10 @@ that is a missing feature to build, not a sentence to delete. Each doc says
   the TPM when one is present, root-only key file as the fallback.
   **Done when:** the OTP verifies with a sealed key in a swtpm VM and falls
   back cleanly without a TPM.
-- [ ] **G4: TPM clear through `/dev/tpm*`** (README #5). Only the PPI route
+- [x] **G4: TPM clear through `/dev/tpm*`** (README #5). Built 2026-11-01
+  (SECURITY_REVIEW #63), both halves as Pheonix chose: the `tpm_openers`
+  guard once locked (in-kernel tests) and `install.sh tpm-lockout`
+  (test-install, Ubuntu VM with a software TPM). Only the PPI route
   is blocked; an LSM cannot read TPM command bytes. Needs Pheonix's call on
   the approach (lockout authorization at install, an opener allowlist for
   `/dev/tpm*`, or both).

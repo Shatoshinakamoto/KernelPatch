@@ -181,6 +181,25 @@ o=m[-1]&15; print("%06d"%((struct.unpack(">I",m[o:o+4])[0]&0x7fffffff)%1000000))
 	check "G3: after a reboot the TPM still unseals it" sh -c "grep -qx tpm2 '$LAST' && grep -qx 'rc=0' '$LAST'"
 	gstep g3-cleanup 'secure-sudo otp disable && ls -A /var/lib/secure_sudo/otp'
 	check "G3: otp disable removes the sealed key" sh -c "[ $GRC -eq 0 ] && ! grep -q . '$LAST'"
+
+	# G4: the installer's TPM lockout password and disableClear, on the
+	# guest's (software) TPM. The kernel side (tpm_openers once locked) is in
+	# the in-kernel tests; here the TPM itself must refuse TPM2_Clear.
+	gstep g4-tools 'DEBIAN_FRONTEND=noninteractive apt-get install -y -q tpm2-tools >/dev/null && tpm2_getcap properties-variable | grep -E "lockoutAuthSet|disableClear"'
+	check "G4: before: no lockout password, clear allowed" sh -c "grep -qE 'lockoutAuthSet: +0' '$LAST' && grep -qE 'disableClear: +0' '$LAST'"
+	gstep g4-lockout "$I tpm-lockout"
+	check "G4: install.sh tpm-lockout sets the password and shows it once" sh -c "[ $GRC -eq 0 ] && grep -q 'shown ONCE' '$LAST' && grep -q 'TPM2_Clear from the OS is disabled' '$LAST'"
+	tpw=$(sed -n 's/^      \([A-Za-z0-9]\{24,\}\)$/\1/p' "$LAST" | head -1)
+	gstep g4-state 'tpm2_getcap properties-variable | grep -E "lockoutAuthSet|disableClear"; grep -rqs "'"$tpw"'" /var/lib/secure_sudo /etc/secure_sudo /var/log/secure_sudo /root/ss && echo stored || echo not-stored'
+	check "G4: the TPM reports a lockout password and disableClear" sh -c "grep -qE 'lockoutAuthSet: +1' '$LAST' && grep -qE 'disableClear: +1' '$LAST'"
+	check "G4: the password is not stored on the guest" inlast '^not-stored$'
+	gstep g4-clear-noauth 'tpm2_clear -c l; echo rc=$?'
+	check "G4: tpm2_clear without the password is refused by the TPM" sh -c "! grep -qx 'rc=0' '$LAST'"
+	gstep g4-clear-auth "printf %s '$tpw' > /run/tpw && tpm2_clear -c l -P file:/run/tpw; echo rc=\$?; rm -f /run/tpw"
+	check "G4: even with the password, disableClear refuses tpm2_clear" sh -c "! grep -qx 'rc=0' '$LAST'"
+	gstep g4-again "$I tpm-lockout"
+	check "G4: a second run leaves the TPM alone" inlast 'already set; left as it is'
+	# The VM's TPM state is thrown away with the VM; nothing to undo.
 else
 	skip "G3: the OTP key sealed to a TPM (run with VM_TPM=1)"
 fi

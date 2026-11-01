@@ -624,6 +624,8 @@ static int __init ss_sysfs_init(void)
 			ret = ss_binvault_secfs(ss_secfs_dir);
 		if (!ret)
 			ret = ss_prguard_secfs(ss_secfs_dir);
+		if (!ret)
+			ret = ss_tpm_secfs(ss_secfs_dir);
 		if (ret)
 			pr_err("failed to create securityfs policy files (%d)\n",
 			       ret);

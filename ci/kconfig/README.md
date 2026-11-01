@@ -9,7 +9,7 @@ The point is to exercise the `#ifdef` paths a distro config can switch off.
 | `default.config` | nothing extra: audit, BPF, perf, modules all on |
 | `no-audit.config` | `CONFIG_AUDIT` off (the auditd feed compiles out) |
 | `no-bpf.config` | `CONFIG_BPF_SYSCALL` off (the bpf hooks compile out) |
-| `no-modules.config` | `CONFIG_MODULES` off (module-load paths unused) |
+| `no-modules.config` | `CONFIG_MODULES` off (module-load paths unused) and `CONFIG_TCG_TPM` off (the `tpm_openers` fallback) |
 | `modsig.config` | module signing enforced, as `install.sh` configures it |
 | `stack-apparmor.config` | AppArmor stacked first, as Ubuntu/Debian/SUSE ship |
 

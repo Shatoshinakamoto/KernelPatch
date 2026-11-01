@@ -26,8 +26,10 @@ under UEFI or Secure Boot, or on real hardware.
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
 | P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
-| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60) and G3 (TPM-sealed OTP key, #61) are built and G4 is to build |
-| P1-6 … P1-8 | not started | see remaining-work notes below |
+| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60), G3 (TPM-sealed OTP key, #61) and G4 (TPM clear through `/dev/tpm*`, #63) are built |
+| P1-6 | done | `secure-sudo diff` (= `load --dry-run`) previews a change against the running kernel; snapshots of the config files and the live kernel state (SHA256SUMS, chained to the previous one) before every load, set, lock and restore; a hash-chained change history (who, lint result, changes, accepted/rejected, snapshot) also sent to syslog; `restore ID` (verified, previewed, refused while locked unless `--no-load`). See "P1-6" below |
+| P1-7 | code-complete (tabletop remains) | [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md): triage, evidence, containment, escalation, recovery, rebuild, and the inventory of automatic destructive actions (false positives, exclusions, audit trail, undo, test); `secure-sudo contain network/account/process` with dry run, confirmation, evidence first and release, recorded in the history; guardrail tests for every destructive add-on and package/kernel hooks that re-baseline BootGuard/DriverGuard after updates (SECURITY_REVIEW #64–#66). Remaining: a people-run tabletop |
+| P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
 
@@ -117,12 +119,14 @@ without root):
 | `tests/userspace/test-otp.sh` | 86 | RFC 4226/6238 vectors, secret at rest, prefix, replay refusal, the master key sealed to a software TPM and the key-file fallback (G3) |
 | `tests/userspace/test-pam.sh` | 50 | both PAM modules through libpam, the documented stacks, real `pam_unix` + `pam_faillock` (root, private mount namespace) |
 | `tests/userspace/test-helpers.sh` | 77 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
-| `tests/userspace/test-cli.sh` | 119 | config parsing, `otp` hand-off to the helper, `lint`, `load` reporting (entry counts, node-scan merge) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
+| `tests/userspace/test-cli.sh` | 160 | config parsing, `otp` hand-off to the helper, `lint`, `load` reporting (entry counts, node-scan merge), P1-6 `diff`/snapshots/history/restore (partial loads, forged snapshots, edited or removed history lines, restore while locked) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
 | `tests/userspace/test-remote-forwarding.sh` | 11 | TLS CA/hostname validation and CA rotation, RFC 5425 delivery, queue persistence/exhaustion, outage retry |
-| `tests/userspace/test-evidence-export.sh` | 23 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation, TimeVault manifest against the collector's roots |
+| `tests/userspace/test-addons.sh` | 31 | ProcGuard (monitor kills nothing, empty allowlist refused, PID 1/ancestors/stack exempt, renamed `secure-sudo-*` not exempt, respawn → quarantine, system dirs never deleted), BootGuard/DriverGuard (tamper staged/restored, scan deferred under a held dpkg lock, `refresh` re-baselines and drops a staged restore, hook script), TamperWatch (attributes a writer, never kills the stack or during a package update) |
+| `tests/userspace/test-contain.sh` | 32 | `secure-sudo contain`: dry runs change nothing, refusals (UID 0, own account, PID 1, kernel threads, own shell chain, bad addresses), real processes frozen with evidence and continued, descendants, `--kill`, account lock/expiry restored as it was, real nftables in a namespace |
+| `tests/userspace/test-evidence-export.sh` | 24 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation, TimeVault manifest against the collector's roots, policy history in the bundle |
 | `tests/oscap/` | 39 | result parsing and the STIG gate's rule-by-rule comparison, release vs diagnostic mode, independent checks (OSB-19) |
 | `tests/provenance/` | 19 | P0-4 above |
-| `tests/install/test-install.sh` | 133 | P0-5 below |
+| `tests/install/test-install.sh` | 141 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
 `tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **135/135** on
@@ -480,8 +484,7 @@ while enabled inactive units or missing/stale baselines degrade health.
 
 ### Other P1 items still deferred
 
-P1-6 through P1-8 remain unstarted: policy
-snapshots and change history; incident runbooks and containment guardrails;
+P1-7 is code-complete (a people-run tabletop remains); P1-8 remains unstarted:
 and broader network-policy/failure-mode validation. The earlier overview's
 "groundwork" below is historical; it does not mean these requirements are
 complete.
@@ -512,9 +515,68 @@ Four doc promises the code does not keep yet are tracked as features to
 build in [TODO.md](../TODO.md) "Doc promises to build" (G1 Node SEA
 auto-detection, G2 TimeVault Merkle tree, G3 TPM2-sealed OTP secret, G4
 TPM clear through `/dev/tpm*`). Until each lands, its doc says "not built
-yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: the TimeVault manifest's Merkle root (SECURITY_REVIEW #60). G3 is built: the OTP master key sealed to the TPM (SECURITY_REVIEW #61).
+yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: the TimeVault manifest's Merkle root (SECURITY_REVIEW #60). G3 is built: the OTP master key sealed to the TPM (SECURITY_REVIEW #61). G4 is built: `tpm_openers` and `install.sh tpm-lockout` (SECURITY_REVIEW #63).
 
-## P1-6 through P1-8 — not started
+## P1-6 — done (2026-11-01)
+
+* **Preview**: `secure-sudo diff` (also `load --dry-run`) runs lint and
+  shows each setting and list entry where `/etc/secure_sudo` differs from
+  the running kernel. It writes nothing. After a load, any difference left
+  is exactly what the kernel did not take.
+* **Snapshots**: `load`, `restore`, `set`/`net`, `lock` and `timevault on`
+  first save the configuration files and the live kernel settings, lists
+  and lock state under `/var/lib/secure_sudo/policy/snapshots/ID/`, with
+  `meta` (who, why, kernel, boot id, lock state), `SHA256SUMS`, and the hash
+  of the previous snapshot's sums. `snapshot verify` detects an edited,
+  missing or extra file, and a predecessor whose sums were rewritten.
+* **History**: one JSON line per change in `policy/history.jsonl`: action,
+  uid, login uid, `SUDO_USER`, lint errors, the number of differences,
+  accepted/rejected/skipped, the rejected settings, the snapshot before
+  it. Each line carries the SHA-256 of the line before (`history
+  --verify`), and each is sent to syslog for an off-box copy.
+  `evidence-export` includes it.
+* **Partial loads** name the rejected settings and the snapshot to restore.
+  `lock` warns when the running policy differs from the files it would
+  freeze.
+* **Restore**: `restore ID` verifies the snapshot, shows each setting and
+  entry it changes, asks, saves the current state, writes the files
+  atomically and loads them. It is refused while locked, except
+  `--no-load`, which only puts the files back for the next boot.
+* Tests: `tests/userspace/test-cli.sh` 119 → 157 checks, with stand-in
+  kernel files: a partial load and its diff, restore with and without
+  confirmation, restore while locked, a forged snapshot with rewritten
+  sums, and edited or removed history lines.
+* Not covered: an attacker who is root before the lock can rewrite the
+  local history and snapshots consistently. The syslog copy is the
+  record they cannot rewrite once it is forwarded.
+
+## P1-7 — code-complete (2026-11-01; tabletop remains)
+
+* [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) is now the runbook: roles
+  and the first five minutes, triage (read-only commands and what to look
+  for), evidence (the P1-3 export), containment, escalation criteria (which
+  also mean "rebuild"), recovery, rebuild, and an extended tabletop.
+* `secure-sudo contain` (helper `contain.sh`): network isolation that keeps
+  loopback, `--allow` addresses, the operator's SSH client and the log
+  collector; account lock + expiry + freeze (or `--terminate`); process
+  freeze + evidence (or `--kill` after it). Each has `--dry-run`, a `yes`
+  prompt, a release that puts back what was there, and a history record.
+  Writing its tests found that a refusal check inside a `set -o pipefail`
+  pipeline never fired, so the helper froze its own caller; fixed before
+  release.
+* Section 8 lists every automatic destructive action with its false-positive
+  cost, exclusions, audit trail, undo and test; every row now has a test.
+* `tests/userspace/test-addons.sh` (31 checks) drives ProcGuard,
+  BootGuard, DriverGuard and TamperWatch against temporary trees and real
+  processes. It found three bugs, fixed: ProcGuard's exemption could be
+  borrowed by naming a binary `secure-sudo-*` and it deleted system
+  binaries (#64); TamperWatch killed PheonixBox repairs and package updates
+  (#65); BootGuard and DriverGuard rolled kernel updates back (#66). New
+  apt/dnf/kernel-install hooks run `addons-refresh` after an update.
+* Remaining: the tabletop exercise in INCIDENT_RESPONSE.md 9 needs people;
+  CI cannot run it.
+
+## P1-8 — not started
 
 Pre-existing groundwork (not completion):
 
@@ -522,10 +584,6 @@ Pre-existing groundwork (not completion):
   (SECURITY_REVIEW #44); expanded in the partial implementation above.
 * P1-4: `install.sh verify` checks the running kernel, daemon and lint;
   `load` reports rejected settings; expanded in the partial implementation above.
-* P1-6: `lint` is the non-mutating preview; there is no snapshot or change
-  history.
-* P1-7: [RECOVERY.md](RECOVERY.md) covers administrator lockout, not incident
-  response.
 * P1-8: network modes are tested with real `nft` in namespaces for IPv4 and
   IPv6; multiple interfaces, VPNs, DHCP changes, pre-existing rulesets and
   daemon restarts are not.

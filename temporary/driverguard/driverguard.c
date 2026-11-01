@@ -16,7 +16,13 @@
  *               that has gone missing, is a tamper/"driver infection". In
  *               enforce mode the module is restored from the newest backup that
  *               has it; in monitor mode it is only reported.
+ *   refresh R - re-baseline after a legitimate change (a package or DKMS
+ *               update), logging it CRITICAL with the reason, so enforce mode
+ *               does not roll the update back. Run by the package hooks.
+ *               No baseline yet: does nothing.
  *   status    - show configuration and manifest size.
+ *
+ * A scan while a package manager holds its lock is deferred.
  *
  * All output goes through the shared ssaddon_log (local + optional off-box);
  * backups use the shared ssaddon_store (same compressed format as everywhere).
@@ -44,8 +50,15 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 
-#define CONF		"/etc/secure_sudo/addons/driverguard.conf"
-#define STATEDIR	"/var/lib/secure_sudo/addons/driverguard"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef DG_CONF
+#define DG_CONF		"/etc/secure_sudo/addons/driverguard.conf"
+#endif
+#ifndef DG_STATEDIR
+#define DG_STATEDIR	"/var/lib/secure_sudo/addons/driverguard"
+#endif
+#define CONF		DG_CONF
+#define STATEDIR	DG_STATEDIR
 #define MANIFEST	STATEDIR "/manifest"
 #define DEF_BACKUP	STATEDIR "/backups"
 #define LOCUS_PURPOSE	"driverguard-backup"
@@ -235,8 +248,10 @@ static int cmd_baseline(void)
 	int fd;
 
 	load_cfg(&c);
-	mkdir("/var/lib/secure_sudo", 0700);
-	mkdir("/var/lib/secure_sudo/addons", 0700);
+	if (!strncmp(STATEDIR, "/var/lib/secure_sudo/", 21)) {
+		mkdir("/var/lib/secure_sudo", 0700);
+		mkdir("/var/lib/secure_sudo/addons", 0700);
+	}
 	mkdir(STATEDIR, 0700);
 
 	if (backup_bucket(&c, bucket, sizeof(bucket)) != 0) {
@@ -321,6 +336,16 @@ static int cmd_scan(void)
 	size_t checked = 0, tampered = 0, repaired = 0;
 
 	load_cfg(&c);
+	{
+		char lock[PATH_MAX];
+
+		if (ssaddon_pkg_busy(lock, sizeof(lock))) {
+			ssl_info("scan deferred: a package manager holds %s", lock);
+			printf("driverguard: scan deferred: a package manager is "
+			       "running (%s)\n", lock);
+			return 0;
+		}
+	}
 	f = fopen(MANIFEST, "re");
 	if (!f) {
 		fprintf(stderr, "driverguard: no baseline - run `baseline` first\n");
@@ -363,6 +388,27 @@ static int cmd_scan(void)
 	return 0;
 }
 
+static int cmd_refresh(const char *reason)
+{
+	char why[64];
+	size_t i, j = 0;
+	int rc;
+
+	for (i = 0; reason && reason[i] && j + 1 < sizeof(why); i++)
+		if (isalnum((unsigned char)reason[i]) || strchr("._-", reason[i]))
+			why[j++] = reason[i];
+	why[j] = '\0';
+	if (access(MANIFEST, F_OK) != 0) {
+		printf("driverguard: no baseline; nothing to refresh\n");
+		return 0;
+	}
+	rc = cmd_baseline();
+	if (rc == 0)
+		ssl_crit("DRIVER baseline refreshed (%s): the current module files "
+			 "are now the known-good ones", j ? why : "manual");
+	return rc;
+}
+
 static int cmd_status(void)
 {
 	struct cfg c;
@@ -396,6 +442,7 @@ static void usage(void)
 "  baseline   hash all modules + store compressed failsafe backups (hourly bucket)\n"
 "  backup     refresh the hourly compressed backups only\n"
 "  scan       check modules vs baseline; repair from backup in enforce mode\n"
+"  refresh [REASON]  re-baseline after a legitimate update (logged)\n"
 "  status     show configuration and baseline size\n"
 "\nConfig: " CONF "\n");
 }
@@ -418,6 +465,8 @@ int main(int argc, char **argv)
 		return cmd_backup();
 	if (!strcmp(argv[1], "scan"))
 		return cmd_scan();
+	if (!strcmp(argv[1], "refresh"))
+		return cmd_refresh(argc > 2 ? argv[2] : "manual");
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 

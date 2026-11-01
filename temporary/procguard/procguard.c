@@ -20,8 +20,14 @@
  * "Kill everything not on the list" can take a machine down if the list is
  * incomplete. So ProcGuard is deliberately cautious:
  *   - it refuses to run with an EMPTY allowlist (that would mean "kill all");
- *   - it ALWAYS exempts PID 1, kernel threads (no /proc/pid/exe), its own
- *     process tree, and the secure_sudo binaries, whatever the list says;
+ *   - it ALWAYS exempts PID 1, kernel threads (no /proc/pid/exe), itself and
+ *     every process it runs under (the shell, sudo, systemd), and the
+ *     installed secure_sudo binaries (by exact root-owned path, not by name:
+ *     a /tmp/secure-sudo-x is not exempt), whatever the list says;
+ *   - it never deletes an executable from a system directory (/usr, /bin,
+ *     /sbin, /lib*, /boot, /etc): there an "infection" is far more likely a
+ *     service that systemd keeps restarting, so the file is quarantined
+ *     (copied) and left for the operator;
  *   - the default mode is `monitor` (log what WOULD be killed, touch nothing).
  *     Only `mode = enforce` actually kills and removes. Populate and verify the
  *     allowlist in monitor mode first.
@@ -47,9 +53,19 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 
-#define CONF		"/etc/secure_sudo/addons/procguard.conf"
-#define ALLOW		"/etc/secure_sudo/addons/procguard_allow.conf"
-#define DEF_QROOT	"/var/lib/secure_sudo/addons/procguard/quarantine"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef PG_CONF
+#define PG_CONF		"/etc/secure_sudo/addons/procguard.conf"
+#endif
+#ifndef PG_ALLOW
+#define PG_ALLOW	"/etc/secure_sudo/addons/procguard_allow.conf"
+#endif
+#ifndef PG_QROOT
+#define PG_QROOT	"/var/lib/secure_sudo/addons/procguard/quarantine"
+#endif
+#define CONF		PG_CONF
+#define ALLOW		PG_ALLOW
+#define DEF_QROOT	PG_QROOT
 #define LOCUS_PURPOSE	"procguard-quarantine"
 
 /* ---- config ---- */
@@ -214,11 +230,61 @@ static struct track *track_get(const char *path)
 
 /* ---- helpers ---- */
 
-/* Is @path one of ours (secure_sudo stack)? Never kill our own tooling. */
-static int is_secure_sudo(const char *path)
+/* Is @path one of ours? See ssaddon_is_stack_exe (exact installed paths). */
+#define is_secure_sudo ssaddon_is_stack_exe
+
+/* A system directory: an executable there is never deleted, only copied. */
+static int in_system_dir(const char *path)
 {
-	return strstr(path, "secure-sudo") || strstr(path, "secure-sudod") ||
-	       strstr(path, "secure_sudo");
+	static const char *const sys[] = {
+		"/usr/", "/bin/", "/sbin/", "/lib/", "/lib32/", "/lib64/",
+		"/libx32/", "/boot/", "/etc/", NULL
+	};
+	int i;
+
+	for (i = 0; sys[i]; i++)
+		if (!strncmp(path, sys[i], strlen(sys[i])))
+			return 1;
+	return 0;
+}
+
+/* The processes this one runs under: never killed (sudo, the shell, ...). */
+static pid_t ancestors[64];
+static int nancestors;
+
+static void load_ancestors(void)
+{
+	pid_t p = getppid();
+
+	nancestors = 0;
+	while (p > 1 && nancestors < (int)(sizeof(ancestors) / sizeof(ancestors[0]))) {
+		char path[64], buf[512], *rp;
+		FILE *f;
+		int pp = 0;
+
+		ancestors[nancestors++] = p;
+		snprintf(path, sizeof(path), "/proc/%d/stat", p);
+		f = fopen(path, "re");
+		if (!f)
+			break;
+		if (!fgets(buf, sizeof(buf), f))
+			buf[0] = '\0';
+		fclose(f);
+		rp = strrchr(buf, ')');		/* comm may contain spaces */
+		if (!rp || sscanf(rp + 1, " %*c %d", &pp) != 1)
+			break;
+		p = pp;
+	}
+}
+
+static int is_ancestor(pid_t pid)
+{
+	int i;
+
+	for (i = 0; i < nancestors; i++)
+		if (ancestors[i] == pid)
+			return 1;
+	return 0;
 }
 
 /* Resolve /proc/<pid>/exe to the on-disk path. Returns 0 on success; a kernel
@@ -291,7 +357,11 @@ static void handle_infection(const struct cfg *c, const char *path)
 	}
 	ssl_crit("INFECTION quarantined: %s -> %s", path, sample);
 
-	if (c->remove_on_infection) {
+	if (c->remove_on_infection && in_system_dir(path)) {
+		ssl_warn("INFECTION left on disk: %s is in a system directory (a "
+			 "service being restarted?); remove it yourself if it is "
+			 "malicious; sample: %s", path, sample);
+	} else if (c->remove_on_infection) {
 		if (unlink(path) == 0)
 			ssl_crit("INFECTION removed from disk: %s", path);
 		else
@@ -305,7 +375,7 @@ static int scan_once(const struct cfg *c, const struct allowlist *a)
 {
 	DIR *d = opendir("/proc");
 	struct dirent *de;
-	pid_t self = getpid(), parent = getppid();
+	pid_t self = getpid();
 	int offenders = 0;
 	time_t now = time(NULL);
 
@@ -321,7 +391,7 @@ static int scan_once(const struct cfg *c, const struct allowlist *a)
 		if (!isdigit((unsigned char)de->d_name[0]))
 			continue;
 		pid = (pid_t)atoi(de->d_name);
-		if (pid <= 1 || pid == self || pid == parent)
+		if (pid <= 1 || pid == self || is_ancestor(pid))
 			continue;		/* never touch init or ourselves */
 		if (pid_exe(pid, exe, sizeof(exe)) != 0)
 			continue;		/* kernel thread: no on-disk exe */
@@ -450,6 +520,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("procguard");
+	load_ancestors();
 
 	if (!strcmp(argv[1], "daemon"))
 		return run_daemon();

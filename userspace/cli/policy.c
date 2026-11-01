@@ -83,6 +83,7 @@ const struct listmap ss_lists[] = {
 	{ "home_write_allow.conf",      "home_write_allow",      L_PREFIX },
 	{ "binvault_allow.conf",        "binvault_allow",        L_PREFIX },
 	{ "prguard_allow.conf",         "prguard_allow",         L_PATH },
+	{ "tpm_openers.conf",           "tpm_openers",           L_PATH },
 };
 const size_t ss_nlists = sizeof(ss_lists) / sizeof(ss_lists[0]);
 

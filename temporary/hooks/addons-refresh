@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+#
+# addons-refresh REASON - after a legitimate change to /boot or the module
+# tree (a package transaction, a kernel install or removal), re-baseline
+# BootGuard and DriverGuard so the change is not mistaken for tampering and
+# rolled back (BootGuard enforce stages a restore for the next boot).
+#
+# Each guard logs every file that changed, CRITICAL, with REASON, through the
+# shared add-on log (shipped off-box when configured): a tamper laundered
+# through the package manager is still on record. A guard with no baseline
+# is not in use and is left alone. Never fails the package transaction.
+#
+# Called by the hooks install-temporary.sh drops in:
+#   /etc/kernel/postinst.d, /etc/kernel/postrm.d   (Debian/Ubuntu kernels)
+#   /etc/kernel/install.d                          (systemd kernel-install)
+#   /etc/apt/apt.conf.d                            (any apt transaction)
+#   dnf post-transaction actions                   (any dnf transaction)
+BIN="${SS_ADDONS_BIN:-/usr/bin}"
+reason="$(printf '%s' "${1:-package-update}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-48)"
+for g in bootguard driverguard; do
+	b="$BIN/secure-sudo-$g"
+	[ -x "$b" ] || continue
+	"$b" refresh "$reason" >/dev/null 2>&1 || true
+done
+exit 0
