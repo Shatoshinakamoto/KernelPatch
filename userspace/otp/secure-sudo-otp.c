@@ -15,6 +15,8 @@
  *      never has to be decrypted - we only ever verify against it.
  *
  * At rest, under /var/lib/secure_sudo/otp/ (0700, root-only):
+ *   masterkey.tpm2  the master key sealed to the TPM by systemd-creds (G3),
+ *                   when the machine has a working TPM; otherwise
  *   masterkey   32 random bytes (0600)         - AES key for the secret
  *   secret.enc  [12B IV][16B tag][ciphertext]  - AES-256-GCM of the base32 seed
  *   prefix.hash crypt(3) yescrypt hash          - optional prefix, never decrypted
@@ -39,6 +41,7 @@
 #include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <crypt.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -169,15 +172,252 @@ static size_t base32_decode(const char *in, uint8_t *out, size_t max)
 
 /* ------------------------- AES-256-GCM at rest -------------------------- */
 
+/* ------------------- the master key: TPM2 or key file (G3) -------------- */
+
+/*
+ * The master key is sealed to the TPM when there is one: systemd-creds
+ * encrypts it with a key that only this machine's TPM can unwrap, stored as
+ * masterkey.tpm2. Copying the disk, or the OTP directory, is then not
+ * enough to decrypt the seed. No PCRs are bound, so a firmware or Secure
+ * Boot change does not lock the admin out; root on the running machine can
+ * still ask the TPM to unseal it (the threat model says so). Without a TPM
+ * (or with --key-store=file) the key stays in the root-only masterkey file,
+ * as before.
+ */
+#ifndef SYSTEMD_CREDS
+#define SYSTEMD_CREDS "/usr/bin/systemd-creds"
+#endif
+#define F_MASTER_TPM OTP_DIR "/masterkey.tpm2"
+#define CRED_NAME "secure-sudo-otp-master"
+
+enum key_store { KS_AUTO, KS_TPM2, KS_FILE };
+
+/*
+ * Run systemd-creds with @args, @in on its stdin, its stdout into @out.
+ * It gets a fixed environment, never the caller's: from PAM that is the
+ * user's. Returns its exit status, or -1.
+ */
+static int run_creds(const char *const args[], const void *in, size_t inlen,
+		     uint8_t *out, size_t outmax, size_t *outlen)
+{
+	char *envp[4] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C",
+			  NULL, NULL };
+	int ip[2], op[2], st, null, toolong = 0;
+	size_t have = 0;
+	pid_t pid;
+
+#ifdef OTP_TESTING
+	/* the tests point systemd-creds at a software TPM */
+	static char dev[256];
+	const char *d = getenv("SYSTEMD_TPM2_DEVICE");
+
+	if (d) {
+		snprintf(dev, sizeof(dev), "SYSTEMD_TPM2_DEVICE=%s", d);
+		envp[2] = dev;
+	}
+#endif
+	if (pipe2(ip, O_CLOEXEC) != 0)
+		return -1;
+	if (pipe2(op, O_CLOEXEC) != 0) {
+		close(ip[0]);
+		close(ip[1]);
+		return -1;
+	}
+	pid = fork();
+	if (pid < 0) {
+		close(ip[0]); close(ip[1]); close(op[0]); close(op[1]);
+		return -1;
+	}
+	if (pid == 0) {
+		null = open("/dev/null", O_WRONLY);
+		if (dup2(ip[0], 0) < 0 || dup2(op[1], 1) < 0 ||
+		    (null >= 0 && dup2(null, 2) < 0))
+			_exit(127);
+		execve(SYSTEMD_CREDS, (char *const *)args, envp);
+		_exit(127);
+	}
+	close(ip[0]);
+	close(op[1]);
+	/* @in is at most a few hundred bytes: it fits the pipe, so writing
+	 * it all before reading cannot deadlock. */
+	if (inlen && write(ip[1], in, inlen) != (ssize_t)inlen)
+		inlen = (size_t)-1;
+	close(ip[1]);
+	for (;;) {
+		uint8_t sink[256];
+		ssize_t n = have < outmax ?
+			    read(op[0], out + have, outmax - have) :
+			    read(op[0], sink, sizeof(sink));
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		if (have < outmax)
+			have += (size_t)n;
+		else
+			toolong = 1;
+	}
+	close(op[0]);
+	if (waitpid(pid, &st, 0) < 0 || !WIFEXITED(st))
+		return -1;
+	if (inlen == (size_t)-1 || toolong)
+		return -1;
+	*outlen = have;
+	return WEXITSTATUS(st);
+}
+
+static int tpm_unseal(const uint8_t *cred, size_t clen, uint8_t key[32])
+{
+	static const char *const a[] = { "systemd-creds", "decrypt",
+		"--name=" CRED_NAME, "-", "-", NULL };
+	size_t n = 0;
+	int rc = run_creds(a, cred, clen, key, 32, &n);
+
+	return rc == 0 && n == 32 ? 0 : -1;
+}
+
+/* Seal @key; succeeds only if the TPM also unseals it again. */
+static int tpm_seal(const uint8_t key[32], uint8_t *cred, size_t max,
+		    size_t *clen)
+{
+	static const char *const a[] = { "systemd-creds", "encrypt",
+		"--with-key=tpm2", "--tpm2-pcrs=", "--name=" CRED_NAME,
+		"-", "-", NULL };
+	uint8_t back[32];
+	int ok;
+
+	if (access(SYSTEMD_CREDS, X_OK) != 0)
+		return -1;
+	if (run_creds(a, key, 32, cred, max, clen) != 0 || !*clen)
+		return -1;
+	ok = tpm_unseal(cred, *clen, back) == 0 && !memcmp(back, key, 32);
+	OPENSSL_cleanse(back, sizeof(back));
+	return ok ? 0 : -1;
+}
+
+/* Write @path atomically (temp file + fsync + rename), mode 0600. */
+static int write_atomic(const char *path, const void *data, size_t len)
+{
+	char tmp[512];
+	int fd, ok;
+
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		  0600);
+	if (fd < 0)
+		return -1;
+	ok = write(fd, data, len) == (ssize_t)len && fsync(fd) == 0;
+	if (close(fd) != 0)
+		ok = 0;
+	if (!ok || rename(tmp, path) != 0) {
+		unlink(tmp);
+		return -1;
+	}
+	return 0;
+}
+
+static void shred_file(const char *path)
+{
+	int fd = open(path, O_WRONLY | O_NOFOLLOW);
+
+	if (fd >= 0) {
+		uint8_t z[512] = { 0 };
+		ssize_t w = write(fd, z, sizeof(z));
+
+		(void)w;	/* best-effort shred; unlink follows regardless */
+		fsync(fd);
+		close(fd);
+	}
+	unlink(path);
+}
+
+/*
+ * Store @key in @ks. KS_AUTO seals it when the TPM works and falls back to
+ * the key file otherwise. The other form is removed only once the new one
+ * is in place. Sets *used to KS_TPM2 or KS_FILE.
+ */
+static int master_store(const uint8_t key[32], enum key_store ks,
+			enum key_store *used)
+{
+	uint8_t cred[16384];
+	size_t clen = 0;
+
+	if (ks != KS_FILE && tpm_seal(key, cred, sizeof(cred), &clen) == 0) {
+		if (write_atomic(F_MASTER_TPM, cred, clen) != 0)
+			return -1;
+		shred_file(F_MASTER);
+		*used = KS_TPM2;
+		return 0;
+	}
+	if (ks == KS_TPM2)
+		return -1;		/* asked for the TPM, and it failed */
+	if (write_atomic(F_MASTER, key, 32) != 0)
+		return -1;
+	unlink(F_MASTER_TPM);
+	*used = KS_FILE;
+	return 0;
+}
+
+/* The master key, from the TPM if sealed, else from the key file. */
+static int master_load(uint8_t key[32])
+{
+	uint8_t cred[16384];
+	ssize_t n = read_file(F_MASTER_TPM, cred, sizeof(cred));
+
+	if (n > 0 && (size_t)n < sizeof(cred) &&
+	    tpm_unseal(cred, (size_t)n, key) == 0)
+		return 0;
+	/* A sealed key that will not unseal falls through to the key file
+	 * only if one is there (a `seal` cut short leaves both, equal). */
+	return read_file(F_MASTER, key, 32) == 32 ? 0 : -1;
+}
+
+static enum key_store default_store(void)
+{
+#ifdef OTP_TESTING
+	const char *s = getenv("SS_TEST_KEY_STORE");
+
+	if (s && !strcmp(s, "file"))
+		return KS_FILE;
+	if (s && !strcmp(s, "tpm2"))
+		return KS_TPM2;
+#endif
+	return KS_AUTO;
+}
+
+static int parse_store(int argc, char **argv, enum key_store *ks)
+{
+	int i;
+
+	*ks = default_store();
+	for (i = 2; i < argc; i++) {
+		if (strncmp(argv[i], "--key-store=", 12))
+			continue;
+		if (!strcmp(argv[i] + 12, "auto"))
+			*ks = KS_AUTO;
+		else if (!strcmp(argv[i] + 12, "tpm2"))
+			*ks = KS_TPM2;
+		else if (!strcmp(argv[i] + 12, "file"))
+			*ks = KS_FILE;
+		else
+			return -1;
+	}
+	return 0;
+}
+
 static int load_or_create_master(uint8_t key[32])
 {
-	if (read_file(F_MASTER, key, 32) == 32)
-		return 0;
+	enum key_store used;
+
+	/* A key that exists but cannot be read (TPM gone, file damaged) is
+	 * an error: replacing it would orphan the stored seed. */
+	if (access(F_MASTER_TPM, F_OK) == 0 || access(F_MASTER, F_OK) == 0)
+		return master_load(key);
 	if (RAND_bytes(key, 32) != 1)
 		return -1;
-	if (write_file(F_MASTER, key, 32, 0600) != 0)
-		return -1;
-	return 0;
+	return master_store(key, default_store(), &used);
 }
 
 /* Encrypt @pt -> file: [12B IV][16B tag][ct]. */
@@ -235,7 +475,7 @@ static int secret_decrypt(uint8_t *pt, int max)
 	blen = read_file(F_SECRET, blob, sizeof(blob));
 	if (blen < 28)
 		return -1;
-	if (read_file(F_MASTER, key, 32) != 32)
+	if (master_load(key) != 0)
 		return -1;
 
 	ctx = EVP_CIPHER_CTX_new();
@@ -453,20 +693,37 @@ static int read_line(char *buf, size_t n, int from_stdin, const char *prompt)
  * (reset); setup without --prefix removes it. */
 static int cmd_setup(int argc, char **argv, int keep_prefix)
 {
-	uint8_t raw[SECRET_RAW_LEN];
+	uint8_t raw[SECRET_RAW_LEN], mkey[32];
 	char b32[64], uri[512], prefix[128] = "";
 	int want_prefix = 0, i;
+	enum key_store ks, used = KS_FILE;
 
 	for (i = 2; i < argc; i++)
 		if (!strcmp(argv[i], "--prefix"))
 			want_prefix = 1;
+	if (parse_store(argc, argv, &ks) != 0) {
+		fprintf(stderr, "secure-sudo-otp: --key-store must be auto, tpm2 or file\n");
+		return 2;
+	}
 
 	if (ensure_dir() != 0)
 		return 1;
-	if (RAND_bytes(raw, sizeof(raw)) != 1) {
+	if (RAND_bytes(raw, sizeof(raw)) != 1 || RAND_bytes(mkey, sizeof(mkey)) != 1) {
 		fprintf(stderr, "secure-sudo-otp: RNG failure\n");
 		return 1;
 	}
+	/* A new seed gets a new master key, stored first: if the TPM was
+	 * asked for and fails, nothing has changed yet. */
+	if (master_store(mkey, ks, &used) != 0) {
+		OPENSSL_cleanse(mkey, sizeof(mkey));
+		OPENSSL_cleanse(raw, sizeof(raw));
+		fprintf(stderr, ks == KS_TPM2 ?
+			"secure-sudo-otp: cannot seal the key to the TPM (no usable TPM, or %s missing); nothing changed\n" :
+			"secure-sudo-otp: cannot store the master key%s\n",
+			ks == KS_TPM2 ? SYSTEMD_CREDS : "");
+		return 1;
+	}
+	OPENSSL_cleanse(mkey, sizeof(mkey));
 	base32_encode(raw, sizeof(raw), b32);
 
 	if (secret_encrypt((const uint8_t *)b32, strlen(b32)) != 0) {
@@ -488,6 +745,10 @@ static int cmd_setup(int argc, char **argv, int keep_prefix)
 
 	build_uri(b32, uri, sizeof(uri));
 	printf("OTP configured.\n");
+	printf(used == KS_TPM2 ?
+	       "Master key: sealed to this machine's TPM (%s).\n" :
+	       "Master key: root-only key file %s (no TPM used).\n",
+	       used == KS_TPM2 ? F_MASTER_TPM : F_MASTER);
 	printf("Manual entry key: %s\n", b32);
 	printf("otpauth URI:      %s\n", uri);
 	printf("Run 'secure-sudo otp show-qr' to get a scannable QR image.\n");
@@ -604,10 +865,56 @@ static int cmd_reset(int argc, char **argv)
 	return cmd_setup(argc, argv, 1);
 }
 
+
+/* Where the master key is: tpm2, file, or none. */
+static int cmd_key_store(void)
+{
+	uint8_t key[32];
+	int tpm = access(F_MASTER_TPM, F_OK) == 0;
+	int file = access(F_MASTER, F_OK) == 0;
+	int ok = master_load(key) == 0;
+
+	OPENSSL_cleanse(key, sizeof(key));
+	if (!tpm && !file) {
+		printf("none\n");
+		return 1;
+	}
+	printf("%s%s%s\n", tpm ? "tpm2" : "file",
+	       tpm && file ? " (key file also present: run seal again)" : "",
+	       ok ? "" : " (cannot be read: run reset)");
+	return ok ? 0 : 1;
+}
+
+/* Move the current master key to the TPM (seal) or to the key file
+ * (unseal, e.g. before replacing the TPM). The seed does not change. */
+static int cmd_move_key(enum key_store to)
+{
+	uint8_t key[32];
+	enum key_store used;
+	int rc;
+
+	if (master_load(key) != 0) {
+		fprintf(stderr, "secure-sudo-otp: no readable master key\n");
+		return 1;
+	}
+	rc = master_store(key, to, &used);
+	OPENSSL_cleanse(key, sizeof(key));
+	if (rc != 0) {
+		fprintf(stderr, to == KS_TPM2 ?
+			"secure-sudo-otp: cannot seal the key to the TPM; nothing changed\n" :
+			"secure-sudo-otp: cannot write the key file; nothing changed\n");
+		return 1;
+	}
+	printf(to == KS_TPM2 ? "Master key sealed to the TPM; key file removed.\n" :
+	       "Master key moved to the root-only key file %s.\n", F_MASTER);
+	return 0;
+}
+
 static int cmd_disable(void)
 {
 	/* Best-effort shred: overwrite then unlink the sensitive files. */
-	const char *files[] = { F_SECRET, F_PREFIX, F_QR, F_MASTER, F_LAST };
+	const char *files[] = { F_SECRET, F_PREFIX, F_QR, F_MASTER,
+				F_MASTER_TPM, F_LAST };
 	size_t i;
 
 	for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -766,7 +1073,9 @@ static int cmd_show_qr(void)
 static void usage(void)
 {
 	fprintf(stderr,
-"Usage: secure-sudo-otp <setup [--prefix] | show-key | show-qr | verify [--pam] | reset [--prefix] | disable>\n");
+"Usage: secure-sudo-otp <setup [--prefix] [--key-store=auto|tpm2|file] | show-key | show-qr |\n"
+"                        verify [--pam] | reset [--prefix] [--key-store=...] | disable |\n"
+"                        key-store | seal | unseal>\n");
 }
 
 int main(int argc, char **argv)
@@ -793,6 +1102,12 @@ int main(int argc, char **argv)
 		return cmd_reset(argc, argv);
 	if (!strcmp(argv[1], "disable"))
 		return cmd_disable();
+	if (!strcmp(argv[1], "key-store"))
+		return cmd_key_store();
+	if (!strcmp(argv[1], "seal"))
+		return cmd_move_key(KS_TPM2);
+	if (!strcmp(argv[1], "unseal"))
+		return cmd_move_key(KS_FILE);
 
 	usage();
 	return 2;

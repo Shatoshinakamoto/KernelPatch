@@ -675,7 +675,9 @@ configure_kernel() {
 		# always kept. ufw 0.36 (Ubuntu 24.04) uses the matches conntrack,
 		# addrtype, comment, hl, limit, multiport, recent and rt, and the
 		# targets LOG and REJECT; one missing match fails the whole
-		# ip(6)tables-restore and leaves ufw half-applied.
+		# ip(6)tables-restore and leaves ufw half-applied. The TPM drivers are
+		# kept too: the OTP key is sealed to the TPM (G3) and a host whose TPM
+		# driver is a module not loaded at the time would lose it.
 		local m
 		for m in NETFILTER_ADVANCED NF_CONNTRACK NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 \
 			NF_TABLES_IPV6 NFT_CT NFT_LOG NFT_LIMIT NFT_REJECT NFT_COMPAT NETFILTER_XTABLES \
@@ -683,7 +685,8 @@ configure_kernel() {
 			NETFILTER_XT_MATCH_HL NETFILTER_XT_MATCH_LIMIT NETFILTER_XT_MATCH_MULTIPORT \
 			NETFILTER_XT_MATCH_RECENT \
 			NETFILTER_XT_TARGET_LOG NF_LOG_SYSLOG IP_NF_IPTABLES IP_NF_FILTER IP_NF_TARGET_REJECT \
-			IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_TARGET_REJECT IP6_NF_MATCH_IPV6HEADER IP6_NF_MATCH_RT; do
+			IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_TARGET_REJECT IP6_NF_MATCH_IPV6HEADER IP6_NF_MATCH_RT \
+			TCG_TIS TCG_CRB; do
 			[ "$(./scripts/config --state "$m")" = y ] || ./scripts/config --module "$m"
 		done
 		make olddefconfig
@@ -1028,7 +1031,7 @@ and /etc/pam.d/su, above "@include common-auth" / "auth include system-auth":
 
 It never changes the result; it reports each failed or successful attempt.
 
-Rotating OTP (#14), as a second factor: run 'secure-sudo otp setup', check a
+Rotating OTP (#14), as a second factor: run 'secure-sudo otp setup' (it seals its key to the TPM when there is one), check a
 code with 'secure-sudo otp verify', THEN add right after the password include:
 
     auth  required  pam_secure_otp.so
@@ -1340,6 +1343,11 @@ uninstall() {
 	done
 	rm -f -- "$sd"/load.health.tmp.?????? "$sd"/node_sea_auto.list.tmp.* \
 		"$sd"/node_sea_scan.cache.tmp.*
+	# The OTP directory once `secure-sudo otp disable` has emptied it. A
+	# configured OTP (its sealed or file key and the seed) is kept.
+	if [ -d "$sd/otp" ] && ! rmdir "$sd/otp" 2>/dev/null; then
+		warn "kept /var/lib/secure_sudo/otp: OTP is still set up (run 'secure-sudo otp disable' before uninstalling to remove it)"
+	fi
 	if [ -d "$sd/remote-queue" ] && ! rmdir "$sd/remote-queue" 2>/dev/null; then
 		warn "kept /var/lib/secure_sudo/remote-queue: events not yet delivered to the remote collector"
 	fi

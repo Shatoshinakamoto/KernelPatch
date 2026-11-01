@@ -25,6 +25,8 @@
 #   vm.sh down   WORKDIR         power off and delete the overlay
 # Env: VM_MEM (MiB, 4096) VM_CPUS (nproc) VM_PORT (2222) VM_DISK (20G)
 #      VM_BOOT_TIMEOUT (seconds, 1200)
+#      VM_TPM=1: give the guest a TPM 2.0 (swtpm; its state lives in
+#      WORKDIR/tpm, so it is the same TPM across reboots) - gap G3.
 set -uo pipefail
 
 cmd="${1:?usage: vm.sh up|boot|ssh|put|get|reboot|wait|stop|down WORKDIR ...}"
@@ -54,10 +56,20 @@ wait_ssh() {
 start_qemu() {
 	local n; n=$(find "$W" -maxdepth 1 -name 'console*.log' | wc -l)
 	[ -f "$W/console.log" ] && mv "$W/console.log" "$W/console.$n.log"
-	local accel="tcg,thread=multi" cpu=max
+	local accel="tcg,thread=multi" cpu=max tpm=()
 	if [ -w /dev/kvm ]; then accel=kvm; cpu=host; fi
+	if [ "${VM_TPM:-0}" = 1 ]; then
+		mkdir -p "$W/tpm"
+		# One swtpm per QEMU run; it exits when QEMU does.
+		swtpm socket --tpm2 --tpmstate dir="$W/tpm" \
+			--ctrl type=unixio,path="$W/tpm/sock" --terminate \
+			--daemon --pid file="$W/tpm/pid" --log file="$W/tpm/log" ||
+			{ log "swtpm failed to start"; return 2; }
+		tpm=(-chardev "socket,id=chrtpm,path=$W/tpm/sock"
+			-tpmdev "emulator,id=tpm0,chardev=chrtpm" -device "tpm-tis,tpmdev=tpm0")
+	fi
 	qemu-system-x86_64 -name ss-distro-vm -machine q35 -accel "$accel" \
-		-cpu "$cpu" -smp "$CPUS" -m "$MEM" \
+		-cpu "$cpu" -smp "$CPUS" -m "$MEM" "${tpm[@]}" \
 		-drive file="$W/disk.qcow2",if=virtio,format=qcow2 \
 		-drive file="$W/seed.img",if=virtio,format=raw,readonly=on \
 		-netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$PORT"-:22 \

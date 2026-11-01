@@ -161,6 +161,30 @@ check "G1: now the kernel's Node guard refuses the child" inlast '^rc=126'
 gstep g1-cleanup 'rm -rf /opt/ss-g1 && secure-sudo node-scan /opt/ss-g1; secure-sudo list node_sea_binaries'
 check "G1: with the app gone, a scan unregisters it" sh -c "! grep -q ss-g1 '$LAST'"
 
+# --------------------- 4c. the OTP master key sealed to the TPM (#15, G3)
+# The guest has a software TPM (VM_TPM=1) on the secure_sudo kernel. The
+# codes are worked out on the host from the seed `show-key` prints.
+if [ "${VM_TPM:-0}" = 1 ]; then
+	gstep g3-tpm 'ls /dev/tpmrm0 && systemd-creds has-tpm2; echo has=$?'
+	check "G3: the secure_sudo kernel sees the guest's TPM (/dev/tpmrm0)" inlast '^/dev/tpmrm0$'
+	gstep g3-setup 'secure-sudo otp setup && secure-sudo otp key-store && ls /var/lib/secure_sudo/otp'
+	check "G3: otp setup seals the master key to the TPM" sh -c "[ $GRC -eq 0 ] && grep -qx tpm2 '$LAST' && grep -qx masterkey.tpm2 '$LAST' && ! grep -qx masterkey '$LAST'"
+	seed=$(sed -n 's/^Manual entry key: //p' "$LAST" | head -1)
+	totp() { python3 -c 'import base64,hmac,hashlib,struct,sys,time
+k=base64.b32decode(sys.argv[1]+"="*(-len(sys.argv[1])%8))
+m=hmac.new(k,struct.pack(">Q",int(time.time())//30),hashlib.sha1).digest()
+o=m[-1]&15; print("%06d"%((struct.unpack(">I",m[o:o+4])[0]&0x7fffffff)%1000000))' "$1"; }
+	gstep g3-verify "echo $(totp "$seed") | secure-sudo otp verify --pam; echo rc=\$?"
+	check "G3: a code from the seed verifies with the sealed key" inlast '^rc=0$'
+	reboot_vm
+	gstep g3-after-reboot "secure-sudo otp key-store; echo $(totp "$seed") | secure-sudo otp verify --pam; echo rc=\$?"
+	check "G3: after a reboot the TPM still unseals it" sh -c "grep -qx tpm2 '$LAST' && grep -qx 'rc=0' '$LAST'"
+	gstep g3-cleanup 'secure-sudo otp disable && ls -A /var/lib/secure_sudo/otp'
+	check "G3: otp disable removes the sealed key" sh -c "[ $GRC -eq 0 ] && ! grep -q . '$LAST'"
+else
+	skip "G3: the OTP key sealed to a TPM (run with VM_TPM=1)"
+fi
+
 # ----------------------------------------- 5. policy + recovery exercises
 bash "$VM" put "$W" "$HERE/recovery-exercises.sh" /root/recovery-exercises.sh
 gstep recovery 'bash /root/recovery-exercises.sh'

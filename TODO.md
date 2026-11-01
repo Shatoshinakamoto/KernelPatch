@@ -381,7 +381,10 @@ that is a missing feature to build, not a sentence to delete. Each doc says
   over the manifest; log and forward its root each scan. **Done when:** a
   collector can tell a rewritten manifest from a legitimate rescan, and a
   test proves a changed entry changes the root.
-- [ ] **G3: TPM2-sealed OTP secret** (FEATURE_MAP #15). Seal the OTP key to
+- [x] **G3: TPM2-sealed OTP secret** (FEATURE_MAP #15). Built 2026-11-01
+  (SECURITY_REVIEW #61): `systemd-creds` seals the master key, key file
+  without a TPM; tested by `tests/userspace/test-otp.sh` (two software TPMs,
+  required in CI) and the Ubuntu VM run (VM_TPM=1). Seal the OTP key to
   the TPM when one is present, root-only key file as the fallback.
   **Done when:** the OTP verifies with a sealed key in a swtpm VM and falls
   back cleanly without a TPM.
