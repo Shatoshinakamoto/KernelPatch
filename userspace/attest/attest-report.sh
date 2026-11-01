@@ -83,8 +83,9 @@ if [ -r "$v" ]; then
 fi
 [ -d "$R/sys/firmware/efi" ] || sb=no-efi
 # P2-1 part 2: the kernel's own policy log (every knob, list and lock it
-# applied, extended into one PCR). Wait briefly for pending extends so the
-# log and the quoted PCR agree; the verifier replays it.
+# applied, extended into one PCR). Wait up to 30 s for pending extends (a
+# full policy load is a few hundred TPM commands) so the log and the quoted
+# PCR agree; the verifier replays it.
 plog="$R/sys/kernel/security/secure_sudo/policy_log"
 psrc=reported; ppcr=""; plb=""; topen=null
 if [ -r "$plog" ]; then
@@ -94,7 +95,7 @@ if [ -r "$plog" ]; then
 		c="$(printf '%s' "$hdr" | sed -n 's/.* count=\([0-9]*\).*/\1/p')"
 		e="$(printf '%s' "$hdr" | sed -n 's/.* extended=\([0-9]*\).*/\1/p')"
 		[ -n "$c" ] && [ "$c" = "$e" ] && break
-		i=$((i + 1)); [ "$i" -ge 25 ] && break
+		i=$((i + 1)); [ "$i" -ge 150 ] && break
 		sleep 0.2
 	done
 	ppcr="$(printf '%s' "$hdr" | sed -n 's/.* pcr=\([0-9]*\).*/\1/p')"

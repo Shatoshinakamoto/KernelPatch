@@ -156,7 +156,7 @@ The log keeps at most 8192 entries. Past that, measuring stops and the
 header says `overflow=1`, which the verifier fails. Extends run on a
 kernel work item, because the TPM may come up after the first policy
 writes; entries wait as not extended (`count` > `extended` in the header)
-until it does. `attest quote` waits up to 5 s for them, and the verifier
+until it does. `attest quote` waits up to 30 s for them, and the verifier
 fails while any is pending. Other PCR banks get the SHA-256 digest cut or
 zero-padded to their size; only the SHA-256 bank is checked.
 

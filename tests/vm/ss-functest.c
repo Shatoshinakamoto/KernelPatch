@@ -2170,12 +2170,17 @@ static void plog_replay_check(const char *when)
 		diag("P2-1 no TPM in this guest: the PCR replay is not checked (%s)", when);
 		return;
 	}
-	for (i = 0; i < 50; i++) {
+	/* Each entry costs a PCR read and an extend; a burst of ~1300 policy
+	 * writes (the tests above) takes a few seconds under KVM. Wait up to
+	 * a minute, and report how long it took. */
+	for (i = 0; i < 600; i++) {
 		plog_read();
 		if (plog_hdr("count") == plog_hdr("extended"))
 			break;
 		usleep(100000);
 	}
+	diag("P2-1 %s: %u entries extended after %u.%u s", when, plog_hdr("extended"),
+	     i / 10, i % 10);
 	tap(plog_hdr("count") == plog_hdr("extended"),
 	    "P2-1 %s: the worker extended every entry (count=%u extended=%u tpm=%d)", when,
 	    plog_hdr("count"), plog_hdr("extended"), (int)plog_hdr("tpm"));
@@ -2190,6 +2195,8 @@ static void plog_replay_check(const char *when)
 			bad++;
 			continue;
 		}
+		if (strcmp(ext, "1"))	/* not in the PCR yet: the verifier skips it too */
+			continue;
 		sha256(line + off, strlen(line + off), dg);
 		to_hex(dg, 32, calc);
 		if (strcmp(calc, hex) && bad++ < 3)
