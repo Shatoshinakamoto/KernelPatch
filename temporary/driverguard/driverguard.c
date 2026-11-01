@@ -20,6 +20,9 @@
  *               update), logging it CRITICAL with the reason, so enforce mode
  *               does not roll the update back. Run by the package hooks.
  *               No baseline yet: does nothing.
+ *   arm       - let enforce mode act. Turned to enforce, DriverGuard reports
+ *               only, until a pass finds nothing to repair (it then arms
+ *               itself) or the operator arms it after reading the report.
  *   status    - show configuration and manifest size.
  *
  * A scan while a package manager holds its lock is deferred.
@@ -122,39 +125,6 @@ static int is_module(const char *name)
 	       !strcmp(dot, ".xz") || !strcmp(dot, ".gz");
 }
 
-static int sha256_file(const char *path, char out[65])
-{
-	unsigned char buf[65536], d[EVP_MAX_MD_SIZE];
-	unsigned int dn = 0;
-	EVP_MD_CTX *c = EVP_MD_CTX_new();
-	FILE *f;
-	size_t r;
-	int i, ok = 0;
-
-	if (!c)
-		return -1;
-	f = fopen(path, "rbe");
-	if (!f) {
-		EVP_MD_CTX_free(c);
-		return -1;
-	}
-	if (EVP_DigestInit_ex(c, EVP_sha256(), NULL)) {
-		ok = 1;
-		while ((r = fread(buf, 1, sizeof(buf), f)) > 0)
-			if (!EVP_DigestUpdate(c, buf, r)) { ok = 0; break; }
-	}
-	fclose(f);
-	if (ok && EVP_DigestFinal_ex(c, d, &dn)) {
-		for (i = 0; i < (int)dn; i++)
-			sprintf(out + 2 * i, "%02x", d[i]);
-		out[2 * dn] = '\0';
-	} else {
-		ok = 0;
-	}
-	EVP_MD_CTX_free(c);
-	return ok ? 0 : -1;
-}
-
 /* Walk the module tree, calling cb(abspath) for each module file. */
 typedef void (*mod_cb)(const char *path, void *ctx);
 static void walk_modules(const char *dir, mod_cb cb, void *ctx, int depth)
@@ -190,7 +160,8 @@ static void walk_modules(const char *dir, mod_cb cb, void *ctx, int depth)
 struct base_ctx {
 	FILE *mf;			/* manifest (NULL when only backing up) */
 	const char *backup_bucket;
-	size_t files, backed;
+	const char *root;		/* the driver tree */
+	size_t files, backed, failed;
 };
 
 static void base_one(const char *path, void *vctx)
@@ -198,18 +169,34 @@ static void base_one(const char *path, void *vctx)
 	struct base_ctx *b = vctx;
 	char sha[65], sample[PATH_MAX];
 
-	if (b->mf) {
-		if (sha256_file(path, sha) == 0) {
-			fprintf(b->mf, "%s %s\n", sha, path);
-			b->files++;
-		} else {
-			ssl_warn("could not hash %s", path);
-		}
+	/* one entry per line: a name that could break the manifest's format
+	 * (a newline) or step out of the tree is never recorded */
+	if (!sst_path_within(b->root, path)) {
+		ssl_crit("DRIVER odd file name skipped (not baselined): %s", path);
+		return;
 	}
-	if (b->backup_bucket &&
-	    store_put_compressed(path, b->backup_bucket, "drv", sample,
-				 sizeof(sample)) == 0)
-		b->backed++;
+	if (b->backup_bucket) {
+		/* the manifest records the hash of exactly the bytes backed up,
+		 * so a file rewritten mid-baseline cannot leave a baseline that
+		 * its own backup does not match */
+		if (store_put_compressed_sha(path, b->backup_bucket, "drv", sample,
+					     sizeof(sample), b->mf ? sha : NULL) == 0) {
+			b->backed++;
+		} else {
+			ssl_crit("DRIVER backup FAILED for %s (disk full, a symlink, or "
+				 "it changed while being read)", path);
+			b->failed++;
+			return;
+		}
+	} else if (b->mf && sst_sha256_file(path, sha) != 0) {
+		ssl_warn("could not hash %s", path);
+		b->failed++;
+		return;
+	}
+	if (b->mf) {
+		fprintf(b->mf, "%s %s\n", sha, path);
+		b->files++;
+	}
 }
 
 /* Allocate (Locus or fallback) and create the backup bucket. Rotating mode may
@@ -255,10 +242,26 @@ static int baseline_why(const char *why)
 		return 1;
 	}
 	b.backup_bucket = bucket;
+	b.root = c.driver_dir;
 	walk_modules(c.driver_dir, base_one, &b, 0);
-	fflush(b.mf);
-	fsync(fileno(b.mf));
-	fclose(b.mf);
+	if (fflush(b.mf) != 0 || fsync(fileno(b.mf)) != 0 || ferror(b.mf)) {
+		b.failed++;
+		ssl_crit("DRIVER baseline: writing the manifest failed: %s", strerror(errno));
+	}
+	if (fclose(b.mf) != 0)
+		b.failed++;
+	if (b.failed) {
+		/* A baseline that cannot back up what it records would make every
+		 * later repair of those files impossible: keep the old one. */
+		unlink(tmp);
+		ssl_crit("DRIVER baseline REFUSED (%s): %zu module(s) could not be "
+			 "backed up or recorded; the previous baseline is kept. Free "
+			 "space under %s (or fix the files named above) and run it again",
+			 why, b.failed, bucket);
+		fprintf(stderr, "driverguard: baseline refused: %zu module(s) could not "
+			"be backed up (see the log)\n", b.failed);
+		return 1;
+	}
 	if (rename(tmp, MANIFEST) != 0) {
 		unlink(tmp);
 		return 1;
@@ -289,7 +292,13 @@ static int cmd_backup(void)
 		return 1;
 	}
 	b.backup_bucket = bucket;
+	b.root = c.driver_dir;
 	walk_modules(c.driver_dir, base_one, &b, 0);
+	if (b.failed) {
+		ssl_crit("DRIVER backup incomplete: %zu module(s) could not be backed "
+			 "up to %s", b.failed, bucket);
+		return 1;
+	}
 	ssl_info("backup refreshed: %zu modules -> %s", b.backed, bucket);
 	printf("driverguard: backed up %zu modules to %s\n", b.backed, bucket);
 	return 0;
@@ -300,8 +309,13 @@ static int repair_module(const struct cfg *c, const char *path, const char *sha)
 {
 	char root[PATH_MAX], used[PATH_MAX], why[PATH_MAX + 128];
 
-	/* keep what is there now before it is overwritten */
-	sst_evidence("driverguard", path, "repair", sha, NULL);
+	/* keep what is there now before it is overwritten; if it cannot be
+	 * kept (disk full), it is not overwritten either */
+	if (sst_evidence("driverguard", path, "repair", sha, NULL) != 0) {
+		ssl_crit("DRIVER not repaired: %s: its current bytes could not be kept "
+			 "as evidence", path);
+		return -1;
+	}
 	/* Backups may live under the configured root or the Locus-named one;
 	 * only one whose bytes match the baseline is ever written back. */
 	if (sst_restore_from_backups(c->backup_root, "drv", path, sha, used,
@@ -325,7 +339,9 @@ static int cmd_scan(void)
 	ssize_t len;
 	size_t checked = 0, tampered = 0, repaired = 0;
 	char why[512];
-	int untrusted = 0, act;
+	int untrusted = 0, act, armed;
+	size_t outside = 0;
+	struct stat lst;
 
 	load_cfg(&c, NULL);
 	{
@@ -349,7 +365,12 @@ static int cmd_scan(void)
 			 "is repaired", why);
 		printf("driverguard: baseline not trusted (%s): reporting only\n", why);
 	}
-	act = c.enforce && !untrusted;
+	if (!c.enforce)
+		sst_disarm("driverguard", STATEDIR);
+	armed = c.enforce && sst_armed(STATEDIR);
+	if (c.enforce && !armed)
+		printf("driverguard: enforce mode is not armed yet: reporting only\n");
+	act = c.enforce && !untrusted && armed;
 	while ((len = getline(&line, &cap, f)) >= 0) {
 		char *sp, sha_now[65];
 		char *sha, *path;
@@ -366,16 +387,35 @@ static int cmd_scan(void)
 		path = sp + 1;
 		checked++;
 
-		if (sha256_file(path, sha_now) != 0) {
+		if (strlen(sha) != 64 || !sst_path_within(c.driver_dir, path)) {
+			/* not written by `baseline`: never repaired over */
+			ssl_crit("DRIVER baseline entry IGNORED: %s is not a file under "
+				 "%s (edited baseline, or driver_dir changed: re-baseline)",
+				 path, c.driver_dir);
+			outside++;
+			continue;
+		}
+		if (lstat(path, &lst) == 0 && S_ISLNK(lst.st_mode)) {
+			ssl_crit("DRIVER tamper: %s was replaced by a symlink", path);
+			tampered++;
+			if (act && repair_module(&c, path, sha) == 0)
+				repaired++;
+			else if (c.enforce && !act)
+				ssl_warn("DRIVER would repair %s (not armed)", path);
+		} else if (sst_sha256_file(path, sha_now) != 0) {
 			ssl_crit("DRIVER missing/unreadable: %s", path);
 			tampered++;
 			if (act && repair_module(&c, path, sha) == 0)
 				repaired++;
+			else if (c.enforce && !act)
+				ssl_warn("DRIVER would repair %s (not armed)", path);
 		} else if (strcmp(sha, sha_now) != 0) {
 			ssl_crit("DRIVER tamper: %s (hash changed)", path);
 			tampered++;
 			if (act && repair_module(&c, path, sha) == 0)
 				repaired++;
+			else if (c.enforce && !act)
+				ssl_warn("DRIVER would repair %s (not armed)", path);
 		}
 	}
 	free(line);
@@ -384,7 +424,27 @@ static int cmd_scan(void)
 		 checked, tampered, repaired, c.enforce ? "enforce" : "monitor");
 	printf("driverguard: %zu checked, %zu tampered, %zu repaired (%s)\n",
 	       checked, tampered, repaired, c.enforce ? "enforce" : "monitor");
-	return untrusted ? 3 : 0;	/* a failed unit is reported */
+	if (c.enforce && !armed && !untrusted) {
+		if (!tampered && !outside)
+			sst_arm("driverguard", STATEDIR, "a clean enforce pass");
+		else
+			ssl_crit("ENFORCE NOT ARMED: driverguard would have repaired %zu "
+				 "module(s); read the report, then run "
+				 "`secure-sudo-driverguard arm` to let it act", tampered);
+	}
+	return untrusted || outside ? 3 : 0;	/* a failed unit is reported */
+}
+
+static int cmd_arm(void)
+{
+	struct cfg c;
+
+	load_cfg(&c, NULL);
+	if (!c.enforce) {
+		fprintf(stderr, "driverguard: mode is monitor; set mode = enforce first\n");
+		return 1;
+	}
+	return sst_arm("driverguard", STATEDIR, "armed by the operator") ? 1 : 0;
 }
 
 static int cmd_refresh(const char *reason)
@@ -420,6 +480,12 @@ static int cmd_status(void)
 	load_cfg(&c, NULL);
 	printf("DriverGuard mode:  %s\n", c.enforce ? "enforce (auto-repair)" :
 	       "monitor (report only)");
+	{
+		char a[160];
+
+		sst_describe_arming(STATEDIR, c.enforce, a, sizeof(a));
+		printf("enforce arming:    %s\n", a);
+	}
 	printf("driver tree:       %s\n", c.driver_dir);
 	printf("backup root:       %s (hourly buckets)\n", c.backup_root);
 	f = fopen(MANIFEST, "re");
@@ -448,6 +514,7 @@ static void usage(void)
 "  backup     refresh the hourly compressed backups only\n"
 "  scan       check modules vs baseline; repair from backup in enforce mode\n"
 "  refresh [REASON]  re-baseline after a legitimate update (logged)\n"
+"  arm        let enforce mode act (it reports only until a clean pass or this)\n"
 "  status     show configuration and baseline size\n"
 "  check-config  check every config file strictly; 1 if any problem\n"
 "\nConfig: " CONF "\n");
@@ -484,6 +551,8 @@ int main(int argc, char **argv)
 		return cmd_refresh(argc > 2 ? argv[2] : "manual");
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
+	if (!strcmp(argv[1], "arm"))
+		return cmd_arm();
 
 	usage();
 	ssl_close();

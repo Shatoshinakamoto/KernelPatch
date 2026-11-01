@@ -318,9 +318,15 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     restores verified against the baseline hash, evidence records before
     every repair, restore, removal or quarantine (docs/ADDONS.md "Baseline
     trust and evidence").
-    Open: the adversarial tests above (part 3), promotion criteria for the
-    operator to approve (part 4), PheonixBox `check-config` and baseline
-    trust.
+    *Part 3:* adversarial tests for every add-on and PheonixBox (hostile
+    names, quote and newline injection, planted symlinks, edited baselines
+    and restore lists, swapped backups, replaced program paths, full disks,
+    oversized and silent network requests, bad console requests,
+    monitor-to-enforce), and the fixes they needed (SECURITY_REVIEW #71;
+    docs/ADDONS.md "Adversarial tests" and "Enforce arming"); PheonixBox
+    `check-config` and evidence before repair.
+    Open: promotion criteria for the operator to approve (part 4), a signed
+    PheonixBox snapshot (its baseline trust).
 
 - [ ] **P2-3: Improve alerting and fleet integration.**
   - Define a documented event format and supported integrations for common

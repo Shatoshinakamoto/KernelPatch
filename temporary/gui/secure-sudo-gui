@@ -37,7 +37,7 @@ ADDON_CONF = os.environ.get("SS_ADDON_CONF", "/etc/secure_sudo/addons")
 KLOG_DIR   = "/var/log/secure_sudo"            # daemon kernel-event logs
 ALOG_DIR   = "/var/log/secure_sudo/addons"     # guard logs (ssaddon_log)
 SYSFS      = "/sys/kernel/secure_sudo"
-STATE      = "/var/lib/secure_sudo/addons/gui"
+STATE      = os.environ.get("SS_GUI_STATE", "/var/lib/secure_sudo/addons/gui")
 TOKEN_FILE = STATE + "/token"
 # the evidence records the guards keep (ssaddon_trust.c), one JSON line each
 EVIDENCE   = os.environ.get("SS_EVIDENCE_ROOT", "/var/lib/secure_sudo/addons/evidence")
@@ -196,7 +196,7 @@ def get_token():
     except OSError:
         pass
     t = secrets.token_hex(24)
-    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     os.write(fd, t.encode())
     os.close(fd)
     return t
@@ -233,6 +233,17 @@ def latest_klog():
         return None
 
 
+MAX_BODY = 512 * 1024      # a POST body larger than this is refused unread
+
+
+def count_arg(q, default=200):
+    """?n=: a whole number, 1..2000; anything else is a client error."""
+    v = q.get("n", [str(default)])[0] or str(default)
+    if not re.fullmatch(r"[0-9]{1,6}", v):
+        raise ValueError("n must be a whole number")
+    return max(1, min(int(v), 2000))
+
+
 def tail(path, n):
     try:
         with open(path, errors="replace") as f:
@@ -261,6 +272,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- GET ----
     def do_GET(self):
+        try:
+            return self._get()
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except Exception:  # noqa: BLE001 - never a traceback to the client
+            return self._send(500, {"error": "internal error"})
+
+    def _get(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/" or u.path == "/index.html":
@@ -299,13 +318,25 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def do_POST(self):
+        try:
+            return self._post()
+        except Exception:  # noqa: BLE001 - never a traceback to the client
+            return self._send(500, {"error": "internal error"})
+
+    def _post(self):
         err = self._auth()
         if err:
             return self._send(*err)
+        cl = self.headers.get("Content-Length") or "0"
+        # a negative length would read to EOF, a huge one would hold memory
+        if not re.fullmatch(r"[0-9]{1,7}", cl) or int(cl) > MAX_BODY:
+            self.close_connection = True
+            return self._send(413, {"error": "body missing, malformed or too large"})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(n) or b"{}")
+            data = json.loads(self.rfile.read(int(cl)) or b"{}")
         except Exception:
+            return self._send(400, {"error": "bad json"})
+        if not isinstance(data, dict):
             return self._send(400, {"error": "bad json"})
         u = urlparse(self.path)
         if u.path == "/api/config":
@@ -329,18 +360,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_logs(self, q):
         src = (q.get("src", ["kernel"])[0])
-        n = min(int(q.get("n", ["200"])[0] or 200), 2000)
+        n = count_arg(q)
         if src == "kernel":
             path = latest_klog()
             lines = tail(path, n) if path else []
             return {"src": src, "path": path, "lines": lines}
         # guard log
         fname = re.sub(r"[^a-z0-9_]", "", src)
+        if fname not in GUARD_BIN and fname not in ("gui", "failure"):
+            return {"error": "unknown log"}
         path = os.path.join(ALOG_DIR, fname + ".log")
         return {"src": src, "path": path, "lines": tail(path, n)}
 
     def api_memaccess(self, q):
-        n = min(int(q.get("n", ["200"])[0] or 200), 2000)
+        n = count_arg(q)
         path = latest_klog()
         rows = []
         if path:
@@ -363,9 +396,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_config_set(self, data):
         name = data.get("name")
-        if name not in CONF_FILES:
+        if not isinstance(name, str) or name not in CONF_FILES:
             return {"error": "unknown config"}
         content = data.get("content", "")
+        if not isinstance(content, str):
+            return {"error": "content must be text"}
         if len(content) > 256 * 1024:
             return {"error": "too large"}
         path = os.path.join(ADDON_CONF, CONF_FILES[name])
@@ -377,9 +412,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_setkey(self, data):
         name, key, val = data.get("name"), data.get("key"), str(data.get("value", ""))
-        if name not in CONF_FILES or not re.fullmatch(r"[a-z_]+", key or ""):
+        if not isinstance(name, str) or name not in CONF_FILES or \
+                not isinstance(key, str) or not re.fullmatch(r"[a-z_]{1,64}", key):
             return {"error": "bad name/key"}
-        if not re.fullmatch(r"[\w./:\- ]*", val):
+        if not re.fullmatch(r"[A-Za-z0-9_./:\- ]{0,1024}", val):
             return {"error": "bad value"}
         path = os.path.join(ADDON_CONF, CONF_FILES[name])
         lines, found = [], False
@@ -443,9 +479,23 @@ class Handler(BaseHTTPRequestHandler):
             | {"detected": len(exes)}
 
     def quarantine_pid(self, arg):
-        if not arg.isdigit():
+        if not re.fullmatch(r"[0-9]{1,10}", arg):
             return {"error": "pid must be numeric"}
         pid = int(arg)
+        if pid <= 1 or pid in (os.getpid(), os.getppid()):
+            return {"error": "refusing: PID 1 and the console itself are never killed"}
+        # a pidfd pins the process: the kill below cannot hit a new process
+        # that reused the number in the meantime
+        try:
+            pfd = os.pidfd_open(pid)
+        except (OSError, AttributeError) as e:
+            return {"error": f"no such process: {e}"}
+        try:
+            return self._quarantine(pid, pfd)
+        finally:
+            os.close(pfd)
+
+    def _quarantine(self, pid, pfd):
         try:
             exe = os.readlink(f"/proc/{pid}/exe").split(" (deleted)")[0]
         except OSError as e:
@@ -453,9 +503,12 @@ class Handler(BaseHTTPRequestHandler):
         qdir = os.path.join(STATE, "quarantine",
                             time.strftime("%Y%m%d%H"))
         os.makedirs(qdir, 0o700, exist_ok=True)
-        dst = os.path.join(qdir, os.path.basename(exe) + f".{pid}.gz")
+        dst = os.path.join(qdir, re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(exe))
+                           + f".{pid}.gz")
         try:
-            with open(exe, "rb") as fi, gzip.open(dst, "wb") as fo:
+            # /proc/PID/exe is the binary that runs, even if its path was
+            # replaced since; the path itself may be anything by now
+            with open(f"/proc/{pid}/exe", "rb") as fi, gzip.open(dst, "wb") as fo:
                 shutil.copyfileobj(fi, fo)
             os.chmod(dst, 0o600)
         except OSError as e:
@@ -465,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as e:
             return {"error": f"evidence record failed, not killed: {e}", "stored": dst}
         try:
-            os.kill(pid, signal.SIGKILL)
+            signal.pidfd_send_signal(pfd, signal.SIGKILL)
         except OSError as e:
             return {"error": f"killed exe stored but kill failed: {e}", "stored": dst}
         return {"ok": True, "exe": exe, "stored": dst, "killed": pid}

@@ -47,6 +47,7 @@
 #include <time.h>
 #include <limits.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -65,6 +66,10 @@
 #ifndef PG_QROOT
 #define PG_QROOT	"/var/lib/secure_sudo/addons/procguard/quarantine"
 #endif
+#ifndef PG_STATEDIR
+#define PG_STATEDIR	"/var/lib/secure_sudo/addons/procguard"
+#endif
+#define STATEDIR	PG_STATEDIR
 #define CONF		PG_CONF
 #define ALLOW		PG_ALLOW
 #define DEF_QROOT	PG_QROOT
@@ -334,10 +339,15 @@ static void run_sync(const struct cfg *c, const char *sample)
 }
 
 /* Handle a confirmed infection: quarantine (compressed, hourly bucket), remove,
- * optionally sync. */
-static void handle_infection(const struct cfg *c, const char *path)
+ * optionally sync. @exefd is the binary the killed process ran (opened via
+ * /proc/PID/exe before the kill), so what is quarantined is that binary even
+ * if @path has since been replaced; @path is removed only while it is still
+ * that same file (same device and inode, not a symlink). 0 when quarantined. */
+static int handle_infection(const struct cfg *c, const char *path, int exefd)
 {
 	char root[PATH_MAX], bucket[PATH_MAX], sample[PATH_MAX];
+	struct stat ran, now;
+	int remove = c->remove_on_infection && !in_system_dir(path);
 
 	/* Rotating mode may use a Locus-allocated root; a fixed (rotation-off)
 	 * quarantine always stays local so the location never moves. */
@@ -346,40 +356,62 @@ static void handle_infection(const struct cfg *c, const char *path)
 	else
 		snprintf(root, sizeof(root), "%s", c->quarantine_root);
 
+	if (exefd < 0 || fstat(exefd, &ran) != 0) {
+		ssl_err("failed to quarantine %s: the binary could not be opened", path);
+		return -1;
+	}
 	if (store_bucket(root, c->rotate, bucket, sizeof(bucket)) != 0) {
 		ssl_err("cannot create quarantine bucket under %s", root);
-		return;
+		return -1;
 	}
-	if (store_put_compressed(path, bucket, "proc", sample, sizeof(sample)) != 0) {
-		ssl_err("failed to quarantine %s", path);
-		return;
+	if (store_put_fd(exefd, path, bucket, "proc", sample, sizeof(sample), NULL) != 0) {
+		ssl_err("failed to quarantine %s (disk full?): it is left on disk", path);
+		return -1;
 	}
 	ssl_crit("INFECTION quarantined: %s -> %s", path, sample);
+	if (lstat(path, &now) != 0 || !S_ISREG(now.st_mode) ||
+	    now.st_dev != ran.st_dev || now.st_ino != ran.st_ino) {
+		/* swapped after the kill: whatever is there now is not what ran */
+		ssl_crit("INFECTION: %s is no longer the binary that ran (replaced or "
+			 "a symlink): the quarantined copy is the one that ran; the path "
+			 "is left alone", path);
+		sst_evidence("procguard", path, "quarantine", NULL, sample);
+		run_sync(c, sample);
+		return 0;
+	}
 	/* hash, owner, mode and times of the original, before it goes */
-	sst_evidence("procguard", path,
-		     c->remove_on_infection && !in_system_dir(path) ? "remove" : "quarantine",
-		     NULL, sample);
+	if (sst_evidence("procguard", path, remove ? "remove" : "quarantine", NULL,
+			 sample) != 0 && remove) {
+		ssl_crit("INFECTION left on disk: %s: the evidence record could not be "
+			 "written, so it is not removed", path);
+		remove = 0;
+	}
 
 	if (c->remove_on_infection && in_system_dir(path)) {
 		ssl_warn("INFECTION left on disk: %s is in a system directory (a "
 			 "service being restarted?); remove it yourself if it is "
 			 "malicious; sample: %s", path, sample);
-	} else if (c->remove_on_infection) {
-		if (unlink(path) == 0)
+	} else if (remove) {
+		/* re-checked just before: still the file that ran */
+		if (lstat(path, &now) == 0 && now.st_dev == ran.st_dev &&
+		    now.st_ino == ran.st_ino && unlink(path) == 0)
 			ssl_crit("INFECTION removed from disk: %s", path);
 		else
 			ssl_err("could not remove %s: %s", path, strerror(errno));
 	}
 	run_sync(c, sample);
+	return 0;
 }
 
 /* One pass over /proc. Returns the number of offenders seen. */
 static int scan_once(const struct cfg *c, const struct allowlist *a)
 {
+	static time_t not_armed_said;	/* said at most every 10 minutes */
 	DIR *d = opendir("/proc");
 	struct dirent *de;
 	pid_t self = getpid();
-	int offenders = 0;
+	int offenders = 0, exefd = -1;
+	int armed = c->enforce && sst_armed(STATEDIR);
 	time_t now = time(NULL);
 
 	if (!d) {
@@ -410,8 +442,22 @@ static int scan_once(const struct cfg *c, const struct allowlist *a)
 				 pid, exe);
 			continue;
 		}
+		if (!armed) {
+			ssl_warn("NOT ARMED: would kill pid %d (%s) - not on allowlist",
+				 pid, exe);
+			continue;
+		}
 
-		/* enforce: kill it, and track respawns. */
+		/* enforce: hold on to the binary it runs, kill it, and track
+		 * respawns. */
+		{
+			char lk[64];
+
+			snprintf(lk, sizeof(lk), "/proc/%d/exe", pid);
+			if (exefd >= 0)
+				close(exefd);
+			exefd = open(lk, O_RDONLY | O_CLOEXEC);
+		}
 		if (kill(pid, SIGKILL) == 0)
 			ssl_warn("killed pid %d (%s) - not on allowlist", pid, exe);
 
@@ -428,11 +474,25 @@ static int scan_once(const struct cfg *c, const struct allowlist *a)
 		if (!t->quarantined && t->kills >= c->respawn_threshold) {
 			ssl_crit("respawn threshold hit for %s (%d kills in %ds)",
 				 exe, t->kills, c->respawn_window);
-			handle_infection(c, exe);
-			t->quarantined = 1;
+			/* not marked handled unless it was: a failed quarantine
+			 * is tried again at the next respawn */
+			if (handle_infection(c, exe, exefd) == 0)
+				t->quarantined = 1;
 		}
 	}
+	if (exefd >= 0)
+		close(exefd);
 	closedir(d);
+	if (!c->enforce) {
+		sst_disarm("procguard", STATEDIR);
+	} else if (!armed) {
+		if (!offenders)
+			sst_arm("procguard", STATEDIR, "a clean enforce pass");
+		else if (now - not_armed_said >= 600 && (not_armed_said = now))
+			ssl_crit("ENFORCE NOT ARMED: procguard would have killed %d "
+				 "process(es) not on the allowlist; complete the allowlist "
+				 "(or run `secure-sudo-procguard arm` to accept)", offenders);
+	}
 	return offenders;
 }
 
@@ -488,6 +548,19 @@ static int run_once(void)
 	return 0;
 }
 
+static int cmd_arm(void)
+{
+	struct cfg c;
+
+	load_cfg(&c, NULL);
+	if (!c.enforce) {
+		fprintf(stderr, "procguard: mode is monitor; set mode = enforce first\n");
+		return 1;
+	}
+	mkdir(STATEDIR, 0700);
+	return sst_arm("procguard", STATEDIR, "armed by the operator") ? 1 : 0;
+}
+
 static int cmd_status(void)
 {
 	struct cfg c;
@@ -500,6 +573,12 @@ static int cmd_status(void)
 	if (bad)
 		printf("CONFIG:                %d problem(s) - run check-config\n", bad);
 	printf("ProcGuard mode:        %s\n", c.enforce ? "enforce" : "monitor");
+	{
+		char ar[160];
+
+		sst_describe_arming(STATEDIR, c.enforce, ar, sizeof(ar));
+		printf("enforce arming:        %s\n", ar);
+	}
 	printf("scan interval:         %ds\n", c.interval);
 	printf("respawn -> infection:  %d kills / %ds\n", c.respawn_threshold,
 	       c.respawn_window);
@@ -517,6 +596,7 @@ static void usage(void)
 "usage: secure-sudo-procguard <command>\n"
 "  daemon        run the watch loop (monitor or enforce per config)\n"
 "  scan          one pass now (detect in monitor, act in enforce)\n"
+"  arm           let enforce mode act (it reports only until a clean pass or this)\n"
 "  status        show the current configuration\n"
 "  check-config  check every config file strictly; 1 if any problem\n"
 "\nConfig: " CONF "\nAllowlist: " ALLOW "\n");
@@ -541,6 +621,11 @@ int main(int argc, char **argv)
 		return run_once();
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
+	if (!strcmp(argv[1], "arm")) {
+		int rc = ssc_refuse("arm", conf_errors(stderr));
+
+		return rc ? rc : cmd_arm();
+	}
 	if (!strcmp(argv[1], "check-config"))
 		return ssc_verdict(conf_errors(stdout));
 

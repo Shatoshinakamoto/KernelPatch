@@ -76,7 +76,9 @@ incomplete, so ProcGuard:
   shipped, and the log says `INFECTION left on disk` so the operator removes or
   reinstalls it through the package manager;
 * defaults to **`mode = monitor`** — it only logs what it *would* kill. Only
-  `mode = enforce` acts. Build the allowlist in monitor mode first.
+  `mode = enforce` acts, and only once armed: it arms itself after a pass
+  with nothing to kill, or `secure-sudo-procguard arm` arms it
+  ([Enforce arming](#enforce-arming)). Build the allowlist in monitor mode first.
 
 ```sh
 secure-sudo-procguard status          # show config
@@ -105,8 +107,9 @@ secure-sudo-driverguard status
 `baseline` records a SHA-256 manifest of every module under the driver tree
 (default `/lib/modules/$(uname -r)`) and stores a compressed failsafe backup of
 each in the backup location (hourly bucket, or fixed if `rotate = 0`). `scan`
-re-hashes; a changed or missing module is a tamper, and in `mode = enforce` it
-is restored from the newest backup that has it. (This protects the files the
+re-hashes; a changed or missing module is a tamper, and in `mode = enforce`
+(once armed: [Enforce arming](#enforce-arming)) it is restored from the newest
+backup whose bytes match the baseline. (This protects the files the
 kernel loads; a module *already loaded* is the core LSM's job — #6 driver-BYOVD
 hashes the loaded bytes.) Config `/etc/secure_sudo/addons/driverguard.conf`.
 
@@ -226,7 +229,9 @@ It watches every regular file under the PheonixBox protected set
 (`/etc/secure_sudo/pheonixbox.conf`) plus any extra absolute paths in
 `/etc/secure_sudo/addons/tamperwatch.conf`. `mode = log` (default) only
 attributes; `mode = quarantine` additionally compresses the offender's
-executable into the rotating quarantine and `SIGKILL`s it. Needs root and
+executable into the rotating quarantine and `SIGKILL`s it, once the operator
+has run `secure-sudo-tamperwatch arm` (until then it reports what it would
+kill). Needs root and
 `CONFIG_FANOTIFY`. Honest limit: it marks the regular files that exist when it
 starts/rescans; a brand-new file created under a protected dir is covered on the
 next rescan.
@@ -366,15 +371,15 @@ work still open below.
 
 | Add-on | Level | Default mode | Acts by | Still open before promotion |
 |--------|-------|--------------|---------|-----------------------------|
-| `procguard` | experimental | monitor | killing processes; removing a respawning executable | adversarial tests, approved criteria, host soak |
-| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | adversarial tests, approved criteria, host soak |
-| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | adversarial tests, approved criteria, host soak |
-| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | adversarial tests, approved criteria, host soak |
-| `biosguard` | experimental | detect | nothing (log + notify) | adversarial tests, approved criteria, host soak |
-| `locus` | experimental | serve | nothing destructive (hands out directory names) | adversarial tests, approved criteria, host soak |
-| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | adversarial tests, approved criteria, host soak |
-| `failure` | experimental | report | nothing (reports another unit's failure) | adversarial tests, approved criteria, host soak |
-| `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | strict config check, baseline trust source, evidence on repair, adversarial tests, approved criteria, host soak |
+| `procguard` | experimental | monitor | killing processes; removing a respawning executable | approved criteria, host soak |
+| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | approved criteria, host soak |
+| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | approved criteria, host soak |
+| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | approved criteria, host soak |
+| `biosguard` | experimental | detect | nothing (log + notify) | approved criteria, host soak |
+| `locus` | experimental | serve | nothing destructive (hands out directory names) | approved criteria, host soak |
+| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | approved criteria, host soak |
+| `failure` | experimental | report | nothing (reports another unit's failure) | approved criteria, host soak |
+| `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | baseline trust source, approved criteria, host soak |
 
 PheonixBox is a core feature (installed by `install.sh`, run by `secure-sudod`,
 [PHEONIXBOX.md](PHEONIXBOX.md)), but TODO P2-2 holds it to the same gate, so it
@@ -385,8 +390,9 @@ restore is applied by a separate unit at the next boot, and the installer
 enables neither the timer nor the restore unit.
 
 Done for every add-on: strict config checking, a sandboxed and
-resource-limited unit, failure reporting, a threat model (below) and upgrade
-and rollback steps (below). Done where it applies: an independent trust source
+resource-limited unit, failure reporting, a threat model (below), upgrade
+and rollback steps (below) and adversarial tests
+([Adversarial tests](#adversarial-tests)). Done where it applies: an independent trust source
 for the baselines and evidence kept before every repair, restore, removal or
 quarantine ([Baseline trust and evidence](#baseline-trust-and-evidence)). The promotion criteria themselves (what "beta" and
 "stable" require, and the soak period) are not decided yet: they need the
@@ -465,7 +471,29 @@ Two protections apply in both modes:
   newest backup does not match, older hourly ones (and the fixed bucket) are
   tried; if none does, nothing is written. The file goes through a temporary
   name in the same directory, created exclusively (a planted symlink there is
-  not followed), with the original owner and mode, then renamed into place.
+  not followed), then renamed into place. The owner and mode of what was
+  there are kept only while they cannot hand the restored file to someone
+  else: a file not owned by root comes back root-owned, and setuid, setgid
+  and group/world write bits are dropped.
+* **A baseline matches its own backups.** The hash recorded for each file is
+  the hash of exactly the bytes that were backed up (one read, not two), so a
+  file rewritten while the baseline runs cannot leave a baseline its backup
+  does not match. A file that changes size while it is read is not backed up.
+* **A baseline that cannot be backed up is refused.** If any file cannot be
+  backed up in full (a full disk shows up at write, flush, fsync or close),
+  the new baseline is not installed, the previous one stays, and the refusal
+  is logged CRITICAL. No partial backup is left behind.
+* **No repair without evidence.** If the evidence copy cannot be kept (a full
+  disk), the file is not repaired, restored or removed; the log says why.
+* **Baseline entries are checked.** A manifest line naming a file outside
+  `driver_dir` / `boot_dir` (or with a `..`, `.` or empty component, or a
+  control character) is never acted on: it is logged CRITICAL and the scan
+  exits 3. BootGuard's staged restore list is checked the same way, and the
+  hash staged with each file must be the baseline's.
+* **Symlinks are not followed.** A module or boot file replaced by a symlink
+  is tampering even when it points at identical bytes; it is not hashed,
+  backed up or written through, and the evidence records the link and its
+  target.
 * **Evidence is kept.** Before DriverGuard repairs, BootGuard restores,
   ProcGuard removes, or tamperwatch or the console quarantines, the current
   file's bytes are kept compressed under
@@ -474,10 +502,57 @@ Two protections apply in both modes:
   baseline's SHA-256, size, mode, owner, mtime, ctime, inode and the copy.
   It is also logged CRITICAL (and shipped off-box).
 
-Not yet covered: PheonixBox's own snapshots (it is core; tracked in
-`maturity.json`), and a root attacker who replaces the public key; for that,
+Not yet covered: a signature over PheonixBox's own snapshots (it is core;
+tracked in `maturity.json`; its repairs are now verified against its
+manifest and keep evidence, see its threat model), and a root attacker who replaces the public key; for that,
 compare the key fingerprint in the off-box log, or use remote attestation
 ([ATTESTATION.md](ATTESTATION.md)).
+
+## Enforce arming
+
+Turning ProcGuard or DriverGuard to `mode = enforce`, or tamperwatch to
+`mode = quarantine`, does not make it act at once (TODO P2-2, monitor to
+enforce). Until it is **armed** it only reports what it would do, logged as
+`NOT ARMED: would kill ...` / `DRIVER would repair ... (not armed)`:
+
+* a scanner (ProcGuard, DriverGuard) arms itself after one full enforce pass
+  that finds nothing to act on: the allowlist is complete, the module tree
+  matches its baseline;
+* otherwise it logs, CRITICAL, `ENFORCE NOT ARMED: ... would have killed N`
+  (ProcGuard at most every 10 minutes) and the operator, after reading the
+  report, runs `secure-sudo-procguard arm` / `secure-sudo-driverguard arm`;
+* tamperwatch only reacts to events, so it is armed only by
+  `secure-sudo-tamperwatch arm`;
+* going back to monitor (log) mode disarms it, so the next switch to enforce
+  is reviewed again.
+
+The state is `/var/lib/secure_sudo/addons/<add-on>/enforce-armed` (root-only;
+it records when and how it was armed) and `status` shows it. BootGuard is not
+armed this way: its enforce mode only stages a restore, applied at the next
+boot by a unit the installer does not enable, and every staged file is
+checked against the trusted baseline when it is applied.
+
+## Adversarial tests
+
+`tests/userspace/test-addons.sh` (135 checks) and
+`tests/userspace/test-pheonixbox.sh` (41) attack each add-on the way the
+threat models below expect, run on every gate:
+
+| Attack | Add-ons | Result |
+|--------|---------|--------|
+| a file name with a newline forging a log line | DriverGuard, BiosGuard, failure reporter | logged escaped (`\x0a`); every log line starts with its own timestamp; not baselined |
+| a file name with a quote, run through a shell | BiosGuard, PheonixBox | no command runs (BiosGuard **did** run one: it hashed with `sha256sum` through a shell; fixed) |
+| a symlink planted at a guarded path, even to identical bytes | DriverGuard, BootGuard, PheonixBox | treated as tampering, replaced by the real file, never written through (PheonixBox **did** write through it, and `off` changed the target's mode; fixed) |
+| an edited baseline naming a file outside the guarded tree | DriverGuard, BootGuard (restore list), PheonixBox | ignored, logged CRITICAL, scan exits 3 |
+| a swapped backup or snapshot | DriverGuard, BootGuard, PheonixBox | refused; an older matching backup is used when there is one |
+| the path of a running program replaced after it started | ProcGuard, tamperwatch | the binary that actually ran is quarantined (via `/proc/PID/exe`); the new file at the path is not deleted |
+| no room for backups or evidence (a small tmpfs) | DriverGuard, BootGuard, PheonixBox | baseline refused and the old one kept; no repair without evidence |
+| a setuid, group-writable tampered file | DriverGuard | restored root-owned, mode 0755 |
+| monitor to enforce | ProcGuard, DriverGuard, tamperwatch | reports until armed; arms itself only after a clean pass (not tamperwatch) |
+| an ACPI table added after the baseline | BiosGuard | reported (only changed and vanished sources were before) |
+| oversized, path-like or unknown requests; a client that sends nothing | Locus | refused; a silent client is dropped after 2 s instead of stalling the allocator |
+| no or wrong token, another Host, negative or huge Content-Length, a non-numeric count, a non-object body, a config or log name outside its list, quarantining PID 1 | console | 401 / 403 / 413 / 400 or refused; the kill uses a pidfd so a reused PID is never hit |
+| a bad config | PheonixBox | `check-config` lists it; `on` and `snapshot` refuse (78) |
 
 ## Service hardening and failure reporting
 
@@ -538,8 +613,12 @@ mode is opt-in and each config is checked strictly.
   secure_sudo programs are never killed; nothing is removed from a system
   directory (now enforced by the unit's read-only system dirs too).
 * **Evidence:** before an executable is removed, its hash, owner, mode, times
-  and the quarantined copy are recorded (`evidence/procguard.jsonl`).
-* **Open:** the adversarial tests (P2-2 part 3).
+  and the quarantined copy are recorded (`evidence/procguard.jsonl`); if the
+  record cannot be written, it is not removed.
+* **Races:** the binary is opened through `/proc/PID/exe` before the kill, so
+  the quarantined copy is the program that ran; the path is removed only
+  while it is still that file (same device and inode, not a symlink).
+  Turned to enforce, it reports until armed ([Enforce arming](#enforce-arming)).
 
 #### tamperwatch
 
@@ -550,8 +629,13 @@ mode is opt-in and each config is checked strictly.
   attacker who stops it first (the stop is reported by failure reporting only
   if the unit fails, not if it is stopped cleanly).
 * **Harm if wrong:** killing a legitimate writer. Mitigations: log mode by
-  default; never kills PID 1, itself, a secure_sudo program, or anything while a
-  package manager is running.
+  default; quarantine mode reports until the operator arms it; never kills
+  PID 1, itself, a secure_sudo program, or anything while a package manager is
+  running.
+* **Attribution limit:** fanotify reports the writer's PID after the write.
+  A writer that then `exec`s another program is quarantined as that program
+  (the PID is still killed). The quarantined binary is read through
+  `/proc/PID/exe`, so a replaced path does not change what is kept.
 
 #### driverguard
 
@@ -565,8 +649,9 @@ mode is opt-in and each config is checked strictly.
   A backup is only written back if its bytes match the baseline, so a
   swapped backup is refused.
 * **Harm if wrong:** putting back an old module over a legitimate update.
-  Mitigations: monitor by default; scans defer while a package manager holds
-  its lock, and the package hooks re-baseline after an update.
+  Mitigations: monitor by default; enforce reports until armed; scans defer
+  while a package manager holds its lock, and the package hooks re-baseline
+  after an update.
 
 #### bootguard
 
@@ -590,7 +675,9 @@ mode is opt-in and each config is checked strictly.
   while `baseline_trust = local` (with `signed`, an unsigned or edited
   fingerprint fails the scan with a CRITICAL notification).
 * **Harm if wrong:** a false alarm after a legitimate firmware update; nothing
-  is changed.
+  is changed. A table that appeared after the baseline is reported as well
+  as one that changed or vanished; a table name with whitespace or control
+  characters is reported, not fingerprinted.
 
 #### locus
 
@@ -600,26 +687,39 @@ mode is opt-in and each config is checked strictly.
   location, which the guards check (absolute, no `..`, no control characters).
 * **Harm if wrong:** a guard writing to a different directory than expected.
   It listens on 127.0.0.1 by default; the allocator protocol has no
-  authentication, so do not widen `alloc_bind` beyond a trusted LAN.
+  authentication, so do not widen `alloc_bind` beyond a trusted LAN. It serves
+  one client at a time, and drops one that sends nothing within 2 seconds.
 
 #### gui
 
 * **Defends:** nothing itself; it is the operator's console.
 * **Risk:** it can change every config and kill any process, so it is the
   highest-value target here. Mitigations: loopback by default, a per-install
-  token on every request, a Host header check, config changes rolled back when
-  `check-config` rejects them, and failure reporting on its unit.
+  token on every request, a Host header check, request bodies capped at
+  512 KiB, config and log names limited to their lists, config changes rolled
+  back when `check-config` rejects them, PID 1 and itself never killed, the
+  kill sent through a pidfd (never to a reused PID), and failure reporting on
+  its unit.
 
 #### pheonixbox
 
 * **Defends:** a protected file changed while protection is on: it is put back
   from the stored copy on the next scan, and the file is kept read-only.
 * **Does not defend:** a change made while protection is off, or by root
-  rewriting the stored copies and manifest (baseline trust, P2-2 part 2).
+  rewriting the stored copies and manifest together (no signed snapshot yet;
+  `baseline-trust` is open in `maturity.json`).
 * **Harm if wrong:** undoing a legitimate change to a protected file.
   Mitigations: off by default; `disable` restores the original permissions;
   tamperwatch never kills a PheonixBox repair (SECURITY_REVIEW #65).
-* **Open:** its path list is not yet checked strictly (`check-config`).
+* **Repairs:** a stored copy is used only if it hashes to the manifest's
+  value; it is written to a new file and renamed over the target, so a
+  symlink planted at a protected path is replaced, never written through;
+  the captured owner comes back with it. Before each repair the current bytes
+  are kept under `/var/lib/secure_sudo/pheonixbox/evidence/` and logged
+  CRITICAL with their hash; if that copy cannot be kept, the file is not
+  repaired. `off` never changes permissions through a symlink.
+* **Config:** `secure-sudo pheonixbox check-config` checks the path list
+  strictly; `on` and `snapshot` refuse while it has an error.
 
 #### failure
 

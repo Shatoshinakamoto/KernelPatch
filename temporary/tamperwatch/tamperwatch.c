@@ -58,6 +58,10 @@
 #ifndef TW_QROOT
 #define TW_QROOT	"/var/lib/secure_sudo/addons/tamperwatch/quarantine"
 #endif
+#ifndef TW_STATEDIR
+#define TW_STATEDIR	"/var/lib/secure_sudo/addons/tamperwatch"
+#endif
+#define STATEDIR	TW_STATEDIR
 #define PBOX_CONF	TW_PBOX_CONF
 #define CONF		TW_CONF
 #define DEF_QROOT	TW_QROOT
@@ -207,9 +211,16 @@ static void quarantine_offender(const struct cfg *c, pid_t pid, const char *exe)
 {
 	char root[PATH_MAX], bucket[PATH_MAX], sample[PATH_MAX], lock[PATH_MAX];
 	const char *no = never_kill(pid, exe, lock, sizeof(lock));
+	int efd;
 
 	if (no) {
 		ssl_warn("not killed: pid %d (%s): %s", pid, exe, no);
+		return;
+	}
+	if (!sst_armed(STATEDIR)) {
+		/* quarantine mode reports until the operator arms it */
+		ssl_warn("NOT ARMED: would kill pid %d (%s) and quarantine it; run "
+			 "`secure-sudo-tamperwatch arm` to let it act", pid, exe);
 		return;
 	}
 
@@ -221,13 +232,26 @@ static void quarantine_offender(const struct cfg *c, pid_t pid, const char *exe)
 		ssl_err("cannot create quarantine bucket under %s", root);
 		return;
 	}
-	if (store_put_compressed(exe, bucket, "tamper", sample, sizeof(sample)) == 0) {
+	/* The binary that is running, via /proc/PID/exe: the right file even
+	 * if its path was replaced (or it was deleted) after it started. */
+	{
+		char lk[64];
+
+		snprintf(lk, sizeof(lk), "/proc/%d/exe", pid);
+		efd = open(lk, O_RDONLY | O_CLOEXEC);
+	}
+	if (efd >= 0 &&
+	    store_put_fd(efd, exe, bucket, "tamper", sample, sizeof(sample), NULL) == 0) {
 		ssl_crit("quarantined tamperer exe %s -> %s", exe, sample);
 		sst_evidence("tamperwatch", exe, "quarantine", NULL, sample);
 	} else {
-		ssl_err("failed to quarantine exe %s", exe);
+		/* the kill still goes ahead: it stops the tampering, and the
+		 * record below says the copy is missing */
+		ssl_err("failed to quarantine exe %s (disk full?)", exe);
 		sst_evidence("tamperwatch", exe, "quarantine", NULL, NULL);
 	}
+	if (efd >= 0)
+		close(efd);
 	if (kill(pid, SIGKILL) == 0)
 		ssl_crit("killed tamperer pid %d (%s)", pid, exe);
 }
@@ -269,8 +293,11 @@ static int run_daemon(void)
 		fprintf(stderr, "tamperwatch: nothing to watch; configure "
 			PBOX_CONF " or " CONF "\n");
 	}
-	ssl_info("tamperwatch started: %zu files watched, mode=%s", g_marked,
-		 c.quarantine ? "quarantine" : "log");
+	if (!c.quarantine)
+		sst_disarm("tamperwatch", STATEDIR);
+	ssl_info("tamperwatch started: %zu files watched, mode=%s%s", g_marked,
+		 c.quarantine ? "quarantine" : "log",
+		 c.quarantine && !sst_armed(STATEDIR) ? " (NOT ARMED: reporting only)" : "");
 
 	signal(SIGINT, on_sig);
 	signal(SIGTERM, on_sig);
@@ -318,17 +345,38 @@ static int cmd_status(void)
 	printf("tamperwatch\n");
 	printf("mode:            %s\n", c.quarantine ? "quarantine (kill + compress exe)" :
 	       "log (attribute only)");
+	{
+		char a[160];
+
+		sst_describe_arming(STATEDIR, c.quarantine, a, sizeof(a));
+		if (c.quarantine && !sst_armed(STATEDIR))
+			snprintf(a, sizeof(a), "NOT ARMED: reporting only until `arm`");
+		printf("arming:          %s\n", a);
+	}
 	printf("watched set:     " PBOX_CONF " + " CONF "\n");
 	printf("quarantine root: %s%s\n", c.quarantine_root,
 	       c.rotate ? " (hourly)" : " (fixed)");
 	return 0;
 }
 
+static int cmd_arm(void)
+{
+	struct cfg c;
+
+	load_cfg(&c, NULL);
+	if (!c.quarantine) {
+		fprintf(stderr, "tamperwatch: mode is log; set mode = quarantine first\n");
+		return 1;
+	}
+	return sst_arm("tamperwatch", STATEDIR, "armed by the operator") ? 1 : 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
-"usage: secure-sudo-tamperwatch <daemon|status|check-config>\n"
+"usage: secure-sudo-tamperwatch <daemon|arm|status|check-config>\n"
 "  daemon   watch the protected set and attribute (and optionally quarantine) tampering\n"
+"  arm      let quarantine mode act (until then it reports only)\n"
 "  status   show configuration\n"
 "  check-config  check every config file strictly; 1 if any problem\n"
 "\nNeeds root + CONFIG_FANOTIFY. Config: " CONF "\n");
@@ -359,6 +407,8 @@ int main(int argc, char **argv)
 		return run_daemon();
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
+	if (!strcmp(argv[1], "arm"))
+		return cmd_arm();
 
 	usage();
 	ssl_close();

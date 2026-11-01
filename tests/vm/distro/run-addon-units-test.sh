@@ -53,6 +53,6 @@ while IFS= read -r line; do
 	"# "*) echo "$line" ;;
 	esac
 done < "$RES/03-units.log"
-check "the guest ran every unit check" test "$n" -ge 16
+check "the guest ran every unit check" test "$n" -ge 17
 G 'journalctl --no-pager -u "secure-sudo-*"' > "$RES/04-journal.log" 2>&1
 tap_done

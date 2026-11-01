@@ -46,10 +46,10 @@
         "failure-reporting",
         "threat-model",
         "upgrade-rollback",
-        "evidence-preserved"
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -79,10 +79,10 @@
         "failure-reporting",
         "threat-model",
         "upgrade-rollback",
-        "evidence-preserved"
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -113,10 +113,10 @@
         "threat-model",
         "upgrade-rollback",
         "baseline-trust",
-        "evidence-preserved"
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ]
@@ -147,10 +147,10 @@
         "threat-model",
         "upgrade-rollback",
         "baseline-trust",
-        "evidence-preserved"
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ]
@@ -176,10 +176,10 @@
         "failure-reporting",
         "threat-model",
         "upgrade-rollback",
-        "baseline-trust"
+        "baseline-trust",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -208,10 +208,10 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -243,10 +243,10 @@
         "failure-reporting",
         "threat-model",
         "upgrade-rollback",
-        "evidence-preserved"
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -273,10 +273,10 @@
         "hardened-unit",
         "resource-limits",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "adversarial-tests"
       ],
       "open": [
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -299,13 +299,13 @@
       "units": {},
       "units_note": "no unit of its own: secure-sudod runs `scan --quiet` on a timer, so it runs under the core daemon's unit",
       "done": [
-        "threat-model"
+        "check-config",
+        "threat-model",
+        "evidence-preserved",
+        "adversarial-tests"
       ],
       "open": [
-        "check-config",
         "baseline-trust",
-        "evidence-preserved",
-        "adversarial-tests",
         "promotion-approved",
         "host-soak"
       ],
@@ -315,7 +315,8 @@
         "failure-reporting",
         "upgrade-rollback"
       ],
-      "na_why": "it is part of the core release: it runs inside secure-sudod's unit and is upgraded and rolled back with install.sh"
+      "na_why": "it is part of the core release: it runs inside secure-sudod's unit and is upgraded and rolled back with install.sh",
+      "open_note": "baseline-trust: the snapshot is trusted as the host's own copy (no signed snapshot yet)"
     }
   }
 }

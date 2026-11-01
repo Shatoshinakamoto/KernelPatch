@@ -1272,6 +1272,65 @@ sample path; it now refuses both. Tested by `tests/userspace/test-addons.sh`
 
 ---
 
+### 71. A planted symlink turned PheonixBox repairs into writes anywhere, BiosGuard ran a shell per firmware table, and guards could be tricked into acting on the wrong file (v8–v12, found 2026-11-01 by P2-2 part 3) — SI-7 / SI-10 / AU-9
+
+The P2-2 adversarial tests attacked each add-on the way its threat model
+expects and found:
+
+1. **PheonixBox wrote through symlinks (core feature).** A repair did
+   `chmod(path, 0600)` and `open(path, O_WRONLY|O_TRUNC)` on the protected
+   path. Anyone who could replace a protected file with a symlink (the owner
+   of a protected directory) made the next scan write that file's stored
+   bytes into the link's target as root, for example over `/etc/shadow`, and
+   `off` applied the captured mode to the target. A stored blob was also
+   written back without checking it against the manifest. Repairs now use a
+   blob only if it hashes to the manifest's value, write a new file and
+   rename it over the path (a symlink is replaced, never followed), restore
+   the captured owner, and keep the current bytes as evidence first;
+   `lock`/`off` change permissions only through an `O_NOFOLLOW` handle.
+2. **BiosGuard hashed each firmware file with `popen("sha256sum '<path>'")`.**
+   A table name with a quote was a root command (shown by the test: the old
+   binary ran `touch pwnb`). The names come from the kernel, so this needed a
+   kernel-side name, but it is now hashed in-process. BiosGuard also never
+   noticed an ACPI table that *appeared* after the baseline (a common way to
+   inject firmware-level code); it now reports one.
+3. **Names forged log lines.** A newline in a module, table or unit name was
+   logged as is, so it could write a complete fake entry (or an RFC 5424
+   frame) into the local and off-box logs. `ssl_log` now escapes control
+   bytes and backslash as `\xNN`; the remote frame length is clamped to its
+   buffer.
+4. **Guards acted on the wrong file.** DriverGuard and BootGuard followed a
+   symlink when hashing (one to identical bytes passed as intact) and acted on
+   any manifest line, including paths outside their tree; BootGuard's staged
+   restore list could name any path. ProcGuard removed whatever was at the
+   path after the kill, and tamperwatch and the console copied the path, not
+   the program that ran. Now entries outside `driver_dir`/`boot_dir` are
+   ignored, symlinks are tampering, the restore list must match the trusted
+   baseline, and the running binary is read via `/proc/PID/exe` (ProcGuard
+   removes the path only if it is still that inode; the console kills
+   through a pidfd and never PID 1).
+5. **Partial backups and baselines.** A baseline hashed a file and backed it
+   up in two separate reads (a concurrent rewrite left a baseline its own
+   backup could not satisfy), and a full disk left half-written blobs while
+   the baseline was installed anyway. The hash is now of exactly the bytes
+   stored; a baseline that cannot be backed up in full is refused and the old
+   one kept; no repair runs without its evidence copy. A restored file no
+   longer inherits a non-root owner, setuid/setgid or group/world write.
+6. **Monitor to enforce.** Switching to enforce acted on the first pass.
+   ProcGuard, DriverGuard and tamperwatch now report until armed (after a
+   clean pass, or by `arm`), and are disarmed by going back to monitor.
+7. **Request handling.** Locus cut an oversized purpose down to a valid
+   prefix and could be stalled by one silent client (single-threaded, no
+   timeout); the console read a negative `Content-Length` to EOF, crashed on
+   a non-numeric `n`, and read any `<name>.log` under its log directory.
+
+PheonixBox also gained `check-config` (strict path list; `on`/`snapshot`
+refuse while it has an error). Tested by `tests/userspace/test-addons.sh`
+(135 checks, 39 new) and `tests/userspace/test-pheonixbox.sh` (41, 13 new);
+docs/ADDONS.md "Adversarial tests" lists every attack.
+
+---
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

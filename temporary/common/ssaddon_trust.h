@@ -80,8 +80,28 @@ int sst_restore_from_backups(const char *root, const char *label, const char *ds
  * "quarantine") changes it. @expect_sha (may be NULL) is what the baseline
  * says it should be. @sample (may be NULL) is a copy the caller already
  * stored; otherwise the bytes are stored under SSADDON_EVIDENCE_ROOT. A
- * missing file is recorded as missing. 0 if the record was written. */
+ * missing file is recorded as missing; a symlink is recorded as a link, with
+ * its target, and never followed. 0 if the record and the copy were kept;
+ * -1 if either could not be (e.g. the disk is full): then do not act. */
 int sst_evidence(const char *feature, const char *path, const char *action,
 		 const char *expect_sha, const char *sample);
+
+/* Is @path strictly inside @root ("<root>/..."), with no "..", ".", empty
+ * components or control characters? A baseline entry outside the tree the
+ * guard owns is never repaired from or restored over (P2-2 part 3). */
+int sst_path_within(const char *root, const char *path);
+
+/*
+ * Enforce arming (TODO P2-2 part 3, monitor -> enforce). Turning a guard to
+ * `mode = enforce` does not make it act at once: until it is armed it only
+ * reports what it would do. A scanner arms itself after one full pass that
+ * finds nothing to act on; otherwise the operator runs `<tool> arm` after
+ * reading the report. Going back to monitor mode disarms it. The state is
+ * "<statedir>/enforce-armed" (root-owned, 0600).
+ */
+int sst_armed(const char *statedir);
+int sst_arm(const char *feature, const char *statedir, const char *how);
+void sst_disarm(const char *feature, const char *statedir);
+void sst_describe_arming(const char *statedir, int enforce, char *out, size_t n);
 
 #endif /* SSADDON_TRUST_H */

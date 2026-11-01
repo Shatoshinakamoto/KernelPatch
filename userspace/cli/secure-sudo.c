@@ -1748,7 +1748,7 @@ static void usage(void)
 "  node-scan [--dry-run] [DIR...]  find SEA/pkg/renamed Node runtimes and\n"
 "                       register them for the Node child guard (#11)\n"
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable/key-store/seal/unseal\n"
-"  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list snapshot tamper protection\n"
+"  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list/check-config snapshot tamper protection\n"
 "\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
 "Kernel policy commands are root-only and refused once the config is locked;\n"
 "lint and evidence-verify are read-only and do not require root.\n");

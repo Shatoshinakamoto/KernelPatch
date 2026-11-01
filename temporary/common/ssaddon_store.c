@@ -104,34 +104,42 @@ static int sha256_first8(const char *s, char out[9])
 	return 0;
 }
 
-int store_put_compressed(const char *srcpath, const char *bucketdir,
-			 const char *label, char *outpath, size_t n)
+int store_put_fd(int fd, const char *name, const char *bucketdir,
+		 const char *label, char *outpath, size_t n, char sha_out[65])
 {
 	struct stat st;
-	unsigned char *buf = NULL, *cbuf = NULL;
+	unsigned char *buf = NULL, *cbuf = NULL, d[EVP_MAX_MD_SIZE];
+	unsigned int dn = 0;
 	uLongf clen;
 	uint64_t hdr;
 	char sha8[9];
-	FILE *in, *out;
-	size_t got;
-	int rc = -1;
+	FILE *out;
+	size_t got = 0;
+	ssize_t r;
+	int ofd, rc = -1, i;
 
-	if (stat(srcpath, &st) != 0 || !S_ISREG(st.st_mode))
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
 		return -1;
 	if ((unsigned long)st.st_size > STORE_MAX_FILE)
 		return -1;
-	buf = malloc(st.st_size ? (size_t)st.st_size : 1);
+	/* one byte more than fstat said, so a file that grows is noticed */
+	buf = malloc((size_t)st.st_size + 1);
 	if (!buf)
 		return -1;
-	in = fopen(srcpath, "rbe");
-	if (!in) {
-		free(buf);
-		return -1;
-	}
-	got = fread(buf, 1, (size_t)st.st_size, in);
-	fclose(in);
+	while (got <= (size_t)st.st_size &&
+	       (r = pread(fd, buf + got, (size_t)st.st_size + 1 - got, (off_t)got)) > 0)
+		got += (size_t)r;
 	if (got != (size_t)st.st_size)
-		goto out;
+		goto out;		/* it changed size while being read */
+	/* The SHA-256 is of exactly these bytes, the ones being stored, so a
+	 * baseline taken from it always matches its own backup (P2-2 part 3). */
+	if (sha_out) {
+		if (!EVP_Digest(buf, got, d, &dn, EVP_sha256(), NULL) || dn != 32)
+			goto out;
+		for (i = 0; i < 32; i++)
+			sprintf(sha_out + 2 * i, "%02x", d[i]);
+		sha_out[64] = '\0';
+	}
 
 	clen = compressBound(got);
 	cbuf = malloc(clen ? clen : 1);
@@ -140,24 +148,56 @@ int store_put_compressed(const char *srcpath, const char *bucketdir,
 	if (compress2(cbuf, &clen, buf, got, Z_BEST_COMPRESSION) != Z_OK)
 		goto out;
 
-	if (sha256_first8(srcpath, sha8) != 0)
+	if (sha256_first8(name, sha8) != 0)
 		snprintf(sha8, sizeof(sha8), "00000000");
 	if (snprintf(outpath, n, "%s/%s.%s.z", bucketdir, label, sha8) >= (int)n)
 		goto out;
 
-	out = fopen(outpath, "wbe");
-	if (!out)
+	ofd = open(outpath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+	if (ofd < 0)
 		goto out;
+	out = fdopen(ofd, "wb");
+	if (!out) {
+		close(ofd);
+		goto fail;
+	}
 	hdr = got;			/* 8-byte LE original length header */
-	if (fwrite(&hdr, 1, 8, out) == 8 && fwrite(cbuf, 1, clen, out) == clen)
+	/* A full disk shows up at fwrite, fflush, fsync or fclose: any of
+	 * them failing means there is no copy, and the half-written one goes. */
+	if (fwrite(&hdr, 1, 8, out) == 8 && fwrite(cbuf, 1, clen, out) == clen &&
+	    fflush(out) == 0 && fsync(ofd) == 0)
 		rc = 0;
-	fclose(out);
+	if (fclose(out) != 0)
+		rc = -1;
 	if (rc == 0)
-		chmod(outpath, 0600);
+		goto out;
+fail:
+	unlink(outpath);
 out:
 	free(cbuf);
 	free(buf);
 	return rc;
+}
+
+int store_put_compressed_sha(const char *srcpath, const char *bucketdir,
+			     const char *label, char *outpath, size_t n, char sha_out[65])
+{
+	/* O_NOFOLLOW: a symlink planted at @srcpath is never stored as if it
+	 * were the file (it could point anywhere, e.g. at /etc/shadow) */
+	int fd = open(srcpath, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	int rc;
+
+	if (fd < 0)
+		return -1;
+	rc = store_put_fd(fd, srcpath, bucketdir, label, outpath, n, sha_out);
+	close(fd);
+	return rc;
+}
+
+int store_put_compressed(const char *srcpath, const char *bucketdir,
+			 const char *label, char *outpath, size_t n)
+{
+	return store_put_compressed_sha(srcpath, bucketdir, label, outpath, n, NULL);
 }
 
 int store_load_compressed(const char *blobpath, unsigned char **out, size_t *len)

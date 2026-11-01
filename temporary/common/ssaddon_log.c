@@ -188,6 +188,8 @@ static void ship_remote(int pri, const char *ts, const char *msg)
 		     pri, ts, host, S.feature, (long)getpid(), msg);
 	if (n <= 0)
 		return;
+	if ((size_t)n >= sizeof(buf))	/* snprintf says what it wanted */
+		n = (int)sizeof(buf) - 1;
 	/* best-effort; never block the guard on log shipping, so a failed
 	 * send() is deliberately ignored. */
 	if (S.remote_tcp) {
@@ -196,6 +198,8 @@ static void ship_remote(int pri, const char *ts, const char *msg)
 		int m = snprintf(framed, sizeof(framed), "%d %s", n, buf);
 		ssize_t w;
 
+		if (m > 0 && (size_t)m >= sizeof(framed))
+			m = 0;		/* never send past framed[] */
 		if (m > 0) {
 			w = send(S.sock, framed, (size_t)m, MSG_NOSIGNAL);
 			(void)w;
@@ -206,9 +210,32 @@ static void ship_remote(int pri, const char *ts, const char *msg)
 	}
 }
 
+/* Make @s safe to write as one log line (P2-2 part 3, log injection): a file
+ * name or process title is attacker-chosen, and a newline in one could forge
+ * a whole log entry ("... CRIT BASELINE ...") or an RFC 5424 frame. Control
+ * bytes and backslash are written as \xNN, so the escaping is unambiguous;
+ * the rest (UTF-8 included) is kept. Cut short rather than overflow. */
+static void sanitize(const char *s, char *out, size_t n)
+{
+	static const char hex[] = "0123456789abcdef";
+	size_t o = 0;
+
+	for (; *s && o + 5 < n; s++) {
+		unsigned char c = (unsigned char)*s;
+
+		if (c < 0x20 || c == 0x7f || c == '\\') {
+			out[o++] = '\\'; out[o++] = 'x';
+			out[o++] = hex[c >> 4]; out[o++] = hex[c & 15];
+		} else {
+			out[o++] = (char)c;
+		}
+	}
+	out[o] = '\0';
+}
+
 void ssl_log(enum ssl_level level, const char *fmt, ...)
 {
-	char msg[1024], ts[40];
+	char raw[1024], msg[1024], ts[40];
 	struct tm tm;
 	time_t now;
 	va_list ap;
@@ -218,8 +245,9 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
 		ssl_init("addon");
 
 	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
+	vsnprintf(raw, sizeof(raw), fmt, ap);
 	va_end(ap);
+	sanitize(raw, msg, sizeof(msg));
 
 	now = time(NULL);
 	localtime_r(&now, &tm);
@@ -240,7 +268,7 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
 
 void ssl_notify(enum ssl_level level, const char *fmt, ...)
 {
-	char msg[1024], cmd[1600];
+	char raw[1024], msg[1024], cmd[1600];
 	va_list ap;
 	const char *p;
 	size_t o = 0;
@@ -250,11 +278,13 @@ void ssl_notify(enum ssl_level level, const char *fmt, ...)
 		ssl_init("addon");
 
 	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
+	vsnprintf(raw, sizeof(raw), fmt, ap);
 	va_end(ap);
+	/* the notify command gets the same one-line text as the log */
+	sanitize(raw, msg, sizeof(msg));
 
 	/* Always log it too, so a notification is never only transient. */
-	ssl_log(level, "NOTIFY: %s", msg);
+	ssl_log(level, "NOTIFY: %s", raw);
 
 	if (!S.notify_cmd[0])
 		return;

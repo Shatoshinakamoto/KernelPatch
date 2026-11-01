@@ -39,6 +39,7 @@
 #include <signal.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <netdb.h>
 
@@ -173,7 +174,8 @@ static const char *root_for(const char *purpose)
 	return C.default_root[0] ? C.default_root : NULL;
 }
 
-/* A purpose must be a short token: letters, digits, '-'. Anything else is
+/* A purpose must be a short token: letters, digits, '-', '_' (as in the
+ * config's `root <purpose>` lines). Anything else is
  * rejected, so the protocol cannot be coaxed into naming an arbitrary path. */
 static int valid_purpose(const char *p)
 {
@@ -182,7 +184,7 @@ static int valid_purpose(const char *p)
 	if (n == 0 || n >= 64)
 		return 0;
 	for (i = 0; i < n; i++)
-		if (!isalnum((unsigned char)p[i]) && p[i] != '-')
+		if (!isalnum((unsigned char)p[i]) && p[i] != '-' && p[i] != '_')
 			return 0;
 	return 1;
 }
@@ -234,7 +236,13 @@ static void handle_alloc(int cfd)
 		send(cfd, "ERR bad request\n", 16, MSG_NOSIGNAL);
 		return;
 	}
-	snprintf(purpose, sizeof(purpose), "%.63s", buf + 6);
+	/* too long is refused, never cut down to a (possibly valid) prefix */
+	if (strlen(buf + 6) >= sizeof(purpose)) {
+		send(cfd, "ERR bad purpose\n", 16, MSG_NOSIGNAL);
+		ssl_warn("alloc rejected: purpose longer than %zu bytes", sizeof(purpose) - 1);
+		return;
+	}
+	snprintf(purpose, sizeof(purpose), "%s", buf + 6);
 	trim(purpose);
 	if (!valid_purpose(purpose)) {
 		send(cfd, "ERR bad purpose\n", 16, MSG_NOSIGNAL);
@@ -353,9 +361,15 @@ static int run_serve(void)
 		for (int i = 0; i < n; i++) {
 			if (!(pfd[i].revents & POLLIN))
 				continue;
-			int cfd = accept(pfd[i].fd, NULL, NULL);
+			int cfd = accept4(pfd[i].fd, NULL, NULL, SOCK_CLOEXEC);
+			/* one client at a time: one that connects and then says
+			 * nothing (or reads nothing) gets 2 seconds, not forever */
+			struct timeval tv = { 2, 0 };
+
 			if (cfd < 0)
 				continue;
+			setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+			setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 			if (pfd[i].fd == afd)
 				handle_alloc(cfd);
 			else

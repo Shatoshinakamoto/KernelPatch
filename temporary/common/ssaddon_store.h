@@ -42,6 +42,20 @@ int store_bucket(const char *root, int rotate, char *out, size_t n);
 int store_put_compressed(const char *srcpath, const char *bucketdir,
 			 const char *label, char *outpath, size_t n);
 
+/* The same, also giving the SHA-256 (64 hex) of exactly the bytes stored, so
+ * a caller can record a hash that its own copy is guaranteed to match.
+ * @srcpath is opened O_NOFOLLOW: a symlink is refused, not followed. A file
+ * that changes size while being read, or a copy that cannot be written in
+ * full (disk full), fails (-1) and leaves no partial copy behind. */
+int store_put_compressed_sha(const char *srcpath, const char *bucketdir,
+			     const char *label, char *outpath, size_t n, char sha_out[65]);
+
+/* The same from an open file: @fd is read (pread, from offset 0), @name names
+ * the blob (its sha8). Used for a running program's binary via /proc/PID/exe,
+ * which stays the right file even if its path has been replaced. */
+int store_put_fd(int fd, const char *name, const char *bucketdir,
+		 const char *label, char *outpath, size_t n, char sha_out[65]);
+
 /* Decompress a stored blob (written by store_put_compressed, i.e. with the
  * 8-byte LE length header) at @blobpath and write the original bytes to
  * @dstpath (created/truncated, 0600, fsync'd). Returns 0 on success. */
