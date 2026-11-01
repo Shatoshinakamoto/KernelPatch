@@ -218,6 +218,25 @@ through the normal `load` (lint included). The `live/` part of a snapshot is
 the record of what the kernel ran, used for review and `diff`, not written
 back.
 
+## `secure-sudo contain ...`
+
+Incident containment (TODO P1-7); the runbook is
+[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) section 4.
+
+| Command | What it does |
+|---|---|
+| `contain network [--allow ADDR]... [--no-collector]` | drop all traffic except loopback, the `--allow` addresses, your SSH client and the `remote_syslog` collector (nft table `inet secure_sudo_contain`) |
+| `contain account USER [--terminate]` | lock and expire the account, freeze (or with `--terminate` kill) its processes; refuses UID 0 and your own account |
+| `contain process PID [--kill]` | freeze the process and its descendants and save its evidence (executable copy and hash, cmdline, environment, maps, open files, sockets); `--kill` kills after that |
+| `contain release network \| account USER \| process PID` | undo the step; the evidence stays |
+| `contain status` | what is contained now |
+
+Every action takes `--dry-run` (shows the plan, changes nothing) and asks
+for `yes` unless given `-y`; anything but `yes` exits 3 with nothing
+changed. State and evidence are under `/var/lib/secure_sudo/contain/`
+(root-only). Each action that ran is recorded in `secure-sudo history` as
+`contain` or `release`, with its arguments and whether it succeeded.
+
 ## `secure-sudo status`
 
 Print the current kernel state: every scalar knob's live value, the TimeVault

@@ -41,6 +41,9 @@
 #define PHEONIXBOX_HELPER "/usr/bin/secure-sudo-pheonixbox"
 #define EVIDENCE_HELPER "/usr/libexec/secure-sudo/evidence-export.sh"
 #define EVIDENCE_VERIFY_HELPER "/usr/libexec/secure-sudo/evidence-verify.py"
+#ifndef CONTAIN_HELPER
+#define CONTAIN_HELPER "/usr/libexec/secure-sudo/contain.sh"
+#endif
 #ifndef SYSTEMCTL
 #define SYSTEMCTL "/usr/bin/systemctl"
 #endif
@@ -1600,6 +1603,59 @@ static int cmd_evidence_export(int argc, char **argv)
 	return 1;
 }
 
+/*
+ * `contain` (TODO P1-7): the helper does the work (network, account,
+ * process; release; status); every action that ran is recorded in the
+ * policy history, whatever its outcome. A dry run, `status` and an answer
+ * other than "yes" (exit 3) change nothing and are not recorded.
+ */
+static int cmd_contain(int argc, char **argv)
+{
+	char **nargv = calloc((size_t)argc, sizeof(char *));
+	char detail[400] = "";
+	size_t used = 0;
+	int i, st, dry = 0, rc;
+	pid_t pid;
+
+	if (!nargv)
+		return 1;
+	nargv[0] = (char *)CONTAIN_HELPER;
+	for (i = 2; i < argc; i++) {
+		nargv[i - 1] = argv[i];
+		if (!strcmp(argv[i], "--dry-run"))
+			dry = 1;
+		if (used + 1 < sizeof(detail))
+			used += (size_t)snprintf(detail + used, sizeof(detail) - used,
+						 "%s%.80s", i > 2 ? " " : "", argv[i]);
+	}
+	nargv[argc - 1] = NULL;
+	pid = fork();
+	if (pid < 0) {
+		free(nargv);
+		return 1;
+	}
+	if (pid == 0) {
+		execv(CONTAIN_HELPER, nargv);
+		fprintf(stderr, "secure-sudo: cannot exec %s: %s\n", CONTAIN_HELPER,
+			strerror(errno));
+		_exit(127);
+	}
+	free(nargv);
+	if (waitpid(pid, &st, 0) < 0)
+		return 1;
+	rc = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+	if (argc > 2 && strcmp(argv[2], "status") && !dry && rc != 3 && rc != 2) {
+		struct ps_record r = { .action = "contain", .detail = detail,
+				       .result = rc == 0 ? "complete" : "failed",
+				       .lint_errors = -1, .changes = -1 };
+
+		if (!strcmp(argv[2], "release"))
+			r.action = "release";
+		policy_history_append(&r);
+	}
+	return rc;
+}
+
 static int cmd_evidence_verify(int argc, char **argv)
 {
 	char **nargv = calloc((size_t)argc, sizeof(char *));
@@ -1631,6 +1687,8 @@ static void usage(void)
 "                       hash-checked; taken before every load/set/lock/restore\n"
 "  history [-n N] [--json] [--verify]   who changed policy, what, and the result\n"
 "  restore ID [--no-load] [-y]   put a snapshot's config back and load it\n"
+"  contain <network|account USER|process PID> [--dry-run] [-y]  incident\n"
+"                       containment, reversible first; contain release ...; status\n"
 "  status               show current kernel policy state\n"
 "  health [--json]      compare config/live policy and report component health\n"
 "  evidence-export FILE [--signing-key EXTERNAL.pem] export incident evidence\n"
@@ -1736,6 +1794,8 @@ int main(int argc, char **argv)
 		return cmd_history(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "restore"))
 		return cmd_restore(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "contain"))
+		return cmd_contain(argc, argv);
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 	if (!strcmp(argv[1], "health") &&

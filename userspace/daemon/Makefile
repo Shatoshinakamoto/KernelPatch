@@ -17,6 +17,7 @@ install: secure-sudod
 	install -D -m0755 helpers/apply-net.sh  $(DESTDIR)$(LIBEXEC)/apply-net.sh
 	install -D -m0755 helpers/quarantine.sh $(DESTDIR)$(LIBEXEC)/quarantine.sh
 	install -D -m0755 helpers/evidence-export.sh $(DESTDIR)$(LIBEXEC)/evidence-export.sh
+	install -D -m0755 helpers/contain.sh $(DESTDIR)$(LIBEXEC)/contain.sh
 	install -D -m0755 helpers/evidence-verify.py $(DESTDIR)$(LIBEXEC)/evidence-verify.py
 	install -D -m0644 secure-sudod.service  $(DESTDIR)$(UNITDIR)/secure-sudod.service
 
