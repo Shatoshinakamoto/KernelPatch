@@ -720,9 +720,19 @@ static int conf_edit(const char *path, int add)
 		fprintf(stderr, "secure-sudo pheonixbox: path must be absolute\n");
 		return 1;
 	}
-	fd = mkstemp(tmp);
-	if (fd < 0)
+	/* the temporary file goes next to the config, so its directory must
+	 * exist first (before any other part of secure_sudo has made it) */
+	if (mkdir("/etc/secure_sudo", 0755) != 0 && errno != EEXIST) {
+		fprintf(stderr, "secure-sudo pheonixbox: cannot create /etc/secure_sudo: %s\n",
+			strerror(errno));
 		return 1;
+	}
+	fd = mkstemp(tmp);
+	if (fd < 0) {
+		fprintf(stderr, "secure-sudo pheonixbox: cannot write %s: %s\n", CONF,
+			strerror(errno));
+		return 1;
+	}
 	out = fdopen(fd, "we");
 	if (!out) { close(fd); unlink(tmp); return 1; }
 
@@ -750,7 +760,6 @@ static int conf_edit(const char *path, int add)
 	fflush(out);
 	fsync(fileno(out));
 	fclose(out);
-	mkdir("/etc/secure_sudo", 0755);
 	if (rename(tmp, CONF) != 0) { unlink(tmp); return 1; }
 	chmod(CONF, 0644);
 

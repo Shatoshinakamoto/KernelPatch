@@ -152,6 +152,7 @@ static bool name_blacklisted(const char *name)
 	return hit;
 }
 
+#ifdef CONFIG_MODULES
 /*
  * Module names are spelled with '_' (the kernel turns '-' into '_'), and a
  * blacklist entry may be a file name ("foo-bar.ko.zst"). Compare the part
@@ -180,7 +181,6 @@ static bool modname_blacklisted(const char *modname)
 	return hit;
 }
 
-#ifdef CONFIG_MODULES
 /*
  * MODULE_STATE_COMING runs in the loading task after the module is laid out
  * and before its init function. An error here makes the load fail with that
