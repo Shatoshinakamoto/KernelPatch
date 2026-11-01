@@ -23,6 +23,7 @@
 #include <linux/wait.h>
 #include <linux/poll.h>
 #include <linux/sched.h>
+#include <linux/rcupdate.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
@@ -40,7 +41,8 @@
 #include "secure_sudo.h"
 
 #define SS_RING_BYTES	(64 * 1024)
-#define SS_LINE_MAX	640
+#define SS_LINE_MAX	1024
+#define SS_MSG_MAX	384
 
 static DEFINE_KFIFO(ss_ring, char, SS_RING_BYTES);
 static DEFINE_SPINLOCK(ss_ring_lock);
@@ -51,6 +53,12 @@ static atomic64_t ss_ring_dropped = ATOMIC64_INIT(0);
 static atomic64_t ss_event_sequence = ATOMIC64_INIT(0);
 static atomic64_t ss_audit_dropped = ATOMIC64_INIT(0);
 static u8 ss_boot_id[16];
+/*
+ * The record being built. One at a time, under ss_ring_lock: a kilobyte is
+ * too much for the stack of an LSM hook that may itself be deep in the VFS.
+ */
+static char ss_line[SS_LINE_MAX];
+static char ss_msg[SS_MSG_MAX];
 
 u64 ss_events_dropped(void)
 {
@@ -181,17 +189,42 @@ static bool ss_event_type_char(char c)
 	       (c >= '0' && c <= '9') || c == '_' || c == '-';
 }
 
+/*
+ * Deferred work (P1-1): true when the actor is a kernel thread, or a process
+ * the kernel started itself - a usermode helper such as modprobe for a module
+ * autoload or a core-dump pipe handler. Their parent is a kernel thread. The
+ * actor is then not the userspace task whose action caused the work, and the
+ * record says so instead of attributing it to the helper as if it had acted
+ * on its own. PID 1 is started by the kernel too, but acts for itself.
+ */
+static bool ss_actor_kernel_started(void)
+{
+	bool ret;
+
+	if (current->flags & PF_KTHREAD)
+		return true;
+	if (is_global_init(current))
+		return false;
+	rcu_read_lock();
+	ret = rcu_dereference(current->real_parent)->flags & PF_KTHREAD;
+	rcu_read_unlock();
+	return ret;
+}
+
 static void ss_event_v(const struct ss_event_fields *fields,
 		       const char *fmt, va_list args)
 {
-	char line[SS_LINE_MAX], message[224], event_type[48];
+	char *const line = ss_line, *const message = ss_msg;
+	char event_type[48];
 	struct timespec64 ts;
 	u64 realtime_ns, monotonic_ns, seq;
 	int n, i, msg_len, type_len = 0;
 	unsigned long flags;
 	unsigned int uid;
 	bool truncated = false;
-	static const int field_budgets[] = { 32, 24, 64, 16, 40 };
+	/* target, operation, object, decision, reason. object holds a path:
+	 * 256 keeps typical paths whole, so no consumer needs the message. */
+	static const int field_budgets[] = { 32, 24, 256, 16, 40 };
 
 	if (!READ_ONCE(ss_ring_ready)) {
 		/* Before securityfs is up there is nowhere to put it: count
@@ -200,8 +233,16 @@ static void ss_event_v(const struct ss_event_fields *fields,
 		return;
 	}
 
-	msg_len = vscnprintf(message, sizeof(message), fmt, args);
-	if (msg_len == sizeof(message) - 1)
+	/*
+	 * Everything from here is built in the shared buffers, so it is done
+	 * under the ring lock. Records are numbered, stamped and queued under
+	 * it too, so they reach the ring in sequence order: a consumer can
+	 * then treat any jump in "sequence" as records lost (dropped from a
+	 * full ring), not as two CPUs racing between numbering and queueing.
+	 */
+	spin_lock_irqsave(&ss_ring_lock, flags);
+	msg_len = vscnprintf(message, SS_MSG_MAX, fmt, args);
+	if (msg_len == SS_MSG_MAX - 1)
 		truncated = true;
 	/*
 	 * Escape the event payload as a JSON string. Besides making the record
@@ -231,32 +272,26 @@ static void ss_event_v(const struct ss_event_fields *fields,
 			event_type[type_len] = '\0';
 	}
 	uid = from_kuid_munged(&init_user_ns, current_uid());
-	/*
-	 * Number, stamp and queue the record under the ring lock, so records
-	 * reach the ring in sequence order: a consumer can then treat any
-	 * jump in "sequence" as records lost (dropped from a full ring), not
-	 * as two CPUs racing between numbering and queueing.
-	 */
-	spin_lock_irqsave(&ss_ring_lock, flags);
 	ktime_get_real_ts64(&ts);
 	realtime_ns = (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 	monotonic_ns = ktime_get_ns();
 	seq = atomic64_inc_return(&ss_event_sequence);
-	n = scnprintf(line, sizeof(line),
+	n = scnprintf(line, SS_LINE_MAX,
 		      "{\"schema_version\":1,\"boot_id\":\"");
 	for (i = 0; i < (int)sizeof(ss_boot_id); i++)
-		n += scnprintf(line + n, sizeof(line) - n, "%02x",
+		n += scnprintf(line + n, SS_LINE_MAX - n, "%02x",
 			       ss_boot_id[i]);
-	n += scnprintf(line + n, sizeof(line) - n,
+	n += scnprintf(line + n, SS_LINE_MAX - n,
 		       "\",\"sequence\":%llu,\"realtime_ns\":%llu,"
 		       "\"monotonic_ns\":%llu,\"event_type\":",
 		      (unsigned long long)seq,
 		      (unsigned long long)realtime_ns,
 		      (unsigned long long)monotonic_ns);
 	n = ss_json_string(line, n, event_type, 48, &truncated);
-	n += scnprintf(line + n, sizeof(line) - n,
-		       ",\"actor\":{\"pid\":%d,\"uid\":%u},",
-		       current->pid, uid);
+	n += scnprintf(line + n, SS_LINE_MAX - n,
+		       ",\"actor\":{\"pid\":%d,\"uid\":%u,\"kernel_started\":%s},",
+		       current->pid, uid,
+		       ss_actor_kernel_started() ? "true" : "false");
 	n = ss_json_field(line, n, "target", fields ? fields->target : NULL,
 			  field_budgets[0], &truncated);
 	n = ss_json_field(line, n, "operation", fields ? fields->operation : NULL,
@@ -273,10 +308,10 @@ static void ss_event_v(const struct ss_event_fields *fields,
 	n = ss_json_uid_field(line, n, "target_uid",
 			      fields && fields->target_uid_valid,
 			      fields ? fields->target_uid : KUIDT_INIT(0));
-	n += scnprintf(line + n, sizeof(line) - n, "\"message\":");
-	n = ss_json_string(line, n, message, sizeof(line) - n - 32,
+	n += scnprintf(line + n, SS_LINE_MAX - n, "\"message\":");
+	n = ss_json_string(line, n, message, SS_LINE_MAX - n - 32,
 			   &truncated);
-	n += scnprintf(line + n, sizeof(line) - n,
+	n += scnprintf(line + n, SS_LINE_MAX - n,
 		       ",\"truncated\":%s}\n", truncated ? "true" : "false");
 	/*
 	 * Make room by discarding the oldest WHOLE lines, so a reader never
@@ -291,12 +326,13 @@ static void ss_event_v(const struct ss_event_fields *fields,
 		atomic64_inc(&ss_ring_dropped);
 	}
 	kfifo_in(&ss_ring, line, n);
+	/* The audit copy is made from the same buffer, so still under the
+	 * lock; GFP_ATOMIC audit never waits (see ss_audit_event()). */
+	line[n - 1] = '\0';
+	ss_audit_event(line);
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 
 	wake_up_interruptible(&ss_ring_wq);
-	/* the audit copy is made outside our lock */
-	line[n - 1] = '\0';
-	ss_audit_event(line);
 }
 
 void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...)
@@ -325,7 +361,8 @@ void ss_event(const char *fmt, ...)
 static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 			   loff_t *ppos)
 {
-	unsigned int n;
+	unsigned int n, len;
+	unsigned long flags;
 	char *bounce;
 	int ret;
 
@@ -344,7 +381,21 @@ static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 	bounce = kvmalloc(count, GFP_KERNEL);
 	if (!bounce)
 		return -ENOMEM;
-	n = kfifo_out_spinlocked(&ss_ring, bounce, count, &ss_ring_lock);
+	/*
+	 * Hand out whole records only. A read that stopped mid-record would
+	 * leave the rest at the head of the ring, where a producer making room
+	 * discards it; the reader would then join the half it had to the next
+	 * record, and lose that one without it being counted. A buffer too
+	 * small for even one record still gets bytes, as before.
+	 */
+	spin_lock_irqsave(&ss_ring_lock, flags);
+	n = kfifo_out_peek(&ss_ring, bounce, count);
+	for (len = n; len && bounce[len - 1] != '\n'; len--)
+		;
+	if (!len)
+		len = n;
+	n = kfifo_out(&ss_ring, bounce, len);
+	spin_unlock_irqrestore(&ss_ring_lock, flags);
 	ret = copy_to_user(ubuf, bounce, n) ? -EFAULT : n;
 	kvfree(bounce);
 	return ret;

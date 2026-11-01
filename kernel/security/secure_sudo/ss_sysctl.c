@@ -107,10 +107,10 @@ int ss_sysctl_file_open(struct file *file)
 	if (magic == BINFMTFS_MAGIC) {
 		pr_warn_ratelimited("sysctl: denied binfmt_misc write by %s\n",
 				    current->comm);
-		ss_event_typed("sysctl_guard", "current_process", "write",
-			       "binfmt_misc", "deny", "protected_filesystem",
-			       "sysctl: denied binfmt_misc write pid %d (%s)",
-			       current->pid, current->comm);
+		ss_event_typed_self("sysctl_guard", "current_process", "write",
+				    "binfmt_misc", "deny", "protected_filesystem",
+				    "sysctl: denied binfmt_misc write pid %d (%s)",
+				    current->pid, current->comm);
 		return -EPERM;
 	}
 	if (magic != PROC_SUPER_MAGIC)
@@ -125,11 +125,11 @@ int ss_sysctl_file_open(struct file *file)
 	} else if (is_protected(p)) {
 		pr_warn_ratelimited("sysctl: denied write to %s by %s\n", p,
 				    current->comm);
-		ss_event_typed("sysctl_guard", "current_process", "write", p,
-			       "deny", "protected_sysctl",
-			       "sysctl: denied write %s pid %d (%s) uid %u", p,
-			       current->pid, current->comm,
-			       from_kuid(&init_user_ns, current_uid()));
+		ss_event_typed_self("sysctl_guard", "current_process", "write", p,
+				    "deny", "protected_sysctl",
+				    "sysctl: denied write %s pid %d (%s) uid %u", p,
+				    current->pid, current->comm,
+				    from_kuid(&init_user_ns, current_uid()));
 		ret = -EPERM;
 	}
 	kfree(buf);

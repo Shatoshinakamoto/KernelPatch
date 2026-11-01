@@ -264,9 +264,9 @@ static bool ss_binvault_denies(umode_t mode, const char *path, const char *what)
 		return false;
 
 	pr_warn_ratelimited("binvault: denied %s of binary %s\n", what, path);
-	ss_event_typed("binary_vault", "current_user", what, path, "deny",
-		       "protected_binary", "binvault: denied %s of %s",
-		       what, path);
+	ss_event_typed_self("binary_vault", "current_user", what, path, "deny",
+			    "protected_binary", "binvault: denied %s of %s",
+			    what, path);
 	return true;
 }
 

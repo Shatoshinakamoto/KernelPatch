@@ -222,11 +222,35 @@ int main(int argc, char **argv)
 	    "true");
 	tap(ev_parse(r, &e) == 0 && !ev_vault_path(&e, path, sizeof(path)),
 	    "a truncated TimeVault record is never acted on");
-	rec(r, sizeof(r), "time_vault", "execute", "/home/u/x", "deny",
+	rec(r, sizeof(r), "time_vault", "execute", "/opt/real", "deny",
 	    "not on allowlist", "null",
-	    "timevault: denied exec /home/u/x (hash mismatch)", "false");
+	    "timevault: denied exec /etc/shadow (not on allowlist)", "false");
+	tap(ev_parse(r, &e) == 0 && ev_vault_path(&e, path, sizeof(path)) &&
+	    !strcmp(path, "/opt/real"),
+	    "the TimeVault path comes from the typed object, never the message");
+	rec(r, sizeof(r), "time_vault", "execute", "tool", "deny",
+	    "hash mismatch", "null", "timevault: denied exec tool (hash mismatch)",
+	    "false");
 	tap(ev_parse(r, &e) == 0 && !ev_vault_path(&e, path, sizeof(path)),
-	    "a message whose reason disagrees with the typed reason is ignored");
+	    "a TimeVault object that is not an absolute path is not acted on");
+	{
+		/* P1-1: the kernel keeps paths up to 256 bytes whole in object */
+		char longp[300], msg[400];
+		int i;
+
+		strcpy(longp, "/opt");
+		for (i = 0; i < 24; i++)
+			strcat(longp, "/directory");	/* 4 + 240 = 244 bytes */
+		snprintf(msg, sizeof(msg), "timevault: denied exec %s (hash mismatch)",
+			 longp);
+		rec(r, sizeof(r), "time_vault", "execute", longp, "deny",
+		    "hash mismatch", "null", msg, "false");
+		tap(ev_parse(r, &e) == 0 && ev_vault_path(&e, path, sizeof(path)) &&
+		    !strcmp(path, longp),
+		    "a 244-byte TimeVault path is taken whole from object");
+		tap(ev_parse(r, &e) == 0 && !ev_vault_path(&e, path, 100),
+		    "a path longer than the caller's buffer is not acted on");
+	}
 
 	/* ---- acting on files ---- */
 	snprintf(dir, sizeof(dir), "%s/d", argv[1]);

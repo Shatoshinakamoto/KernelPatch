@@ -172,10 +172,10 @@ int ss_driver_read_file(struct file *file, enum kernel_read_file_id id,
 	} else if (name_blacklisted(kbasename(resolved))) {
 		pr_warn("driver-blacklist: blocked module by name %s\n",
 			kbasename(resolved));
-		ss_event_typed("driver_blacklist", "module_loader", "load_module",
-			       kbasename(resolved), "deny", "name_blacklist",
-			       "driver-blacklist: blocked module name %s",
-			       kbasename(resolved));
+		ss_event_typed_self("driver_blacklist", "module_loader", "load_module",
+				    kbasename(resolved), "deny", "name_blacklist",
+				    "driver-blacklist: blocked module name %s",
+				    kbasename(resolved));
 		ret = -EPERM;
 	}
 	kfree(buf);
@@ -195,10 +195,10 @@ static int check_module_buf(const char *buf, loff_t size, const char *how)
 	if (hash_blacklisted(hex)) {
 		pr_warn("driver-blacklist: blocked module (%s) by hash %s\n",
 			how, hex);
-		ss_event_typed("driver_blacklist", "module_loader", "load_module",
-			       hex, "deny", "hash_blacklist",
-			       "driver-blacklist: blocked module hash %s via %s",
-			       hex, how);
+		ss_event_typed_self("driver_blacklist", "module_loader", "load_module",
+				    hex, "deny", "hash_blacklist",
+				    "driver-blacklist: blocked module hash %s via %s",
+				    hex, how);
 		return -EPERM;
 	}
 	return 0;

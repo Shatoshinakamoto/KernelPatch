@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/atomic.h>
 #include <linux/cred.h>
+#include <linux/sched.h>
 #include <linux/uidgid.h>
 #include <linux/mutex.h>
 #include <linux/kobject.h>
@@ -189,6 +190,16 @@ struct ss_event_fields {
 
 void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...);
 void ss_event(const char *fmt, ...);
+/*
+ * Event producers (P1-1). Every record names its target with a typed PID and
+ * UID wherever there is one, so a consumer never needs the message text:
+ *   ss_event_typed_self()     the task the hook runs for is the subject
+ *                             (target_pid/target_uid = the actor's)
+ *   ss_event_typed_pid_uid()  another task (ptrace and friends)
+ *   ss_event_typed_uid()      a user, not a task (the cooldown block)
+ *   ss_event_typed()          no task or user (subsystem events)
+ * "target" stays a short label of what kind of thing the target is.
+ */
 #define ss_event_typed(_type, _target, _operation, _object, _decision, \
 		       _reason, ...) \
 	ss_event_record(&(struct ss_event_fields) { \
@@ -221,6 +232,11 @@ void ss_event(const char *fmt, ...);
 		.operation = (_operation), .object = (_object), \
 		.decision = (_decision), .reason = (_reason), \
 	}, __VA_ARGS__)
+#define ss_event_typed_self(_type, _target, _operation, _object, _decision, \
+			    _reason, ...) \
+	ss_event_typed_pid_uid(_type, _target, task_pid_nr(current), \
+			       current_uid(), _operation, _object, _decision, \
+			       _reason, __VA_ARGS__)
 
 /*
  * #16: once config is locked, every knob refuses writes until the next reboot.

@@ -216,12 +216,12 @@ static int ss_bprm_creds_from_file(struct linux_binprm *bprm,
 		pr_warn_ratelimited("non-sudo UID %u denied privilege-gaining exec %s\n",
 				    from_kuid(&init_user_ns, current_uid()),
 				    IS_ERR(p) ? "(unresolvable)" : p);
-		ss_event_typed("setid_exec", "current_user", "execute",
-			       IS_ERR(p) ? "(unresolvable)" : p,
-			       "deny", "privilege_gaining_exec_not_allowlisted",
-			       "setid-exec: UID %u denied %s",
-			       from_kuid(&init_user_ns, current_uid()),
-			       IS_ERR(p) ? "(unresolvable)" : p);
+		ss_event_typed_self("setid_exec", "current_user", "execute",
+				    IS_ERR(p) ? "(unresolvable)" : p,
+				    "deny", "privilege_gaining_exec_not_allowlisted",
+				    "setid-exec: UID %u denied %s",
+				    from_kuid(&init_user_ns, current_uid()),
+				    IS_ERR(p) ? "(unresolvable)" : p);
 	}
 	kfree(buf);
 	return ret;
