@@ -67,8 +67,9 @@ if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DBOOT_ID_FILE="\"$BOOT_ID\"" \
 	-DSYSTEMCTL="\"$SYSTEMCTL\"" \
 	-DADDON_STATE_DIR="\"$ADDON_STATE\"" \
+	-DSS_STATE_DIR="\"$T/state\"" \
 	-DSS_TESTING \
-	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c -lcrypto); then
+	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c node_scan.c -lcrypto); then
 	not_ok "CLI builds with test paths"; tap_done; exit 1
 fi
 ok "CLI builds with test paths (-Werror)"
@@ -154,6 +155,12 @@ fresh; setkey remote_syslog_ca_file ""; lint --no-kernel
 lint_err "remote CA bundle cannot be empty" "remote_syslog_ca_file = : not an absolute path"
 fresh; setkey remote_queue_max_mb 1025; lint --no-kernel
 lint_err "remote queue has a bounded maximum" "remote_queue_max_mb = 1025: out of range"
+fresh; setkey node_sea_scan_interval soon; lint --no-kernel
+lint_err "node-scan interval must be whole minutes" "node_sea_scan_interval = soon: out of range \(0 = off"
+fresh; setkey node_sea_scan_dirs /opt,srv; lint --no-kernel
+lint_err "node-scan directories must be absolute" "node_sea_scan_dirs = /opt,srv: 'srv' is not an absolute directory"
+fresh; setkey node_sea_scan_interval 0; setkey node_sea_scan_dirs /opt,/srv; lint --no-kernel
+eq "valid node-scan settings pass lint" "$LRC" 0
 fresh; setkey timevault_enabled 1; lint --no-kernel
 eq "timevault_enabled is not an error" "$LRC" 0
 check "... and lint explains load never engages TimeVault" says "note +timevault_enabled +not applied by load"
@@ -239,6 +246,17 @@ fresh; setkey admin_gid 0; rm "$CFG/blacklist.conf"; "$CLI" load > "$T/load.out"
 check "missing list file: reported as cleared, kernel list emptied" sh -c "grep -qE 'blacklist +cleared \(no config file\)' '$T/load.out' && [ \"\$(cat '$SEC/blacklist')\" = '' ]"
 fresh; setkey admin_gid 0; setkey retain_days 7; "$CLI" load > "$T/load.out" 2>&1
 check "daemon keys reported skipped" grep -qE '^  skipped +retain_days .*read by secure-sudod' "$T/load.out"
+fresh; setkey admin_gid 0; mkdir -p "$T/state"
+printf '/opt/by-hand/app\n' >> "$CFG/node_sea_binaries.conf"
+printf '# found\n/opt/found/app\n/opt/by-hand/app\n' > "$T/state/node_sea_auto.list"
+"$CLI" load > "$T/load.out" 2>&1
+check "load reports what node-scan found" grep -qE '^  accepted +node_sea_binaries +2 entries \(1 from node-scan\)' "$T/load.out"
+eq "load sends the config's entries first, then node-scan's, once each" \
+	"$(tr '\n' ' ' < "$SEC/node_sea_binaries")" "/opt/by-hand/app /opt/found/app "
+rm -f "$T/state/node_sea_auto.list"
+fresh; setkey admin_gid 0; printf '/bin/a\n# note\n\n/bin/b\n  /bin/c\n' > "$CFG/blacklist.conf"
+"$CLI" load > "$T/load.out" 2>&1
+check "load counts every entry of a list (not just the first)" grep -qE '^  accepted +blacklist +3 entries$' "$T/load.out"
 
 echo "# health"
 fresh

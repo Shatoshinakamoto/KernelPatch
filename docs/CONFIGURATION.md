@@ -109,6 +109,13 @@ TimeVault keys:
 | `vault_action` | `quarantine` | `quarantine` (zip aside, keep evidence) or `wipe` (delete). Applies both to a new/changed file the daemon finds while scanning **and** to a binary the kernel blocked at exec for a hash mismatch or for not being listed. |
 | `vault_watch` | `/etc,/usr/local/bin,/opt,/usr/local/sbin` | Comma list of trees the daemon scans while engaged. |
 
+Node child guard (#11) keys, read by `secure-sudo node-scan` and the daemon:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `node_sea_scan_dirs` | `/opt,/usr/local/bin,/usr/local/sbin,/usr/local/lib,/srv` | Comma list of absolute directories `node-scan` searches for Node runtimes outside the standard paths. |
+| `node_sea_scan_interval` | `60` | Minutes between the daemon's scans (it also scans at start); `0` turns the daemon's scans off. 0–10080. |
+
 #### The allowlist file format
 
 `timevault_allow.conf` (managed by `secure-sudo vault-allow`) holds one entry
@@ -344,7 +351,7 @@ file, then `secure-sudo load` (the TimeVault allowlist has its own command).
 | `setid_exec_allow.conf` → `setid_exec_allow` | #1b | Absolute path of a setuid/setgid/file-cap binary non-sudo users *may* still run when `block_setid_exec=1`. |
 | `tmp_exec_allow.conf` → `tmp_exec_allow` | #12 | Path prefix exempted from the scratch-tree exec block. Matches on a path-component boundary (`/tmp/build` covers `/tmp/build/…` but not `/tmp/buildx`). |
 | `node_allowed_children.conf` → `node_allowed_children` | #11 | A child a node/SEA process may exec. `/`-prefixed = exact path; a bare word = basename. |
-| `node_sea_binaries.conf` → `node_sea_binaries` | #11 | Absolute path of a single-executable-application / pkg binary to treat as a node runtime. |
+| `node_sea_binaries.conf` → `node_sea_binaries` | #11 | Absolute path of a single-executable-application / pkg binary to treat as a node runtime. `load` sends these first, then what `secure-sudo node-scan` found (kept apart in `/var/lib/secure_sudo/node_sea_auto.list`), up to the kernel's 256 entries. |
 | `driver_blacklist.conf` → `driver_blacklist` | #6 | A 64-hex SHA-256 (matches the loaded module's bytes) or a module basename. |
 | `timevault_allow.conf` → `timevault_allow` | #13 | `<path> <sha256>` (hash entry), `<path> auto` (auto-update file), or `<dir> autodir` (auto-update directory). Managed by `vault-allow`. |
 | `home_map.conf` → `home_map` | #4 | `<uid> <home-path>` per line. Generated from `/etc/passwd` by the installer. |

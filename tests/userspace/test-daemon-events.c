@@ -291,6 +291,38 @@ int main(int argc, char **argv)
 	    "a failed archive leaves the original in place (and no staging copy)");
 	unlink(path);
 
+	/* ---- #11 node-scan runs in the background ---- */
+	{
+		char calls[1024], got[256] = "";
+		pid_t first;
+		FILE *f;
+		int i;
+
+		snprintf(calls, sizeof(calls), "%s/cli-calls", argv[1]);
+		node_scan_start();
+		first = node_scan_pid;
+		tap(first > 0, "node-scan starts as a child, without waiting for it");
+		node_scan_start();
+		tap(node_scan_pid == first, "a second start while one runs forks nothing");
+		node_scan_reap();
+		tap(node_scan_pid == first, "a scan still running is not reaped");
+		for (i = 0; i < 100 && node_scan_pid > 0; i++) {
+			usleep(100000);
+			node_scan_reap();
+		}
+		tap(node_scan_pid == 0, "a finished scan is reaped");
+		f = fopen(calls, "re");
+		if (f) {
+			if (!fgets(got, sizeof(got), f))
+				got[0] = '\0';
+			fclose(f);
+		}
+		tap(!strcmp(got, "node-scan --quiet nice=10\n"),
+		    "it runs `secure-sudo node-scan --quiet` at nice 10");
+		tap(log_contains("node-scan: did not complete (status 3)") == 1,
+		    "a failed scan is logged with its exit status");
+	}
+
 	/* ---- the ring reader ---- */
 	rec(r, sizeof(r), "sudo_cooldown", "authenticate", "sudo", "deny",
 	    "failure_threshold", "3999999", "cooldown: UID 3999999 blocked from sudo 1s after 5 fails",

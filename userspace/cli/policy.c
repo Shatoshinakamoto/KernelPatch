@@ -90,7 +90,8 @@ const size_t ss_nlists = sizeof(ss_lists) / sizeof(ss_lists[0]);
 static const char *const daemon_keys[] = {
 	"retain_days", "max_total_mb", "remote_syslog", "vault_action",
 	"vault_watch", "remote_syslog_transport", "remote_syslog_ca_file",
-	"remote_queue_max_mb", NULL
+	"remote_queue_max_mb", "node_sea_scan_dirs", "node_sea_scan_interval",
+	NULL
 };
 
 const struct knob *find_knob(const char *key)
@@ -379,7 +380,15 @@ const char *check_daemon_value(const char *key, const char *v,
 			snprintf(why, n, "out of range (1..1024)");
 			return why;
 		}
-	} else if (!strcmp(key, "vault_watch")) {
+	} else if (!strcmp(key, "node_sea_scan_interval")) {
+		char *end;
+		long m = strtol(v, &end, 10);
+
+		if (!*v || *end || m < 0 || m > 10080) {
+			snprintf(why, n, "out of range (0 = off, else 1..10080 minutes)");
+			return why;
+		}
+	} else if (!strcmp(key, "vault_watch") || !strcmp(key, "node_sea_scan_dirs")) {
 		char buf[448], *p, *tok, *save = NULL;
 
 		snprintf(buf, sizeof(buf), "%s", v);

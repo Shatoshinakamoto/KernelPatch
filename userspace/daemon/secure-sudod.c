@@ -42,6 +42,7 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <openssl/evp.h>
@@ -71,6 +72,9 @@
 #define HELPER_QUAR "/usr/libexec/secure-sudo/quarantine.sh"
 #endif
 #define HELPER_PBOX "/usr/bin/secure-sudo-pheonixbox"	/* #21 PheonixBox */
+#ifndef SECURE_SUDO_CLI
+#define SECURE_SUDO_CLI "/usr/bin/secure-sudo"	/* node-scan (#11) */
+#endif
 #define REMOTE_QUEUE_MAX_RECORDS 4096
 #ifndef REMOTE_QUEUE
 #define REMOTE_QUEUE STATEDIR "/remote-queue"
@@ -86,6 +90,7 @@ struct cfg {
 	long remote_queue_max_mb;
 	char vault_action[16];		/* quarantine | wipe */
 	char vault_watch[1024];		/* comma-separated dirs */
+	long node_scan_minutes;		/* 0 = off (#11 node-scan) */
 };
 
 static struct cfg *g_cfg;
@@ -138,6 +143,7 @@ static void load_cfg(struct cfg *c)
 	c->remote_queue_max_mb = 10;
 	strcpy(c->vault_action, "quarantine");
 	strcpy(c->vault_watch, "/etc,/usr/local/bin,/opt,/usr/local/sbin");
+	c->node_scan_minutes = 60;
 
 	f = fopen(CONFIG, "re");
 	if (!f)
@@ -184,6 +190,15 @@ static void load_cfg(struct cfg *c)
 			snprintf(c->vault_action, sizeof(c->vault_action), "%s", val);
 		else if (!strcmp(key, "vault_watch"))
 			snprintf(c->vault_watch, sizeof(c->vault_watch), "%s", val);
+		else if (!strcmp(key, "node_sea_scan_interval")) {
+			char *end;
+			long m = strtol(val, &end, 10);
+
+			if (*val && !*end && m >= 0 && m <= 10080)
+				c->node_scan_minutes = m;
+			else
+				fprintf(stderr, "secure-sudod: invalid node_sea_scan_interval\n");
+		}
 	}
 	fclose(f);
 }
@@ -1808,6 +1823,45 @@ static void pheonixbox_scan(void)
 }
 
 /*
+ * #11: register SEA / pkg / renamed node runtimes for the Node guard. The
+ * scan reads every new or changed executable under node_sea_scan_dirs, which
+ * can take a while the first time, so it runs as a niced child that the main
+ * loop reaps; events keep draining meanwhile. One scan at a time.
+ */
+static pid_t node_scan_pid;
+
+static void node_scan_start(void)
+{
+	pid_t pid;
+
+	if (node_scan_pid > 0)
+		return;
+	pid = fork();
+	if (pid == 0) {
+		if (setpriority(PRIO_PROCESS, 0, 10) != 0)
+			_exit(126);
+		execl(SECURE_SUDO_CLI, SECURE_SUDO_CLI, "node-scan", "--quiet",
+		      (char *)NULL);
+		_exit(127);
+	} else if (pid > 0) {
+		node_scan_pid = pid;
+	}
+}
+
+static void node_scan_reap(void)
+{
+	int st;
+
+	if (node_scan_pid <= 0 || waitpid(node_scan_pid, &st, WNOHANG) != node_scan_pid)
+		return;
+	node_scan_pid = 0;
+	if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
+		syslog_line("node-scan: did not complete (status %d); "
+			    "`secure-sudo node-scan` shows why",
+			    WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+}
+
+/*
  * Apply the kernel's net_mode with the nft helper. A mode counts as applied
  * only once the helper succeeded; until then it is retried on every periodic
  * pass (e.g. public-only at boot, before the network has a default route),
@@ -2028,6 +2082,7 @@ int main(void)
 	time_t last_pbox = 0;
 	time_t last_health = 0;
 	time_t last_checkpoint = 0;
+	time_t last_node_scan = 0;
 
 	signal(SIGHUP, on_hup);
 	signal(SIGTERM, on_term);
@@ -2088,6 +2143,13 @@ int main(void)
 			apply_net_mode();
 			enforce_retention(&cfg);
 			vault_scan(&cfg);
+		}
+
+		node_scan_reap();
+		if (cfg.node_scan_minutes > 0 &&
+		    (!last_node_scan || now - last_node_scan >= cfg.node_scan_minutes * 60)) {
+			last_node_scan = now;
+			node_scan_start();
 		}
 
 		/* PheonixBox scan+repair on a slower (30s) cadence: content

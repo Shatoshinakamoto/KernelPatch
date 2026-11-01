@@ -366,7 +366,9 @@ that is a missing feature to build, not a sentence to delete. Each doc says
 "not built yet" until the feature lands. Found while writing
 [docs/THREAT_MODEL.md §7](docs/THREAT_MODEL.md#7-promises-not-yet-kept-work-to-build).
 
-- [ ] **G1: Node SEA auto-detection** (FEATURE_MAP #11). Find Node single-
+- [x] **G1: Node SEA auto-detection** (FEATURE_MAP #11). Built 2026-11-01:
+  `secure-sudo node-scan`, run by secure-sudod; tested by
+  `tests/userspace/test-node-scan.sh` and the Ubuntu VM run. Find Node single-
   executable (and pkg) binaries by their fuse marker in configured
   directories, at `load` and on a timer, and register them in
   `node_sea_binaries`. **Done when:** a test SEA binary is found and

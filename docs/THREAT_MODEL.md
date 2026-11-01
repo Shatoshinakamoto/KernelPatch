@@ -369,17 +369,28 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   shell or other programs (`child_process.exec`).
 * **Needs:** the application runs as a program named `node`/`nodejs`, at a
   standard path, or registered in `node_sea_binaries`; `node_allowed_children`
-  lists exactly the programs it needs to start.
+  lists exactly the programs it needs to start. `secure-sudo node-scan`
+  (run by the daemon at start and hourly) registers single-executable apps,
+  pkg builds and renamed node binaries it finds under `node_sea_scan_dirs`.
 * **Limits:** it guards exec only. The attacker still runs any JavaScript or
   native addon code inside the Node process, with its UID's rights (files,
   network). A child on the allowlist runs unguarded: allowlisting a shell,
   an interpreter, `git`, `npm` or anything else that starts programs reopens
-  the pivot. A Node build under another name that is not registered is not
-  guarded; automatic detection of single-executable apps is gap G1 (§7). A
-  bare name entry matches that name in any directory. It applies to root
-  too.
+  the pivot. A Node build under another name is guarded only once it is
+  registered: `node-scan` finds it by Node's SEA fuse or pkg's markers, but
+  only under the scanned directories and only up to an hour after it
+  appears (run `node-scan` after deploying one). A build with the markers
+  stripped is not found. Electron apps are reported, not registered (they
+  would confine a whole desktop UI). Registering a file only adds
+  restriction, so a planted marker gains an attacker nothing; root-owned
+  files are listed ahead of others so planted ones cannot crowd them out of
+  the kernel's 256 entries. A bare name entry matches that name in any
+  directory. It applies to root too.
 * **Tested by:** `t_node` (unlisted child refused, event, root, allowed
-  child, registered single-executable app).
+  child, registered single-executable app); `tests/userspace/test-node-scan.sh`
+  (finding SEA/pkg/renamed node by marker, real Node with a flipped fuse,
+  Electron skipped, merge order and limits, cache, partial scans); the
+  Ubuntu VM run (a found app's child refused by the real kernel, G1 steps).
 
 ### #12 Scratch-tree exec block (kernel)
 
@@ -605,7 +616,7 @@ writing this document. Each is tracked in [TODO.md](../TODO.md) under
 
 | Gap | Promised in | What is missing | Plan |
 |---|---|---|---|
-| G1 | FEATURE_MAP #11 | "The daemon finds SEA binaries by their fuse marker and registers them." Nothing does. | Scan configured directories for the Node SEA fuse (and pkg) markers at `load` and on a timer, write `node_sea_binaries`. |
+| G1 | FEATURE_MAP #11 | "The daemon finds SEA binaries by their fuse marker and registers them." Nothing did. | **Built 2026-11-01:** `secure-sudo node-scan`, run by the daemon at start and every `node_sea_scan_interval` minutes; `load` sends its finds after the hand-written list. |
 | G2 | FEATURE_MAP #13 | "The daemon keeps the Merkle tree over watched trees." It keeps a flat SHA-256 manifest. | Build a Merkle tree over the manifest, log and forward its root each scan so a collector can spot a rewritten manifest. |
 | G3 | FEATURE_MAP #15 | "Sealed with TPM2 when there is one, with a root-only key file as the fallback." Only the key file exists. | Seal the OTP key with the TPM (systemd-creds or tpm2-tools) when present, key file as fallback, swtpm in the distro VM test. |
 | G4 | README #5 "Block TPM clear" | Only the PPI route is blocked; `TPM2_Clear` through `/dev/tpm*` is not, and an LSM cannot read the command bytes. | Needs a decision: set a TPM lockout password at install, and/or restrict which programs may open `/dev/tpm*`. |

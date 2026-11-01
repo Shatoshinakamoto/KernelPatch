@@ -146,6 +146,21 @@ check "commit makes it the default" inlast 'is now the default boot entry'
 reboot_vm
 eq "after commit the secure_sudo kernel boots by default" "$(running)" "$REL"
 
+# ------------------------- 4b. a Node runtime found by node-scan (#11, G1)
+# bash with Node's SEA fuse appended (flipped to :1, as postject leaves it):
+# to the scanner it is a single-executable app. Once registered, the kernel
+# treats it as node, so the child it starts must be on node_allowed_children.
+gstep g1-setup 'mkdir -p /opt/ss-g1 && cp /usr/bin/bash /opt/ss-g1/app &&
+	printf %s NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2:1 >> /opt/ss-g1/app &&
+	chmod 0755 /opt/ss-g1/app && su plain -s /bin/sh -c "/opt/ss-g1/app -c /usr/bin/true" && echo ran-free'
+check "G1: before a scan, the unregistered app starts a child freely" inlast '^ran-free'
+gstep g1-scan 'secure-sudo node-scan /opt/ss-g1 && secure-sudo list node_sea_binaries'
+check "G1: node-scan finds the app and registers it in the kernel" sh -c "[ $GRC -eq 0 ] && grep -qx '/opt/ss-g1/app' '$LAST'"
+gstep g1-guard 'su plain -s /bin/sh -c "/opt/ss-g1/app -c /usr/bin/true"; echo rc=$?'
+check "G1: now the kernel's Node guard refuses the child" inlast '^rc=126'
+gstep g1-cleanup 'rm -rf /opt/ss-g1 && secure-sudo node-scan /opt/ss-g1; secure-sudo list node_sea_binaries'
+check "G1: with the app gone, a scan unregisters it" sh -c "! grep -q ss-g1 '$LAST'"
+
 # ----------------------------------------- 5. policy + recovery exercises
 bash "$VM" put "$W" "$HERE/recovery-exercises.sh" /root/recovery-exercises.sh
 gstep recovery 'bash /root/recovery-exercises.sh'

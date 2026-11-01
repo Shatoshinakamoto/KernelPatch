@@ -16,6 +16,10 @@
 #define CONFIG_DIR "/etc/secure_sudo"
 #endif
 
+#ifndef SS_STATE_DIR
+#define SS_STATE_DIR "/var/lib/secure_sudo"
+#endif
+
 #define SS_MAX_GIDS 16	/* SS_MAX_ADMIN_GIDS in the kernel */
 
 /* Write @len bytes to a kernel file in one write(); 0 on success. */
@@ -74,6 +78,15 @@ int cmd_lint(int argc, char **argv);
 /* vault_allow.c */
 int  cmd_vault_allow(int argc, char **argv);
 void vault_allow_usage(void);
+
+/* node_scan.c: find SEA/pkg/renamed node runtimes for the Node guard (#11) */
+int cmd_node_scan(int argc, char **argv);
+/* Manual entries, then found ones, within the kernel's limits (256 / 64 KiB). */
+int node_sea_merge(const char *manual, size_t mlen, const char *autol,
+		   size_t alen, char **out, size_t *outlen, int *added,
+		   int *dropped);
+char *node_sea_read_file(const char *path, size_t *len);
+const char *node_sea_auto_path(void);
 
 /* detect_admins.c */
 int cmd_detect_admins(int argc, char **argv);
