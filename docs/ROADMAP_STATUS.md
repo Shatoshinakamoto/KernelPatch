@@ -25,12 +25,12 @@ nothing is pushed from here.
 | Item | Status | One line |
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
-| P0-2 tests | partly | 556 host checks pass in CI on every push; 126/126 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
-| P0-3 boot proof | partly | 6.12.114 with secure_sudo, all in CI: 126/126 in-kernel checks (initramfs, KVM), the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run (52 checks), and the STIG run 16/16: the hardened guest reboots and the release gate passes; not UEFI, other distros or hardware |
+| P0-2 tests | partly | 559 host checks pass in CI on every push; 135/135 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
+| P0-3 boot proof | partly | 6.12.114 with secure_sudo, all in CI: 135/135 in-kernel checks (initramfs, KVM), the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run (52 checks), and the STIG run 16/16: the hardened guest reboots and the release gate passes; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
-| P1-1 | partly (active) | schema-v1 JSON events with typed fields; sequence numbers given in ring order so gaps are exact; `events_sequence`/`events_boot_id`; the daemon logs `event_stream`/`event_gap` records and keeps a restart cursor; health shows gaps. Remaining: some targets are labels rather than typed PID/UID; long paths are only complete in `message`; deferred-work actor attribution |
+| P1-1 | done | schema-v1 JSON events; every target a typed PID/UID; paths whole in `object` up to 256 bytes, so no consumer reads the message; `actor.kernel_started` marks deferred work; sequence numbers in ring order and reads of whole records, so gaps are exact; `events_sequence`/`events_boot_id`; the daemon logs `event_stream`/`event_gap` records and keeps a restart cursor; health shows gaps; 20,000-event burst measured in CI (about 200,000 records/s, none lost) |
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
 | P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
@@ -129,10 +129,11 @@ without root):
 | `tests/install/test-install.sh` | 106 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
-`tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **126/126** on
-6.12.114 under KVM on 2026-10-31 against the current source, including the
-cross-process target identity, the schema checks and the P1-1 sequence
-checks (`docs/vm/results/08-ci-kernel-boot-6.12/`). Earlier runs passed
+`tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **135/135** on
+6.12.114 under KVM on 2026-11-01 against the current source, including the
+typed targets, the schema checks, the P1-1 sequence checks and the
+sustained burst (`docs/vm/results/11-ci-kernel-boot-6.12-p1-1/`; the first
+CI run, 126/126 on 2026-10-31, is in `08-ci-kernel-boot-6.12/`). Earlier runs passed
 118/118 on upstream 6.14, and 118/118 with AppArmor stacked; the stacked
 configuration has not been re-run on 6.12.
 They cover registration and stacking, knob defaults,
@@ -178,7 +179,7 @@ What has been booted, under QEMU with SeaBIOS (TCG here, KVM in CI;
 |---|---|---|
 | v11 LSM, upstream 6.14 | initramfs | **panic** at boot (`Ran out of static slots`, SECURITY_REVIEW #35); fixed in v12, guarded by `ci/check-lsm-hooks.sh` |
 | v12 LSM, upstream 6.14 | initramfs, PID 1 test program | 118/118, and 118/118 with AppArmor stacked |
-| current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 126/126, no kernel splat |
+| current LSM, kernel.org 6.12.114 (CI `kernel-boot`, KVM) | initramfs, PID 1 test program | 135/135, no kernel splat (126/126 on 2026-10-31 before the P1-1 checks) |
 | v12, `install.sh build-kernel` package, upstream 6.14 | Ubuntu 24.04 cloud image (systemd, GRUB, AppArmor, virtio disk) | install/recovery/removal 51/51; active LSMs `lockdown,capability,landlock,yama,apparmor,secure_sudo,ima,evm`; services start; the configuration loads; the previous kernel stays bootable and is fallen back to |
 | same | Ubuntu 24.04, STIG remediation | remediation ran; the run was cut off before the post-hardening reboot (`07-distro-stig/run-stig-test.tap` ends at check 6), so a reboot of a hardened guest was **not** shown. An earlier version of this row said it was |
 | `install.sh build-kernel` package, 6.12.114 (CI `distro-vm`) | Ubuntu 24.04, STIG remediation with ufw on | site steps, remediation and rescan complete; **after the reboot the hardened guest did not come back** (2026-10-31, twice). Cause: the GRUB password held the boot at Ubuntu's restricted "Advanced options" submenu, where the installer had put the default kernel (SECURITY_REVIEW #51). Fixed: in run 41237968131 the hardened guest reboots into the secure_sudo kernel with AppArmor active; the release gate then had one unexplained failure, `file_permissions_var_log_stig`, caused by the hardening script's own reports (OSB-22) |
@@ -269,9 +270,9 @@ each recovery restored sudo and `passwd` for the right users.
 
 ---
 
-## P1-1 through P1-4 — active, partial
+## P1-1 through P1-4 — P1-1, P1-2 and P1-4 done; P1-3 partial
 
-### P1-1 Event schema and loss
+### P1-1 Event schema and loss — done
 
 `ss_log.c` now writes one JSON record per event with schema version 1,
 per-boot random ID, monotonically increasing sequence, realtime and monotonic
@@ -289,16 +290,17 @@ and acts only on its typed fields:
 
 * the cooldown kill takes its UID from `target_uid`, which the kernel now
   sets;
-* the TimeVault quarantine needs an untruncated record whose message
-  matches the kernel's format exactly.
+* the TimeVault quarantine takes its path from `object` and needs an
+  untruncated record (until 2026-11-01 it matched the message against the
+  kernel's exact format).
 
 Before, it searched the message text, which let a crafted file name
 trigger either action (SECURITY_REVIEW #48). Records that straddle two
 ring reads are now reassembled (#49). Actor UIDs are logged in the initial
 user namespace. A `truncated` boolean
 reports when the event type, typed string, or message was shortened. The
-64 KiB ring caps lines at 640 bytes, discards oldest whole records on
-saturation, and exposes a loss counter. The CLI/health, daemon-event,
+64 KiB ring caps lines at 1024 bytes (640 before P1-1 was finished),
+discards oldest whole records on saturation, and exposes a loss counter. The CLI/health, daemon-event,
 TLS-forwarding (CA rotation included) and evidence export/verify suites
 are built against the OpenSSL development headers and run as root in the
 CI gate on every push and pull request.
@@ -322,17 +324,49 @@ Gap detection is now exact:
 So a consumer can detect gaps, correlate events across a reboot, and parse
 records without the message text.
 
-The in-kernel tests for the record format (every field, `truncated`,
-typed classification from a producer), ring saturation (the surviving
-records are contiguous, the sequence gap equals `events_dropped`) and both
-loss counters ran in CI on 6.12.114 under KVM: 126/126
-(`docs/vm/results/08-ci-kernel-boot-6.12/`).
+Target identity, paths and deferred work (finished 2026-11-01, PRs #11 and
+#12):
 
-Still missing for *Done*: target values are not consistently typed PID/UID
-identities and can be descriptive labels. Cross-process memory-access events
-now include target PID and UID, but other target identities remain partial;
-deferred work may record the kernel worker rather than the initiating userspace
-actor. Sustained-throughput behavior is not measured.
+* Every producer names its target with a typed `target_pid`/`target_uid`.
+  A denial of the caller's own action names the caller; ptrace-style events
+  name the other task; the cooldown block names the blocked UID. Only the
+  boot-time `event_log` record has a null target.
+* `object` holds up to 256 bytes, so a path is whole in a typed field and
+  the daemon takes the TimeVault path from it instead of the message. Before,
+  the 64-byte bound meant a longer path marked the record truncated, and the
+  daemon then never quarantined it (SECURITY_REVIEW #52). Longer paths are
+  cut, flagged `truncated`, and never acted on. Lines are capped at 1024
+  bytes and built in a static buffer under the ring lock, not on the hook's
+  stack.
+* `actor.kernel_started` is true for kernel threads and for processes the
+  kernel started itself (a `modprobe` for an autoload, a core-dump handler).
+  The kernel does not keep the userspace task that caused such work, so the
+  record says that its actor is a helper instead of passing the helper off
+  as the initiator.
+* A read now returns whole records only. A read that stopped mid-record
+  could have its tail discarded by a producer making room, and the next
+  record was then lost without being counted (SECURITY_REVIEW #53).
+* What a record can reveal, and who can read each copy, is documented in
+  `kernel/security/secure_sudo/INTEGRATION.md`.
+
+In-kernel tests on 6.12.114 under KVM in CI, 135/135 (run 41278080075,
+`docs/vm/results/11-ci-kernel-boot-6.12-p1-1/`): the record format (every
+field, `truncated`, typed classification), a self-targeted denial's typed
+target, a 220-byte path whole in `object`, the audit feed, a denial from a
+kernel-started core-dump handler, ring saturation (surviving records are
+contiguous and the sequence gap equals `events_dropped`), both loss
+counters, and a sustained burst. In the burst one non-sudo process raised
+20,000 denials while the test read the ring in 4 KiB chunks: every read
+ended at a record boundary and every record was read or counted as
+dropped. On the CI runner's 2-vCPU KVM guest that was 20,000 records in
+0.10 s (about 200,000/s, 474 bytes on average), all read, none dropped. With
+no reader the 64 KiB ring holds about 138 such records before it starts
+dropping the oldest. These rates depend on the machine; the accounting is
+what is checked.
+
+Not part of P1-1: a kernel-side rate limit (there is none; saturation drops
+the oldest records and counts them) and the initiating task of deferred
+work, which the kernel does not record.
 
 ### P1-2 Remote forwarding — partial
 

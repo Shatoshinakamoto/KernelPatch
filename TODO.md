@@ -6,10 +6,10 @@ its companion tools safer to build, deploy, operate, and trust during an
 incident. This is a roadmap, not a claim that the existing protections are
 absent or that the project is already production-certified.
 
-Execution update: P1-2 and P1-4 meet their **Done when** criteria. P1-1 and
-P1-3 are still in progress; their remaining acceptance gaps are tracked in
-[docs/ROADMAP_STATUS.md](docs/ROADMAP_STATUS.md). Keep their checkboxes open
-until each item's full **Done when** criteria is met.
+Execution update: P1-1, P1-2 and P1-4 meet their **Done when** criteria.
+P1-3 is still in progress; its remaining acceptance gaps are tracked in
+[docs/ROADMAP_STATUS.md](docs/ROADMAP_STATUS.md). Keep its checkbox open
+until its full **Done when** criteria is met.
 
 ## Scope and current baseline
 
@@ -137,7 +137,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
 
 ## P1 — make security events dependable incident evidence
 
-- [ ] **P1-1: Give kernel events a stable, loss-aware schema.**
+- [x] **P1-1: Give kernel events a stable, loss-aware schema.**
   - Include a schema version, boot identifier, monotonic and wall-clock time,
     event sequence, event type, actor/target identity, operation, object
     identity where available, decision, and reason.

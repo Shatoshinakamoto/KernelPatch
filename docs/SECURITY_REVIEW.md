@@ -919,6 +919,32 @@ one-shot entry would need the password, and the STIG VM run checks that
 before its reboot. Host tests: `tests/install/test-install.sh` (flat menu,
 password check, drop-in upgrade).
 
+### 52. TimeVault never quarantined a binary whose path was longer than 64 bytes (#48 fix, fixed 2026-11-01) — SI-7 / AU-3
+
+Since #48 the daemon acts only on a record whose `truncated` flag is false,
+so that a cut-off path can never name another file. The kernel bounded the
+typed `object` field, which holds the path, at 64 output bytes and set the
+flag when it cut it. So a tampered or unlisted binary under a path of 65
+bytes or more (common under `/usr/lib/...` or `/opt/...`) was denied at exec
+but never quarantined or wiped, and nothing said so apart from the record's
+flag. `object` now holds 256 bytes and the daemon takes the path from it
+rather than from the message (P1-1); longer paths are still never acted on.
+In-kernel test: a 220-byte path is whole in `object`, record not truncated.
+Host tests: the daemon takes a 244-byte path whole and ignores the message.
+
+### 53. A ring read that ended mid-record could lose the next record without counting it (v12, fixed 2026-11-01) — AU-9 / AU-5
+
+A read returned whatever bytes were queued, up to the reader's buffer, so it
+usually ended inside a record (the daemon reads 8 KiB at a time). If the ring
+then filled before the next read, the producer making room discarded the
+rest of that record and counted one drop, and the reader joined the half it
+held to the next record. That record was then unparseable: lost without
+being counted, which made a sequence gap one larger than `events_dropped`,
+and a garbled line reached the log. Reads now return records only up to the
+last whole one that fits (a buffer smaller than one record still gets
+bytes). In-kernel test: 20,000 denials read in 4 KiB chunks, every read ends
+at a record boundary and every record is read or counted.
+
 ---
 
 ## Residual notes / assumptions

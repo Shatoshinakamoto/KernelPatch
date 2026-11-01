@@ -169,6 +169,16 @@ not inferred from message text. Non-ASCII message bytes are encoded as
 provide an event buffer; it is not a complete audit backlog accounting
 interface.
 
+What a record can reveal. Records hold UIDs and PIDs, process names
+(`comm`), and the paths, module names or hashes, sysctl names and exec
+targets a denial was about. Paths and process names are chosen by users, so
+they can carry personal or project names. No producer records file
+contents, command arguments, environment, passwords, OTP codes or keys.
+Every copy is root-only on the host: the ring is `0400`, the daemon's local
+log and queue are `0600` in `0700` directories. The audit feed (opt-in) is
+as readable as the host's audit log. A collector or an evidence bundle that
+receives the records needs the same protection as the host's own logs.
+
 Sequence numbers are given under the ring lock, in the order records enter
 the ring, starting at 1 each boot. Because the ring drops the oldest whole
 records, the records a reader sees form contiguous runs, and any jump in

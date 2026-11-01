@@ -188,7 +188,7 @@ In short:
   falls back to the old kernel when not committed, passes the four recovery
   drills, rolls back and uninstalls cleanly. Recorded runs:
   [docs/vm/results/](docs/vm/results/).
-* **6.12 LTS, the installer's default, in CI** (GitHub Actions, KVM): 126
+* **6.12 LTS, the installer's default, in CI** (GitHub Actions, KVM): 135
   in-kernel checks pass; the same install/fallback/commit/drills/removal run
   passes on Ubuntu 24.04; and after DISA STIG hardening the guest reboots
   into secure_sudo with AppArmor and the STIG release gate passes (only the

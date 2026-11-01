@@ -1,0 +1,41 @@
+GitHub Actions run 41278080075, job kernel-boot (commit 5dd815f, 2026-11-01)
+https://github.com/Shatoshinakamoto/KernelPatch/actions/runs/41278080075
+Same tree as main after PRs #11 and #12 were merged (b196dc9).
+
+Kernel: linux-6.12.114 from kernel.org, signature-verified by
+scripts/verify-kernel-source.sh; x86_64_defconfig + kvm_guest.config +
+tests/vm/kernel.config, built by tests/vm/build-test-kernel.sh
+(config_sha256 ff4a45ba6a70a877d635cdb1011fbabe038865c4476db9372ce7cacd39bdda59).
+Guest: tests/vm/boot-test.sh, QEMU with KVM (-cpu host, -smp 2, 1 GiB) on an
+ubuntu-24.04 runner, RAM-only initramfs, tests/vm/ss-functest.c.
+
+Console lines the script keeps (job log; records shortened by the test's
+own 200-character diagnostic limit):
+
+booting 6.12.114 under kvm (timeout 900s)
+SS_LSM lockdown,capability,landlock,yama,secure_sudo
+SS_LOCKDOWN [none] integrity confidentiality
+SS_FUNCTEST_DONE pass=135 fail=0
+# ss-functest on Linux 6.12.114
+# test module: /lib/modules/6.12.114/kernel/lib/test_module.ko
+# active LSMs: lockdown,capability,landlock,yama,secure_sudo
+# record: {"schema_version":1,"boot_id":"1d793200504ed2e9df8c4d3599b0e024","sequence":17,"realtime_ns":1793512860360810301,"monotonic_ns":1158348607,"event_type":"home_write","actor":{"pid":760,"uid":1000,"kern
+# helper record: {"schema_version":1,"boot_id":"1d793200504ed2e9df8c4d3599b0e024","sequence":38,"realtime_ns":1793512860372267293,"monotonic_ns":1169805589,"event_type":"sysctl_guard","actor":{"pid":782,"uid":0,"kerne
+# read 65412 bytes / 138 lines after overflow
+# throughput: 20000 records in 0.100 s (200077/s); reader got 20000 (200077/s, 9493039 bytes, 474 avg) and 0 were dropped
+
+All 135 in-kernel checks passed, with no skipped checks (skips are now
+printed to the job log) and no kernel BUG/WARNING. The run before it
+(41276617378, commit 6dd3638, same kernel code) also passed 135/135.
+
+New P1-1 checks in this run:
+- a self-targeted denial carries target_pid = actor pid and target_uid = 1000
+- an ordinary process is not marked kernel_started
+- a 220-byte path is whole in object and the record is not truncated
+- audit feed on: 20 denials still give 20 ring records; the copies reach
+  the audit subsystem or are counted in audit_events_dropped
+- a denial from a core-dump pipe handler (a process the kernel started) is
+  marked kernel_started, with target_uid 0
+- sustained burst: 20,000 denials each raised a record; every 4 KiB read
+  ended at a record boundary and every line was a whole record; read +
+  dropped = raised
