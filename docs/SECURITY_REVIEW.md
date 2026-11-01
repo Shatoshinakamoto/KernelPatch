@@ -1064,6 +1064,34 @@ remaining gap: files present before engaging are trusted by design.
 Tested in `tests/userspace/test-daemon-events.sh` (+28 checks, with an
 independent Python root) and `test-evidence-export.sh` (+5).
 
+### 61. The OTP master key was never TPM-sealed (v2–v12, built 2026-11-01, gap G3) — SC-12 / SC-28
+
+FEATURE_MAP #15 said the OTP secret was sealed with TPM2 when there is
+one; only a root-only key file existed, so a copy of the disk (or of
+`/var/lib/secure_sudo/otp`) was enough to decrypt the seed. Now `otp
+setup` seals a fresh master key with `systemd-creds encrypt
+--with-key=tpm2` (no PCRs bound, so firmware and Secure Boot updates do not
+lock the admin out) and keeps only `masterkey.tpm2`; it checks the TPM
+unseals it before relying on it, and falls back to the key file without a
+working TPM (`--key-store=tpm2` fails instead, changing nothing). `otp
+seal` and `otp unseal` move an existing key without changing the seed. A
+sealed key that will not unseal is an error, never silently replaced. The
+helper runs `systemd-creds` with a fixed environment, not the PAM caller's.
+Root on the running machine can still unseal it: the threat is offline
+copies. Tested with two software TPMs (`tests/userspace/test-otp.sh`, +20
+checks, required in CI) and in the Ubuntu VM with a software TPM on the
+secure_sudo kernel; the installer's `localmodconfig` now keeps the TPM
+drivers.
+
+### 62. `secure-sudo otp …` never reached the OTP helper's subcommand (v12–0.12, fixed 2026-11-01) — CM-6
+
+`cmd_otp` passed `otp` itself on as the helper's first argument, so
+`secure-sudo otp setup` (the command the installer, the Ansible play and
+COMMANDS.md tell admins to run) printed the helper's usage and failed;
+only calling `secure-sudo-otp` directly worked. Found while adding `otp
+seal`. Fixed like the PheonixBox hand-off, with two checks in
+`tests/userspace/test-cli.sh` against a stand-in helper.
+
 ---
 
 ## Residual notes / assumptions

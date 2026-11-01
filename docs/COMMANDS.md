@@ -466,7 +466,18 @@ Rotating one-time-password sudo helper (#14/#15). Delegated to
 | `otp show-qr` | render a scannable QR to a root-only PNG and print its `file://` path |
 | `otp verify [--pam]` | verify a password; `--pam` reads it from stdin (used by the PAM module) |
 | `otp reset [--prefix]` | regenerate the seed (keeps the prefix unless `--prefix`) |
-| `otp disable` | shred and remove all OTP secret material |
+| `otp disable` | shred and remove all OTP secret material (the sealed key too) |
+| `otp key-store` | say where the master key is: `tpm2` (sealed to this machine's TPM) or `file` |
+| `otp seal` | move the current master key into the TPM; the seed and the authenticator stay as they are |
+| `otp unseal` | move it back to the root-only key file (before replacing or clearing the TPM) |
+
+`otp setup` and `otp reset` take `--key-store=auto|tpm2|file`. `auto` (the
+default) seals the master key with `systemd-creds` when the TPM works and
+uses the root-only key file otherwise, and says which; `tpm2` fails, changing
+nothing, if it cannot seal. No PCRs are bound, so firmware and Secure Boot
+updates do not lock the admin out; a sealed copy only unseals on this
+machine's TPM. If the TPM is replaced or cleared, `otp reset
+--key-store=file` (as root, at the console) sets up a new seed.
 
 ```sh
 sudo secure-sudo otp setup --prefix

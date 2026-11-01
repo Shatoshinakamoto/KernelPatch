@@ -44,7 +44,7 @@ jobs:
           sudo apt-get install -y build-essential bc bison flex libelf-dev libssl-dev \
             libpam0g-dev libqrencode-dev zlib1g-dev libcrypt-dev shellcheck python3 \
             gnupg xz-utils curl nftables iproute2 netcat-openbsd zip unzip \
-            "linux-headers-$(uname -r)"
+            swtpm libtss2-tcti-swtpm0t64 "linux-headers-$(uname -r)"
 
       - name: Fetch and verify the installer's default kernel
         run: |
@@ -60,7 +60,9 @@ jobs:
 
       - name: Build gate
         run: |
-          sudo bash ci/build-gate.sh --kernel-tree "$KTREE" \
+          # SS_REQUIRE_SWTPM: the OTP tests must seal to a software TPM
+          # here (gap G3), not skip.
+          sudo SS_REQUIRE_SWTPM=1 bash ci/build-gate.sh --kernel-tree "$KTREE" \
             --headers "/usr/src/linux-headers-$(uname -r)" \
             --record "$RUNNER_TEMP/build-gate-record.txt"
 
@@ -141,7 +143,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client \
             build-essential bc bison flex libelf-dev libssl-dev libpam0g-dev libqrencode-dev \
-            zlib1g-dev libcrypt-dev debhelper rsync kmod cpio zstd gnupg xz-utils curl python3
+            zlib1g-dev libcrypt-dev debhelper rsync kmod cpio zstd gnupg xz-utils curl python3 \
+            swtpm swtpm-tools
           sudo chmod 666 /dev/kvm || true
 
       - name: Verified Ubuntu 24.04 cloud image
@@ -175,7 +178,8 @@ jobs:
 
       - name: Install, trial boot, fallback, commit, recovery drills, rollback, removal
         run: |
-          sudo bash tests/vm/distro/run-install-test.sh \
+          # VM_TPM=1: the guest gets a software TPM for the G3 steps.
+          sudo VM_TPM=1 bash tests/vm/distro/run-install-test.sh \
             "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$KOUT" "$RUNNER_TEMP/res-install"
 
       - name: STIG release gate in the VM (allowed results in tests/oscap/ubuntu2404-stig.expect)

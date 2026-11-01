@@ -445,12 +445,20 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
 * **Needs:** `pam_secure_otp` in sudo's PAM stack, set up before it is
   wired in (recovery exercise E3); a correct clock.
 * **Limits:** a real-time phishing relay still works. The secret is
-  AES-256-GCM under a root-only key file, **not TPM-sealed** (gap G3 in §7):
-  root, or anyone who reads an unencrypted disk, can decrypt it. Codes are
+  AES-256-GCM under a master key that is sealed to the TPM when the machine
+  has a working one (gap G3, built): a copy of the disk or of
+  `/var/lib/secure_sudo/otp` is then useless elsewhere. No PCRs are bound, so
+  root on the running machine can still have the TPM unseal it, and a TPM
+  replaced or cleared means `otp reset`. Without a TPM the key is a
+  root-only file, and anyone who reads an unencrypted disk can decrypt the
+  seed (`secure-sudo otp key-store` says which). Codes are
   valid for their time step (each accepted once). It protects only the PAM
   services it is added to.
-* **Tested by:** `tests/userspace/test-otp.sh`, `test-pam.sh` (real
-  `pam_unix` stacks as root), recovery exercise E3.
+* **Tested by:** `tests/userspace/test-otp.sh` (with two software TPMs in
+  CI: sealed key verifies, another TPM cannot unseal it, seal/unseal keep the
+  seed, clean fallback without a TPM), the Ubuntu VM run with a software TPM
+  on the secure_sudo kernel (G3 steps), `test-pam.sh` (real `pam_unix`
+  stacks as root), recovery exercise E3.
 
 ### #16 One-way lock (kernel)
 
@@ -604,7 +612,7 @@ Do not rely on them until they have tests.
 * **RAM-spike drop** is not a defence against memory exhaustion.
 * **The lock (#16)** is not the kernel's lockdown LSM, though it answers the
   same check for the integrity class while engaged.
-* **Encrypted OTP secret** is not TPM-sealed (yet: gap G3).
+* **Encrypted OTP secret** is TPM-sealed only on a machine with a working TPM; elsewhere it is a root-only key file (gap G3).
 * **"sudo"** in this project means "root or a member of an admin group",
   not "authenticated through sudo".
 * **NIST SP 800-53 control IDs** in SECURITY_REVIEW.md frame the review.
@@ -623,7 +631,7 @@ writing this document. Each is tracked in [TODO.md](../TODO.md) under
 |---|---|---|---|
 | G1 | FEATURE_MAP #11 | "The daemon finds SEA binaries by their fuse marker and registers them." Nothing did. | **Built 2026-11-01:** `secure-sudo node-scan`, run by the daemon at start and every `node_sea_scan_interval` minutes; `load` sends its finds after the hand-written list. |
 | G2 | FEATURE_MAP #13 | "The daemon keeps the Merkle tree over watched trees." It kept a flat SHA-256 manifest. | **Built 2026-11-01:** the manifest is a baseline taken when the vault engages; its Merkle root is logged and forwarded (baseline, load, findings, every checkpoint); the daemon puts back a rewritten manifest and `evidence-verify --timevault` flags one (SECURITY_REVIEW #60). |
-| G3 | FEATURE_MAP #15 | "Sealed with TPM2 when there is one, with a root-only key file as the fallback." Only the key file exists. | Seal the OTP key with the TPM (systemd-creds or tpm2-tools) when present, key file as fallback, swtpm in the distro VM test. |
+| G3 | FEATURE_MAP #15 | "Sealed with TPM2 when there is one, with a root-only key file as the fallback." Only the key file existed. | **Built 2026-11-01:** `otp setup` seals the master key with `systemd-creds` when the TPM works and falls back to the key file; `otp key-store`, `seal`, `unseal`; tested against software TPMs in CI and in the Ubuntu VM (SECURITY_REVIEW #61). |
 | G4 | README #5 "Block TPM clear" | Only the PPI route is blocked; `TPM2_Clear` through `/dev/tpm*` is not, and an LSM cannot read the command bytes. | Needs a decision: set a TPM lockout password at install, and/or restrict which programs may open `/dev/tpm*`. |
 
 Built during P1-5 because the docs already promised them:

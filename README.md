@@ -78,7 +78,7 @@ temporary/                        opt-in add-ons (below)
 | 12 | K | Restrict exec and `PROT_EXEC` mmap from `/tmp`, `/var/tmp`, `/dev/shm`. |
 | 13 | K + U | **TimeVault:** hash-based exec gate with allowlist (+ auto-update entries), size cap, package-manager deny, and quarantine of blocked binaries. |
 | 14 | U | **Rotating OTP sudo password:** prefix + 6-digit TOTP, verified by `pam_secure_otp`; QR rendered locally (`userspace/otp`). |
-| 15 | U | **Encrypted OTP secret:** AES-256-GCM under a root-only key file (not TPM-sealed), `mlock`ed at runtime, prefix stored as a yescrypt hash, each code accepted once (RFC 6238 §5.2). |
+| 15 | U | **Encrypted OTP secret:** AES-256-GCM under a master key sealed to the TPM when there is one (root-only key file otherwise; `otp key-store`), `mlock`ed at runtime, prefix stored as a yescrypt hash, each code accepted once (RFC 6238 §5.2). |
 | 16 | K | One-way config lock until reboot (TimeVault latches it); blocks module loads, kexec and kernel-memory patching while locked. |
 | 17 | K | **BinaryVault:** freeze every executable + shared library (write/truncate/unlink/rename/hardlink/chmod/xattr) for all UIDs incl. root. Updates via a `secure_sudo.binvault_maint=1` maintenance reboot. See [docs/BINARYVAULT.md](docs/BINARYVAULT.md). |
 | 18 | U | **STIG / OpenSCAP:** `scripts/stig-harden.sh` scan + two-pass remediate + known-issue patches; real results: DISA Ubuntu 24.04 STIG 61 pass / 1 fail in a container and 206 pass / 11 fail / 0 error in a VM after two passes (each remaining rule classified; final VM rescan pending), CIS L2 Server 190 / 17. See [docs/STIG.md](docs/STIG.md) and [docs/OSCAP_BUGS.md](docs/OSCAP_BUGS.md). |
@@ -203,7 +203,7 @@ In short:
   GitHub for every push and pull request; the VM jobs run weekly and on
   demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots, #48–#60 since).
+  (findings #35–#47 came from v12's tests and boots, #48–#62 since).
 * Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
   (P1-5); promises the code does not keep yet are tracked as features to
   build in [TODO.md](TODO.md), "Doc promises to build".

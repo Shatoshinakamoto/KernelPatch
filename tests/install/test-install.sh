@@ -183,7 +183,7 @@ mkroot
 pristine="$(snap)"
 I userspace --prebuilt "$STAGE" > /dev/null 2>&1
 # What the running daemon and CLI leave in their state directory.
-mkdir -p "$R/var/lib/secure_sudo/remote-queue"
+mkdir -p "$R/var/lib/secure_sudo/remote-queue" "$R/var/lib/secure_sudo/otp"
 for f in daemon.health load.health event-cursor event-cursor.tmp \
 	node_sea_auto.list node_sea_scan.cache node_sea_scan.cache.tmp.123 \
 	manifest manifest.tmp manifest.prev; do
@@ -203,6 +203,16 @@ echo '{"sequence":7}' > "$R/var/lib/secure_sudo/remote-queue/0000000007"
 I uninstall > "$T/out" 2>&1
 check "uninstall keeps undelivered remote events" test -s "$R/var/lib/secure_sudo/remote-queue/0000000007"
 check "... and says so" has 'kept /var/lib/secure_sudo/remote-queue'
+
+# A configured OTP is never thrown away by uninstall (G3: its key may be
+# sealed to the TPM; `otp disable` is the way to remove it).
+mkroot
+I userspace --prebuilt "$STAGE" > /dev/null 2>&1
+mkdir -p "$R/var/lib/secure_sudo/otp"
+echo sealed > "$R/var/lib/secure_sudo/otp/masterkey.tpm2"
+I uninstall > "$T/out" 2>&1
+check "uninstall keeps a configured OTP" test -s "$R/var/lib/secure_sudo/otp/masterkey.tpm2"
+check "... and says how to remove it" has "kept /var/lib/secure_sudo/otp: OTP is still set up"
 
 # An install that dies half-way can still be removed.
 mkroot

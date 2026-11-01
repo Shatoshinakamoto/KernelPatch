@@ -59,6 +59,12 @@ printf 'LoadState=loaded\nActiveState=%s\nUnitFileState=%s\nLastTriggerUSec=Mon 
 	"$active" "$enabled" "$result" "$exit_status" "$exit_mono"
 STUB
 chmod 0755 "$SYSTEMCTL"
+# Stands in for secure-sudo-otp: records the arguments it was given.
+cat > "$T/otp-stub" <<STUB
+#!/bin/sh
+printf '%s|' "\$@" > "$T/otp-args"
+STUB
+chmod 0755 "$T/otp-stub"
 if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSYSFS="\"$SYS\"" -DSECFS="\"$SEC\"" -DCONFIG_DIR="\"$CFG\"" \
 	-DHEALTH_FILE="\"$HEALTH\"" \
@@ -68,6 +74,7 @@ if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSYSTEMCTL="\"$SYSTEMCTL\"" \
 	-DADDON_STATE_DIR="\"$ADDON_STATE\"" \
 	-DSS_STATE_DIR="\"$T/state\"" \
+	-DOTP_HELPER="\"$T/otp-stub\"" \
 	-DSS_TESTING \
 	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c node_scan.c -lcrypto); then
 	not_ok "CLI builds with test paths"; tap_done; exit 1
@@ -410,4 +417,10 @@ if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null; then
 else
 	skip "non-root and ownership cases (need root and setpriv)"
 fi
+# `secure-sudo otp ...` hands the subcommand to the helper, not "otp".
+rm -f "$T/otp-args"
+SS_TEST_ALLOW_ROOT=1 "$CLI" otp seal >/dev/null 2>&1
+eq "otp passes its subcommand to the helper (not \"otp\")" "$(cat "$T/otp-args" 2>/dev/null)" "seal|"
+SS_TEST_ALLOW_ROOT=1 "$CLI" otp setup --key-store=file --prefix >/dev/null 2>&1
+eq "... with its options" "$(cat "$T/otp-args" 2>/dev/null)" "setup|--key-store=file|--prefix|"
 tap_done
