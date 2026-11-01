@@ -215,7 +215,7 @@ static void ss_event_v(const struct ss_event_fields *fields,
 		       const char *fmt, va_list args)
 {
 	char *const line = ss_line, *const message = ss_msg;
-	char event_type[48];
+	char event_type[48], *audit_copy = NULL;
 	struct timespec64 ts;
 	u64 realtime_ns, monotonic_ns, seq;
 	int n, i, msg_len, type_len = 0;
@@ -326,13 +326,21 @@ static void ss_event_v(const struct ss_event_fields *fields,
 		atomic64_inc(&ss_ring_dropped);
 	}
 	kfifo_in(&ss_ring, line, n);
-	/* The audit copy is made from the same buffer, so still under the
-	 * lock; GFP_ATOMIC audit never waits (see ss_audit_event()). */
-	line[n - 1] = '\0';
-	ss_audit_event(line);
+	/* The shared buffer is reused once the lock is dropped, so the audit
+	 * feed gets its own copy, and the audit subsystem is called outside
+	 * our lock. */
+	if (READ_ONCE(ss_cfg.audit_events)) {
+		audit_copy = kmemdup_nul(line, n - 1, GFP_ATOMIC);
+		if (!audit_copy)
+			atomic64_inc(&ss_audit_dropped);
+	}
 	spin_unlock_irqrestore(&ss_ring_lock, flags);
 
 	wake_up_interruptible(&ss_ring_wq);
+	if (audit_copy) {
+		ss_audit_event(audit_copy);
+		kfree(audit_copy);
+	}
 }
 
 void ss_event_record(const struct ss_event_fields *fields, const char *fmt, ...)

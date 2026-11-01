@@ -72,6 +72,10 @@ grep -q 'SS_BOOT_OK' "$log" || { echo "guest did not boot (qemu rc $qrc); see $l
 grep -q '^SS_FUNCTEST_DONE' "$log" || { echo "tests did not finish (qemu rc $qrc); see $log" >&2; exit 2; }
 grep -E '^SS_(LSM|LOCKDOWN|FUNCTEST_DONE|KERNEL_PROBLEM)' "$log"
 grep '^not ok' "$res/functest.tap"
+# Skips and diagnostics (measured rates, sample records) go to the job log
+# too: CI artifacts are not always reachable, and a check that skipped must
+# not look the same as one that passed.
+grep -E '^#|^ok .*# SKIP' "$res/functest.tap"
 if grep -q '^SS_KERNEL_PROBLEM' "$log"; then
 	echo "kernel reported a BUG/WARNING during the run" >&2; exit 1
 fi
