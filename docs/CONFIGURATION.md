@@ -68,8 +68,67 @@ locked.
 * `host` — the kernel denies raw / `AF_PACKET` sockets, so packet sniffing
   fails even with libpcap present.
 * `lan-only` — the daemon installs an nftables table allowing only traffic
-  to/from the detected LAN subnet(s).
-* `public-only` — the daemon drops traffic to/from the LAN subnet(s).
+  to/from the LAN and local subnets (plus DHCP and neighbour discovery).
+* `public-only` — the daemon drops traffic to/from the LAN subnets, except
+  DHCP, DHCPv6, neighbour discovery and DNS to a LAN gateway.
+
+**None of these isolates a host.** `host` only stops sniffing and packet
+forging: ordinary TCP/UDP still goes anywhere. `lan-only` still lets a
+compromised host reach (and exfiltrate to) anything on the LAN, and
+`public-only` lets it reach the whole internet. To cut a host off during an
+incident, use the separate, audited procedure: `secure-sudo contain network`
+(INCIDENT_RESPONSE.md section 4), which keeps only loopback, your SSH session,
+the log collector and addresses you name, records who did it, and is undone
+with `contain release network`. Its table and this one are independent and
+stack: a packet must pass both.
+
+#### What counts as the LAN (`/etc/secure_sudo/net.conf`)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `lan_interfaces` | `auto` | `auto`: every interface with a global address except loopback, VPN interfaces and bridges without a default route; or a list of names. Interfaces with addresses that are not LAN or VPN are **local** (container bridges): reachable in both modes. |
+| `vpn_interfaces` | `wg* tun* tap* ppp* tailscale* zt* nordlynx* ipsec* vti* utun*` | Never LAN. Any non-Ethernet/Wi-Fi/InfiniBand link (WireGuard, tun, ppp, GRE) is treated as a VPN too. |
+| `extra_lan` | (empty) | More LAN CIDRs, IPv4 or IPv6. |
+| `forward` | `1` | Also filter traffic this host forwards, so routed containers and network namespaces follow the mode. |
+| `on_stop` | `keep` | What a clean daemon stop does with the rules: `keep` or `remove`. |
+
+Both IPv4 and IPv6 are covered, on every LAN interface (earlier versions used
+only the default-route interface, so `public-only` let a second LAN NIC
+through, SECURITY_REVIEW #67). With a VPN, `lan-only` cuts the tunnel (its
+endpoint is not on the LAN) and `public-only` lets it work while the LAN stays
+blocked, inside the tunnel too. A network namespace or container with its own
+uplink (macvlan, a passed-through NIC) never passes through this host's
+tables and is **not** covered; use `forward = 1` with routed or bridged
+networking, or apply the policy inside that namespace.
+
+#### Failure modes and the fail-safe policy
+
+* The daemon re-checks the network every 15 s. A DHCP renewal onto another
+  subnet, a new interface or a removed address re-applies the rules (logged
+  `network changed, rules re-applied`); when nothing changed, nft is not
+  touched.
+* Rules are replaced in one nft transaction: never a moment without rules.
+  An nft error, an unknown mode or a bad `net.conf` value leaves the loaded
+  rules in place and is logged.
+* **No LAN subnet found** (cable out, DHCP lost, boot before an address):
+  rules already loaded for this mode stay. With none loaded yet, fail-closed
+  *pending* rules load instead: `lan-only` allows only loopback, local
+  bridges, DHCP and neighbour discovery; `public-only` drops every private
+  range (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10). The
+  daemon retries every 5 s and `secure-sudo health` shows
+  `Network policy rules: pending` (degraded) until the real rules load.
+* **Daemon stop:** with `on_stop = keep` the rules stay, so stopping or
+  killing the daemon never opens the network; a crash always keeps them. The
+  rules do not survive a reboot; the daemon re-applies them at start, and
+  the gap before that is the same as any firewall loaded by a service.
+  `secure-sudo net monitor` lifts them; uninstall removes the table.
+* Other firewalls (nftables tables, iptables-nft, ufw, firewalld) are never
+  touched: only `inet secure_sudo` is replaced or deleted. A drop in any
+  table is final, so this policy cannot loosen theirs, and an `accept` in
+  theirs cannot bypass this one.
+
+Tested against real traffic in network namespaces by
+`tests/userspace/test-netpolicy.sh`.
 
 ### Sudo brute-force cooldown (#8)
 

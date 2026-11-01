@@ -239,7 +239,16 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     relying on undocumented developer knowledge, and every destructive
     automation has tested guardrails and a recovery procedure.
 
-- [ ] **P1-8: Verify network policy behavior and failure modes.**
+- [x] **P1-8: Verify network policy behavior and failure modes.**
+  - Done 2026-11-01: tests/userspace/test-netpolicy.sh drives real traffic
+    through network namespaces (IPv4/IPv6, two LAN NICs, a VPN, a DHCP
+    subnet change, routed containers, existing nftables and iptables-nft
+    rules, restart, failed detection, on_stop). It found four gaps, built
+    (SECURITY_REVIEW #67): every LAN interface, a forward chain, refresh
+    every 15 s, fail-closed pending rules. Fail-safe policy and "not host
+    isolation" in docs/CONFIGURATION.md#net_mode; the isolation procedure is
+    `secure-sudo contain network` (P1-7). Real NIC/Wi-Fi/VPN hardware
+    checks stay in docs/HARDWARE_SMOKE_TEST.md.
   - Test IPv4 and IPv6, multiple interfaces, VPNs, changing DHCP/subnets,
     network namespaces, pre-existing nftables rules, daemon restarts, and
     failed subnet detection for each network mode.

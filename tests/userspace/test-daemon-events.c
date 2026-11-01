@@ -406,7 +406,7 @@ int main(int argc, char **argv)
 		    "a reboot is recorded with both boot ids; its first 2 records are reported missing");
 		tap(write_health_heartbeat() == 0 && (f = fopen(HEALTH_FILE, "re")) &&
 		    fgets(hb, sizeof(hb), f) && !fclose(f) &&
-		    strstr(hb, " event_gaps=3 events_missing=7\n") &&
+		    strstr(hb, " event_gaps=3 events_missing=7 ") &&
 		    !exists(HEALTH_FILE ".tmp"),
 		    "the heartbeat carries the gap counters and is renamed into place");
 	}
@@ -634,6 +634,69 @@ int main(int argc, char **argv)
 		tap(exists(fa) && exists(fsp) && !exists(fb) &&
 		    log_contains("\"new\":2,\"changed\":0") == 1,
 		    "G2: files the v1 manifest never listed are treated as new");
+	}
+
+	/* ---- P1-8: net_mode apply, refresh, pending and stop ----
+	 * HELPER_NET is net-wrapper.sh: it appends its arguments to net-calls
+	 * and exits with the status in net-rc. NET_REFRESH_SECS is 0, so every
+	 * pass of an applied lan-only/public-only mode is a refresh. */
+	{
+		char calls[1024], hb[1024];
+		FILE *f;
+		size_t n;
+
+#define NET_RC(v) write_file(NETDIR "/net-rc", v "\n")
+#define NET_CALLS() (snprintf(path, sizeof(path), NETDIR "/net-calls"), \
+		     (f = fopen(path, "re")) ? (n = fread(calls, 1, sizeof(calls) - 1, f), \
+		     calls[n] = '\0', fclose(f), calls) : (calls[0] = '\0', calls))
+#define NET_RESET() unlink(NETDIR "/net-calls")
+		mkdir(SYSFS, 0700);
+		write_file(SYSFS "/net_mode", "lan-only\n");
+		NET_RC("3");
+		apply_net_mode();
+		apply_net_mode();
+		tap(!strcmp(NET_CALLS(), "lan-only\nlan-only\n") &&
+		    !strcmp(net_state, "pending"),
+		    "P1-8: no LAN subnet yet (helper 3): pending, retried on every pass");
+		NET_RESET();
+		NET_RC("0");
+		apply_net_mode();
+		tap(!strcmp(NET_CALLS(), "lan-only\n") && !strcmp(net_state, "applied"),
+		    "P1-8: the real rules load once a subnet appears");
+		NET_RESET();
+		apply_net_mode();
+		apply_net_mode();
+		tap(!strcmp(NET_CALLS(), "lan-only\nlan-only\n") &&
+		    !strcmp(net_state, "applied"),
+		    "P1-8: an applied lan-only mode is refreshed (DHCP/subnet changes are picked up)");
+		NET_RESET();
+		NET_RC("1");
+		apply_net_mode();
+		tap(!strcmp(net_state, "failing"),
+		    "P1-8: a failed refresh is reported (the loaded rules stay)");
+		NET_RC("3");
+		apply_net_mode();
+		tap(!strcmp(net_state, "pending"),
+		    "P1-8: losing the subnet after a refresh failure: pending");
+		NET_RESET();
+		NET_RC("0");
+		write_file(SYSFS "/net_mode", "monitor\n");
+		apply_net_mode();
+		apply_net_mode();
+		tap(!strcmp(NET_CALLS(), "monitor\n") && !strcmp(net_state, "off"),
+		    "P1-8: monitor is applied once and not refreshed");
+		write_health_heartbeat();
+		f = fopen(HEALTH_FILE, "re");
+		n = f ? fread(hb, 1, sizeof(hb) - 1, f) : 0;
+		hb[n] = '\0';
+		if (f)
+			fclose(f);
+		tap(strstr(hb, " net_state=off\n") != NULL,
+		    "P1-8: the heartbeat reports the network policy state");
+		NET_RESET();
+		net_on_stop();
+		tap(!strcmp(NET_CALLS(), "stop\n"),
+		    "P1-8: a clean stop runs the helper's on_stop policy");
 	}
 
 	printf("1..%d\n", n_test);
