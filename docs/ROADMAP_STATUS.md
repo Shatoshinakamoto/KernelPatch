@@ -322,14 +322,17 @@ Gap detection is now exact:
 So a consumer can detect gaps, correlate events across a reboot, and parse
 records without the message text.
 
+The in-kernel tests for the record format (every field, `truncated`,
+typed classification from a producer), ring saturation (the surviving
+records are contiguous, the sequence gap equals `events_dropped`) and both
+loss counters ran in CI on 6.12.114 under KVM: 126/126
+(`docs/vm/results/08-ci-kernel-boot-6.12/`).
+
 Still missing for *Done*: target values are not consistently typed PID/UID
 identities and can be descriptive labels. Cross-process memory-access events
 now include target PID and UID, but other target identities remain partial;
 deferred work may record the kernel worker rather than the initiating userspace
-actor. A source-level VM assertion checks the truncation field and normal
-short-event value, but it has not yet been run in a clean VM; saturation and
-loss-counter behavior also need a fresh VM result. Sustained-throughput
-behavior is not measured.
+actor. Sustained-throughput behavior is not measured.
 
 ### P1-2 Remote forwarding — partial
 
