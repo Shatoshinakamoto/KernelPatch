@@ -271,6 +271,16 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
   - **Done when:** an operator can verify remotely that the expected boot
     chain and policy are active, or the feature is explicitly deferred with
     its blocker and threat-model rationale.
+  - **Progress (2026-11-01):** part 1 is built. `secure-sudo attest quote`
+    gives a TPM quote of the boot PCRs bound to a nonce and a host report,
+    and `secure-sudo-attest-verify` enrolls hosts and verifies bundles.
+    Enrollment, verifier trust, revocation, recovery, and the IMA/EVM,
+    fs-verity and dm-verity evaluation are in
+    [docs/ATTESTATION.md](docs/ATTESTATION.md). Tested by `test-attest.sh`.
+    Still to build: part 2, where the kernel measures every policy change
+    into a PCR with a securityfs event log so the policy is proven and not
+    reported; EK certificate checks / credential activation; and replay of
+    the IMA and TPM event logs in the verifier.
 
 - [ ] **P2-2: Promote add-ons through an explicit maturity gate.**
   - Keep `temporary/` features opt-in until each has automated tests,

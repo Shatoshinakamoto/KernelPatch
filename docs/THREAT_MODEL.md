@@ -624,6 +624,28 @@ Do not rely on them until they have tests.
 
 ---
 
+### Remote attestation (P2-1)
+
+* **Threat:** a host that booted a different firmware, boot loader, kernel,
+  initramfs or command line (an evil-maid or bootkit change, or a kernel
+  without secure_sudo) still looks normal to its operator.
+* **Control:** `secure-sudo attest quote` returns a TPM quote of the boot
+  PCRs that signs the verifier's nonce together with a host report.
+  `secure-sudo-attest-verify` on a trusted machine checks it against a host
+  record enrolled on a trusted boot ([ATTESTATION.md](ATTESTATION.md)).
+* **Needs:** a TPM 2.0, and an enrollment done at a time and place the
+  operator controls (trust on first use: EK certificate checks are not built
+  yet).
+* **Limits:** the boot chain is proven, because root cannot forge a quote
+  or set a PCR. The policy digest, LSM state and lock state are
+  *reported* by root on the host until part 2 (kernel policy measurement
+  into a PCR) is built. A firmware-menu TPM clear changes the key, and the
+  verifier reports it.
+* **Tested by:** `tests/userspace/test-attest.sh` (two software TPMs:
+  enroll, verify, wrong and replayed nonces, edited reports and PCR values,
+  another TPM, a PCR change, re-enrollment with `--previous`, and the CLI
+  digest).
+
 ## 6. What names and compliance mappings do not mean
 
 * **TimeVault** is not about time. It is an exec allowlist pinned by hash.

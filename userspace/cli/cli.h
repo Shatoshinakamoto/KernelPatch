@@ -104,6 +104,7 @@ int knob_values_equal(const struct knob *k, const char *cfg, const char *live);
 char *policy_list_payload(const struct listmap *m, size_t *len, int *have,
 			  int *auto_added, int *auto_dropped);
 int policy_locked(void);	/* 1, 0, or -1 when unknown */
+int policy_live_digest(char out[65]);	/* P2-1 attestation */
 int policy_diff(int print);	/* differences config vs kernel, -1: no LSM */
 int policy_snapshot(const char *reason, char *id, size_t idlen, char *sums,
 		    size_t sumslen);

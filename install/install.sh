@@ -131,18 +131,18 @@ install_deps() {
 		apt-get install -y build-essential fakeroot libncurses-dev bison flex \
 			libssl-dev libelf-dev bc rsync kmod cpio dwarves zstd \
 			libpam0g-dev libqrencode-dev zlib1g-dev nftables zip curl ca-certificates \
-			gnupg xz-utils debhelper ;;
+			gnupg xz-utils debhelper libtss2-dev ;;
 	fedora)
 		dnf install -y gcc gcc-c++ make bison flex openssl-devel elfutils-libelf-devel \
 			bc rsync kmod cpio dwarves zstd ncurses-devel rpm-build \
-			pam-devel qrencode-devel zlib-devel nftables zip curl gnupg2 xz ;;
+			pam-devel qrencode-devel zlib-devel nftables zip curl gnupg2 xz tpm2-tss-devel ;;
 	suse)
 		zypper --non-interactive install -y gcc gcc-c++ make bison flex libopenssl-devel \
 			libelf-devel bc rsync kmod cpio zstd ncurses-devel rpm-build \
-			pam-devel qrencode-devel zlib-devel nftables zip curl gpg2 xz ;;
+			pam-devel qrencode-devel zlib-devel nftables zip curl gpg2 xz tpm2-0-tss-devel ;;
 	arch)
 		pacman -Sy --noconfirm --needed base-devel bc rsync kmod cpio zstd \
-			openssl libelf pam qrencode zlib nftables zip curl gnupg xz ;;
+			openssl libelf pam qrencode zlib nftables zip curl gnupg xz tpm2-tss ;;
 	esac
 }
 
@@ -919,6 +919,7 @@ stage_userspace() { # DIR
 	make -C "$US_SRC/daemon" DESTDIR="$s" install
 	make -C "$US_SRC/otp" DESTDIR="$s" install
 	make -C "$US_SRC/pheonixbox" DESTDIR="$s" install
+	make -C "$US_SRC/attest" DESTDIR="$s" install
 	# scripts/: standalone TimeVault allowlist tool + admin detector. The CLI
 	# has both built in (secure-sudo vault-allow / detect-admins); these are
 	# the dependency-free bash equivalents.

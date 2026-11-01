@@ -19,6 +19,7 @@ userspace/
               pam_secure_otp.so   verifies the rotating OTP password
   daemon/     secure-sudod        logs, cooldown kill, nft, TimeVault, health heartbeat
   otp/        secure-sudo-otp     TOTP setup/verify, local QR, encrypted secret
+  attest/     secure-sudo-attest  TPM quote of the boot chain + verifier (P2-1)
   config/     templates for /etc/secure_sudo/
 scripts/
   timevault-whitelist.sh          bash TimeVault allowlist tool (scan/add/remove/list/wipe)
@@ -35,6 +36,7 @@ docs/
   ROADMAP_STATUS.md               where each Strategic TODO item stands, with evidence
   SECURITY_REVIEW.md              NIST-framed review: findings + fixes
   THREAT_MODEL.md                 per control: threat, preconditions, limits, test
+  ATTESTATION.md                  remote attestation: enroll, verify, revoke, recover (P2-1)
   STIG.md                         STIG/CIS tooling, control map, results
   OSCAP_BUGS.md                   every oscap bug, root cause, patch, before/after
   FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
@@ -209,3 +211,5 @@ In short:
 * Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
   (P1-5); promises the code does not keep yet are tracked as features to
   build in [TODO.md](TODO.md), "Doc promises to build".
+* Remote attestation of the boot chain (P2-1 part 1):
+  [docs/ATTESTATION.md](docs/ATTESTATION.md).

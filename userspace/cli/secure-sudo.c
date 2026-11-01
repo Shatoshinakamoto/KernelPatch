@@ -41,6 +41,9 @@
 #define PHEONIXBOX_HELPER "/usr/bin/secure-sudo-pheonixbox"
 #define EVIDENCE_HELPER "/usr/libexec/secure-sudo/evidence-export.sh"
 #define EVIDENCE_VERIFY_HELPER "/usr/libexec/secure-sudo/evidence-verify.py"
+#ifndef ATTEST_HELPER
+#define ATTEST_HELPER "/usr/libexec/secure-sudo/attest-report.sh"
+#endif
 #ifndef CONTAIN_HELPER
 #define CONTAIN_HELPER "/usr/libexec/secure-sudo/contain.sh"
 #endif
@@ -1612,6 +1615,32 @@ static int cmd_evidence_export(int argc, char **argv)
 }
 
 /*
+ * `attest` (TODO P2-1): `digest` prints the live policy digest and lock
+ * state (the report helper calls it); everything else is the helper's
+ * (quote, ak), which runs the TPM tool.
+ */
+static int cmd_attest(int argc, char **argv)
+{
+	char d[65];
+	int locked;
+
+	if (argc >= 3 && !strcmp(argv[2], "digest")) {
+		if (policy_live_digest(d) != 0) {
+			fprintf(stderr, "secure-sudo: cannot read the live policy\n");
+			return 1;
+		}
+		locked = policy_locked();
+		printf("policy_sha256=%s locked=%d\n", d, locked);
+		return 0;
+	}
+	argv[1] = (char *)ATTEST_HELPER;
+	execv(ATTEST_HELPER, argv + 1);
+	fprintf(stderr, "secure-sudo: cannot exec %s: %s\n", ATTEST_HELPER,
+		strerror(errno));
+	return 1;
+}
+
+/*
  * `contain` (TODO P1-7): the helper does the work (network, account,
  * process; release; status); every action that ran is recorded in the
  * policy history, whatever its outcome. A dry run, `status` and an answer
@@ -1695,6 +1724,8 @@ static void usage(void)
 "                       hash-checked; taken before every load/set/lock/restore\n"
 "  history [-n N] [--json] [--verify]   who changed policy, what, and the result\n"
 "  restore ID [--no-load] [-y]   put a snapshot's config back and load it\n"
+"  attest quote --nonce HEX | ak | digest  remote attestation: a TPM-signed\n"
+"                       quote of the boot chain + policy for secure-sudo-attest-verify\n"
 "  contain <network|account USER|process PID> [--dry-run] [-y]  incident\n"
 "                       containment, reversible first; contain release ...; status\n"
 "  status               show current kernel policy state\n"
@@ -1804,6 +1835,8 @@ int main(int argc, char **argv)
 		return cmd_restore(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "contain"))
 		return cmd_contain(argc, argv);
+	if (!strcmp(argv[1], "attest"))
+		return cmd_attest(argc, argv);
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 	if (!strcmp(argv[1], "health") &&

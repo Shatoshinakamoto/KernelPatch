@@ -291,6 +291,28 @@ entries also report baseline age. An enabled scan timer with no root-owned
 regular baseline, a baseline older than 30 days, or a future timestamp
 degrades health.
 
+## `secure-sudo attest <quote|ak|digest>`
+
+Remote attestation (TODO P2-1). Full guide: [ATTESTATION.md](ATTESTATION.md).
+
+| Form | What it does |
+|---|---|
+| `attest quote --nonce HEX [--pcrs 0,1,...]` | Prints a bundle (JSON) for `secure-sudo-attest-verify` on another machine. It holds a host report (kernel, boot id, command line, whether the secure_sudo LSM is active, live policy digest and lock state, Secure Boot, TPM event log digest) and a TPM quote of the boot PCRs (default `0,1,2,3,4,5,7,8,9`) that signs `sha256(nonce \|\| report)`. The nonce must be at least 16 bytes of hex from the verifier. |
+| `attest ak` | Prints the attestation key's public part and name. |
+| `attest digest` | Prints `policy_sha256=<hex> locked=<0\|1>`, the digest of the policy that is currently loaded in the kernel (settings and every list). Use it with `--allow-policy` when you enroll. |
+
+Needs root and a TPM. The key is a restricted primary key derived from the
+TPM's owner seed, so nothing is stored. While locked, the tool may still
+open the TPM because it is in the default `tpm_openers` list. The report's
+policy fields are what root on the host reports (`"policy_source":
+"reported"`). The quote proves the boot chain.
+
+```sh
+N=$(secure-sudo-attest-verify nonce)                         # verifier
+sudo secure-sudo attest quote --nonce "$N" > bundle.json     # host
+secure-sudo-attest-verify verify bundle.json --host hosts/web1.json --nonce "$N" --max-age 300
+```
+
 ## `secure-sudo evidence-export OUTPUT.tar.gz [--signing-key EXTERNAL.pem]`
 
 Create a root-only incident bundle containing local secure_sudo logs,
