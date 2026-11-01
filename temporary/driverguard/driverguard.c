@@ -50,6 +50,7 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_trust.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef DG_CONF
@@ -66,6 +67,7 @@
 
 struct cfg {
 	int enforce;
+	int trust;			/* SST_LOCAL or SST_SIGNED (baseline_trust) */
 	int rotate;			/* 1 = hourly-rotating backups, 0 = fixed */
 	char driver_dir[PATH_MAX];	/* module tree root */
 	char backup_root[PATH_MAX];
@@ -89,10 +91,12 @@ static int load_cfg(struct cfg *c, FILE *report)
 		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
 		{ "driver_dir", SSC_PATH, c->driver_dir, sizeof(c->driver_dir), 1, 0, NULL },
 		{ "backup_root", SSC_PATH, c->backup_root, sizeof(c->backup_root), 1, 0, NULL },
+		{ "baseline_trust", SSC_ENUM, &c->trust, 0, 0, 0, sst_modes },
 		SSC_END
 	};
 
 	c->enforce = 0;
+	c->trust = SST_LOCAL;
 	c->rotate = 1;
 	default_driver_dir(c->driver_dir, sizeof(c->driver_dir));
 	snprintf(c->backup_root, sizeof(c->backup_root), "%s", DEF_BACKUP);
@@ -221,7 +225,7 @@ static int backup_bucket(const struct cfg *c, char *out, size_t n)
 	return store_bucket(root, c->rotate, out, n);
 }
 
-static int cmd_baseline(void)
+static int baseline_why(const char *why)
 {
 	struct cfg c;
 	struct base_ctx b = { 0 };
@@ -260,11 +264,17 @@ static int cmd_baseline(void)
 		return 1;
 	}
 	chmod(MANIFEST, 0600);
+	sst_announce("driverguard", MANIFEST, why, c.trust);
 	ssl_info("baseline: %zu modules hashed, %zu backed up to %s",
 		 b.files, b.backed, bucket);
 	printf("driverguard: baseline %zu modules, %zu backed up (%s)\n",
 	       b.files, b.backed, bucket);
 	return 0;
+}
+
+static int cmd_baseline(void)
+{
+	return baseline_why("baseline");
 }
 
 static int cmd_backup(void)
@@ -286,24 +296,23 @@ static int cmd_backup(void)
 }
 
 /* ---- scan / repair ---- */
-static int repair_module(const struct cfg *c, const char *path)
+static int repair_module(const struct cfg *c, const char *path, const char *sha)
 {
-	char root[PATH_MAX], blob[PATH_MAX];
+	char root[PATH_MAX], used[PATH_MAX], why[PATH_MAX + 128];
 
-	/* Backups may live under the Locus root or the configured one; try the
-	 * configured root first, then (if different) the Locus-named root. */
-	if (store_find_latest(c->backup_root, "drv", path, blob, sizeof(blob)) != 0) {
-		if (locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) != 0 ||
-		    store_find_latest(root, "drv", path, blob, sizeof(blob)) != 0) {
-			ssl_err("no backup found to repair %s", path);
-			return -1;
-		}
-	}
-	if (store_restore_compressed(blob, path) != 0) {
-		ssl_err("restore failed for %s (from %s)", path, blob);
+	/* keep what is there now before it is overwritten */
+	sst_evidence("driverguard", path, "repair", sha, NULL);
+	/* Backups may live under the configured root or the Locus-named one;
+	 * only one whose bytes match the baseline is ever written back. */
+	if (sst_restore_from_backups(c->backup_root, "drv", path, sha, used,
+				     sizeof(used), why, sizeof(why)) != 0 &&
+	    (locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) != 0 ||
+	     sst_restore_from_backups(root, "drv", path, sha, used, sizeof(used),
+				      why, sizeof(why)) != 0)) {
+		ssl_err("DRIVER not repaired: %s: %s", path, why);
 		return -1;
 	}
-	ssl_crit("DRIVER repaired: %s restored from %s", path, blob);
+	ssl_crit("DRIVER repaired: %s restored from %s (sha256 verified)", path, used);
 	return 0;
 }
 
@@ -315,6 +324,8 @@ static int cmd_scan(void)
 	size_t cap = 0;
 	ssize_t len;
 	size_t checked = 0, tampered = 0, repaired = 0;
+	char why[512];
+	int untrusted = 0, act;
 
 	load_cfg(&c, NULL);
 	{
@@ -332,6 +343,13 @@ static int cmd_scan(void)
 		fprintf(stderr, "driverguard: no baseline - run `baseline` first\n");
 		return 1;
 	}
+	if (!sst_manifest_trusted(MANIFEST, c.trust, why, sizeof(why))) {
+		untrusted = 1;
+		ssl_crit("DRIVER baseline NOT TRUSTED (%s): reporting only, nothing "
+			 "is repaired", why);
+		printf("driverguard: baseline not trusted (%s): reporting only\n", why);
+	}
+	act = c.enforce && !untrusted;
 	while ((len = getline(&line, &cap, f)) >= 0) {
 		char *sp, sha_now[65];
 		char *sha, *path;
@@ -351,12 +369,12 @@ static int cmd_scan(void)
 		if (sha256_file(path, sha_now) != 0) {
 			ssl_crit("DRIVER missing/unreadable: %s", path);
 			tampered++;
-			if (c.enforce && repair_module(&c, path) == 0)
+			if (act && repair_module(&c, path, sha) == 0)
 				repaired++;
 		} else if (strcmp(sha, sha_now) != 0) {
 			ssl_crit("DRIVER tamper: %s (hash changed)", path);
 			tampered++;
-			if (c.enforce && repair_module(&c, path) == 0)
+			if (act && repair_module(&c, path, sha) == 0)
 				repaired++;
 		}
 	}
@@ -366,7 +384,7 @@ static int cmd_scan(void)
 		 checked, tampered, repaired, c.enforce ? "enforce" : "monitor");
 	printf("driverguard: %zu checked, %zu tampered, %zu repaired (%s)\n",
 	       checked, tampered, repaired, c.enforce ? "enforce" : "monitor");
-	return 0;
+	return untrusted ? 3 : 0;	/* a failed unit is reported */
 }
 
 static int cmd_refresh(const char *reason)
@@ -383,7 +401,7 @@ static int cmd_refresh(const char *reason)
 		printf("driverguard: no baseline; nothing to refresh\n");
 		return 0;
 	}
-	rc = cmd_baseline();
+	rc = baseline_why(j ? why : "refresh");
 	if (rc == 0)
 		ssl_crit("DRIVER baseline refreshed (%s): the current module files "
 			 "are now the known-good ones", j ? why : "manual");
@@ -413,6 +431,12 @@ static int cmd_status(void)
 		fclose(f);
 	}
 	printf("baseline modules:  %zu%s\n", n, f ? "" : " (no baseline yet)");
+	{
+		char t[640];
+
+		sst_describe(MANIFEST, c.trust, t, sizeof(t));
+		printf("baseline trust:    %s\n", t);
+	}
 	return 0;
 }
 

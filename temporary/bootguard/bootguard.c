@@ -53,6 +53,7 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_trust.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef BG_CONF
@@ -71,6 +72,7 @@
 
 struct cfg {
 	int enforce;			/* enforce => stage on tamper */
+	int trust;			/* SST_LOCAL or SST_SIGNED (baseline_trust) */
 	int rotate;			/* 1 = hourly-rotating backups, 0 = fixed */
 	char boot_dir[PATH_MAX];
 	char backup_root[PATH_MAX];
@@ -84,10 +86,12 @@ static int load_cfg(struct cfg *c, FILE *report)
 		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
 		{ "boot_dir", SSC_PATH, c->boot_dir, sizeof(c->boot_dir), 1, 0, NULL },
 		{ "backup_root", SSC_PATH, c->backup_root, sizeof(c->backup_root), 1, 0, NULL },
+		{ "baseline_trust", SSC_ENUM, &c->trust, 0, 0, 0, sst_modes },
 		SSC_END
 	};
 
 	c->enforce = 1;			/* staging is safe; default on */
+	c->trust = SST_LOCAL;
 	c->rotate = 1;
 	snprintf(c->boot_dir, sizeof(c->boot_dir), "/boot");
 	snprintf(c->backup_root, sizeof(c->backup_root), "%s", DEF_BACKUP);
@@ -282,7 +286,7 @@ static size_t mf_report(const struct mf *old, const struct mf *new,
 	return n;
 }
 
-static int cmd_baseline(void)
+static int baseline_why(const char *why)
 {
 	struct cfg c;
 	struct base_ctx b = { 0 };
@@ -321,11 +325,17 @@ static int cmd_baseline(void)
 		return 1;
 	}
 	chmod(MANIFEST, 0600);
+	sst_announce("bootguard", MANIFEST, why, c.trust);
 	ssl_info("baseline: %zu boot files hashed, %zu backed up to %s",
 		 b.files, b.backed, bucket);
 	printf("bootguard: baseline %zu files, %zu backed up (%s)\n",
 	       b.files, b.backed, bucket);
 	return 0;
+}
+
+static int cmd_baseline(void)
+{
+	return baseline_why("baseline");
 }
 
 /*
@@ -352,7 +362,7 @@ static int cmd_refresh(const char *reason)
 		return 0;
 	}
 	mf_load(MANIFEST, &old);
-	rc = cmd_baseline();
+	rc = baseline_why(why);
 	if (rc == 0) {
 		mf_load(MANIFEST, &now);
 		changed = mf_report(&old, &now, why);
@@ -372,19 +382,11 @@ static int cmd_refresh(const char *reason)
 	return rc;
 }
 
-/* Stage a restore: write restore.list (dst<TAB>blob) and drop PENDING. */
-static int stage_restore(const struct cfg *c, const char *dst, FILE *rl)
+/* Stage a restore: one "dst<TAB>sha256" line in restore.list per file. The
+ * backup is chosen, and checked against that hash, when it is applied. */
+static int stage_restore(const char *dst, const char *sha, FILE *rl)
 {
-	char blob[PATH_MAX], root[PATH_MAX];
-
-	if (store_find_latest(c->backup_root, "boot", dst, blob, sizeof(blob)) != 0) {
-		if (locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) != 0 ||
-		    store_find_latest(root, "boot", dst, blob, sizeof(blob)) != 0) {
-			ssl_err("no backup to stage for %s", dst);
-			return -1;
-		}
-	}
-	fprintf(rl, "%s\t%s\n", dst, blob);
+	fprintf(rl, "%s\t%s\n", dst, sha);
 	return 0;
 }
 
@@ -396,6 +398,8 @@ static int cmd_scan(void)
 	size_t cap = 0;
 	ssize_t len;
 	size_t checked = 0, tampered = 0, staged = 0;
+	char why[512];
+	int untrusted = 0;
 
 	load_cfg(&c, NULL);
 	{
@@ -412,6 +416,12 @@ static int cmd_scan(void)
 	if (!f) {
 		fprintf(stderr, "bootguard: no baseline - run `baseline` first\n");
 		return 1;
+	}
+	if (!sst_manifest_trusted(MANIFEST, c.trust, why, sizeof(why))) {
+		untrusted = 1;
+		ssl_crit("BOOT baseline NOT TRUSTED (%s): reporting only, nothing is "
+			 "staged", why);
+		printf("bootguard: baseline not trusted (%s): reporting only\n", why);
 	}
 	while ((len = getline(&line, &cap, f)) >= 0) {
 		char *sp, sha_now[65], *sha, *path;
@@ -438,13 +448,13 @@ static int cmd_scan(void)
 		}
 		if (bad) {
 			tampered++;
-			if (c.enforce) {
+			if (c.enforce && !untrusted) {
 				if (!rl) {
 					rl = fopen(RESTORE_LIST, "we");
 					if (rl)
 						chmod(RESTORE_LIST, 0600);
 				}
-				if (rl && stage_restore(&c, path, rl) == 0)
+				if (rl && stage_restore(path, sha, rl) == 0)
 					staged++;
 			}
 		}
@@ -469,19 +479,49 @@ static int cmd_scan(void)
 		printf("bootguard: %zu tampered; %zu staged for restore at NEXT BOOT "
 		       "(nothing written to the live boot partition)\n", tampered, staged);
 	} else if (tampered) {
-		printf("bootguard: %zu tampered (monitor mode: not staged)\n", tampered);
+		printf("bootguard: %zu tampered (%s: not staged)\n", tampered,
+		       untrusted ? "baseline not trusted" : "monitor mode");
 	} else {
 		ssl_info("scan: boot partition intact (%zu files)", checked);
 		printf("bootguard: boot partition intact (%zu files)\n", checked);
 	}
-	return 0;
+	return untrusted ? 3 : 0;	/* a failed unit is reported */
 }
 
-/* Apply a staged restore (run early at boot, or by apply-now). */
+static int is_sha(const char *s)
+{
+	size_t i;
+
+	for (i = 0; i < 64; i++)
+		if (!isxdigit((unsigned char)s[i]))
+			return 0;
+	return s[64] == '\0';
+}
+
+/* The baseline hash of @path, for a restore.list line staged before the
+ * hash was recorded there. */
+static int manifest_sha(const char *path, char out[65])
+{
+	struct mf m;
+	struct mf_ent key, *e;
+
+	mf_load(MANIFEST, &m);
+	key.path = (char *)path;
+	e = m.n ? bsearch(&key, m.e, m.n, sizeof(*m.e), mf_cmp) : NULL;
+	if (e)
+		snprintf(out, 65, "%s", e->sha);
+	mf_free(&m);
+	return e ? 0 : -1;
+}
+
+/* Apply a staged restore (run early at boot, or by apply-now). Every file
+ * written back is a backup whose bytes match the baseline; what was there is
+ * kept as evidence first. */
 static int do_restore(void)
 {
+	struct cfg c;
 	FILE *rl = fopen(RESTORE_LIST, "re");
-	char *line = NULL;
+	char *line = NULL, why[PATH_MAX + 128], used[PATH_MAX], root[PATH_MAX];
 	size_t cap = 0;
 	ssize_t len;
 	size_t done = 0, fail = 0;
@@ -490,8 +530,15 @@ static int do_restore(void)
 		ssl_warn("restore requested but no restore.list present");
 		return 0;
 	}
+	load_cfg(&c, NULL);
+	if (!sst_manifest_trusted(MANIFEST, c.trust, why, sizeof(why))) {
+		ssl_crit("BOOT restore REFUSED: the baseline is not trusted (%s); "
+			 "the staged restore is kept for the operator", why);
+		fclose(rl);
+		return 3;
+	}
 	while ((len = getline(&line, &cap, rl)) >= 0) {
-		char *tab;
+		char *tab, sha[65];
 
 		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
 			line[--len] = '\0';
@@ -499,11 +546,23 @@ static int do_restore(void)
 		if (!tab)
 			continue;
 		*tab = '\0';
-		if (store_restore_compressed(tab + 1, line) == 0) {
-			ssl_crit("BOOT restored: %s", line);
+		if (is_sha(tab + 1)) {
+			snprintf(sha, sizeof(sha), "%s", tab + 1);
+		} else if (manifest_sha(line, sha) != 0) {	/* staged by an older release */
+			ssl_err("BOOT restore FAILED: %s is not in the baseline", line);
+			fail++;
+			continue;
+		}
+		sst_evidence("bootguard", line, "restore", sha, NULL);
+		if (sst_restore_from_backups(c.backup_root, "boot", line, sha, used,
+					     sizeof(used), why, sizeof(why)) == 0 ||
+		    (locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) == 0 &&
+		     sst_restore_from_backups(root, "boot", line, sha, used, sizeof(used),
+					      why, sizeof(why)) == 0)) {
+			ssl_crit("BOOT restored: %s from %s (sha256 verified)", line, used);
 			done++;
 		} else {
-			ssl_err("BOOT restore FAILED: %s", line);
+			ssl_err("BOOT restore FAILED: %s: %s", line, why);
 			fail++;
 		}
 	}
@@ -567,6 +626,12 @@ static int cmd_status(void)
 		fclose(f);
 	}
 	printf("baseline files:   %zu%s\n", n, f ? "" : " (no baseline yet)");
+	{
+		char t[640];
+
+		sst_describe(MANIFEST, c.trust, t, sizeof(t));
+		printf("baseline trust:   %s\n", t);
+	}
 	return 0;
 }
 

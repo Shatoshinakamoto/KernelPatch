@@ -47,12 +47,22 @@ int store_put_compressed(const char *srcpath, const char *bucketdir,
  * @dstpath (created/truncated, 0600, fsync'd). Returns 0 on success. */
 int store_restore_compressed(const char *blobpath, const char *dstpath);
 
+/* Decompress a stored blob into memory: *out (malloc'd, free it) and *len.
+ * 0 on success. */
+int store_load_compressed(const char *blobpath, unsigned char **out, size_t *len);
+
 /* Find the NEWEST stored blob for @srcpath under @root's hourly buckets. The
  * blob name is "<label>.<sha8-of-srcpath>.z"; buckets are "<root>/<YYYYMMDDHH>"
  * so lexically-greatest bucket name == most recent. Writes the path to @out.
  * Returns 0 if found, -1 otherwise. */
 int store_find_latest(const char *root, const char *label, const char *srcpath,
 		      char *out, size_t n);
+
+/* Like store_find_latest, but only buckets whose name sorts before @below
+ * (NULL = no bound), ending with the fixed bucket; the bucket used is
+ * written to @bucket. Lets a caller walk back through older backups. */
+int store_find_before(const char *root, const char *label, const char *srcpath,
+		      const char *below, char *out, size_t n, char *bucket, size_t bn);
 
 /* Ask the Locus allocator (if configured and reachable over the LAN) for a root
  * directory to use for @purpose (e.g. "procguard-quarantine"). On success

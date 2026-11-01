@@ -39,6 +39,8 @@ ALOG_DIR   = "/var/log/secure_sudo/addons"     # guard logs (ssaddon_log)
 SYSFS      = "/sys/kernel/secure_sudo"
 STATE      = "/var/lib/secure_sudo/addons/gui"
 TOKEN_FILE = STATE + "/token"
+# the evidence records the guards keep (ssaddon_trust.c), one JSON line each
+EVIDENCE   = os.environ.get("SS_EVIDENCE_ROOT", "/var/lib/secure_sudo/addons/evidence")
 HERE       = os.path.dirname(os.path.abspath(__file__))
 
 # conf name -> file; the only files the GUI will read/write.
@@ -113,6 +115,35 @@ def load_conf(errors=None):
                 else:
                     cfg["port"] = int(v)
     return cfg
+
+
+def record_evidence(path, action, sample):
+    """The same record the guards write (ssaddon_trust.c sst_evidence): what
+    the file was before the console acted on it."""
+    import hashlib
+    rec = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "feature": "gui", "action": action, "path": path, "expected_sha256": ""}
+    try:
+        st = os.lstat(path)
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        rec.update(state="file", sha256=h.hexdigest(), size=st.st_size,
+                   mode="%04o" % (st.st_mode & 0o7777), uid=st.st_uid, gid=st.st_gid,
+                   mtime=int(st.st_mtime), ctime=int(st.st_ctime), inode=st.st_ino,
+                   sample=sample)
+    except OSError:
+        rec["state"] = "missing"
+    os.makedirs(EVIDENCE, 0o700, exist_ok=True)
+    fd = os.open(os.path.join(EVIDENCE, "gui.jsonl"),
+                 os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, (json.dumps(rec, sort_keys=True) + "\n").encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return rec
 
 
 def check_written(name):
@@ -429,6 +460,10 @@ class Handler(BaseHTTPRequestHandler):
             os.chmod(dst, 0o600)
         except OSError as e:
             return {"error": f"compress failed: {e}"}
+        try:
+            record_evidence(exe, "quarantine", dst)
+        except OSError as e:
+            return {"error": f"evidence record failed, not killed: {e}", "stored": dst}
         try:
             os.kill(pid, signal.SIGKILL)
         except OSError as e:

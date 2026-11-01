@@ -45,10 +45,10 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "evidence-preserved"
       ],
       "open": [
-        "evidence-preserved",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
@@ -78,10 +78,10 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "evidence-preserved"
       ],
       "open": [
-        "evidence-preserved",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
@@ -111,11 +111,11 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "baseline-trust",
+        "evidence-preserved"
       ],
       "open": [
-        "baseline-trust",
-        "evidence-preserved",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
@@ -145,11 +145,11 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "baseline-trust",
+        "evidence-preserved"
       ],
       "open": [
-        "baseline-trust",
-        "evidence-preserved",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
@@ -175,10 +175,10 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "baseline-trust"
       ],
       "open": [
-        "baseline-trust",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
@@ -242,10 +242,10 @@
         "resource-limits",
         "failure-reporting",
         "threat-model",
-        "upgrade-rollback"
+        "upgrade-rollback",
+        "evidence-preserved"
       ],
       "open": [
-        "evidence-preserved",
         "adversarial-tests",
         "promotion-approved",
         "host-soak"
