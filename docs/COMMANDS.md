@@ -297,7 +297,7 @@ Remote attestation (TODO P2-1). Full guide: [ATTESTATION.md](ATTESTATION.md).
 
 | Form | What it does |
 |---|---|
-| `attest quote --nonce HEX [--pcrs 0,1,...]` | Prints a bundle (JSON) for `secure-sudo-attest-verify` on another machine. It holds a host report (kernel, boot id, command line, whether the secure_sudo LSM is active, live policy digest and lock state, Secure Boot, TPM event log digest) and a TPM quote of the boot PCRs (default `0,1,2,3,4,5,7,8,9`) that signs `sha256(nonce \|\| report)`. The nonce must be at least 16 bytes of hex from the verifier. |
+| `attest quote --nonce HEX [--pcrs 0,1,...]` | Prints a bundle (JSON) for `secure-sudo-attest-verify` on another machine. It holds a host report (kernel, boot id, command line, whether the secure_sudo LSM is active, live policy digest and lock state, Secure Boot, the firmware TPM event log and its digest) and a TPM quote of the boot PCRs (default `0,1,2,3,4,5,7,8,9`; plus 6 and 10 when IMA is measuring) that signs `sha256(nonce \|\| report)`. The IMA log, when there is one, is read after the quote and added to the bundle. The nonce must be at least 16 bytes of hex from the verifier. |
 | `attest ak` | Prints the attestation key's public part and name. |
 | `attest digest` | Prints `policy_sha256=<hex> locked=<0\|1>`, the digest of the policy that is currently loaded in the kernel (settings and every list). Use it with `--allow-policy` when you enroll. |
 
@@ -309,6 +309,13 @@ carries the kernel's `policy_log` and quotes its PCR (13 by default), so the
 verifier proves the policy too (`"policy_source": "measured"`). That needs
 a locked policy whose `tpm_openers` holds nothing that can extend any PCR;
 the defaults qualify (ATTESTATION.md, "What this proves").
+
+The verifier replays the firmware event log against PCRs 0-9 (naming the
+event that changed when the boot chain differs) and the IMA log against
+PCR 10. `secure-sudo-attest-verify eventlog FILE` and `secure-sudo-attest-verify
+ima BUNDLE [--ima-reference SHA256SUMS] [--list]` show them; `verify` takes
+`--ima-reference FILE` and `--ima-unknown report|fail`, and `enroll` takes
+`--ignore-eventlog` and `--ignore-ima` (ATTESTATION.md).
 
 ```sh
 N=$(secure-sudo-attest-verify nonce)                         # verifier
