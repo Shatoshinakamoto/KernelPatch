@@ -71,7 +71,9 @@
 #ifndef QUARANTINE
 #define QUARANTINE STATEDIR "/quarantine"
 #endif
+#ifndef HELPER_NET
 #define HELPER_NET  "/usr/libexec/secure-sudo/apply-net.sh"
+#endif
 #ifndef HELPER_QUAR
 #define HELPER_QUAR "/usr/libexec/secure-sudo/quarantine.sh"
 #endif
@@ -98,6 +100,7 @@ struct cfg {
 };
 
 static struct cfg *g_cfg;
+static char net_state[16] = "unknown";	/* P1-8 heartbeat: off|applied|pending|failing */
 static volatile sig_atomic_t want_reload;
 static volatile sig_atomic_t want_stop;
 static char remote_state[32] = "disabled";
@@ -1019,7 +1022,7 @@ static int write_health_heartbeat(void)
 {
 	char tmp[sizeof(HEALTH_FILE) + 8];
 	int fd, n, saved;
-	char buf[640];
+	char buf[768];
 
 	snprintf(tmp, sizeof(tmp), "%s.tmp", HEALTH_FILE);
 	n = snprintf(buf, sizeof(buf),
@@ -1028,13 +1031,13 @@ static int write_health_heartbeat(void)
 		     "remote_state=%s remote_sent=%llu remote_failures=%llu "
 		     "remote_queue_records=%llu remote_queue_bytes=%llu "
 		     "remote_queue_dropped=%llu local_log_failures=%llu "
-		     "event_gaps=%llu events_missing=%llu\n",
+		     "event_gaps=%llu events_missing=%llu net_state=%s\n",
 		     (long)getpid(), (long long)time(NULL),
 		     g_cfg ? g_cfg->remote_transport : "unknown",
 		     retention_state, remote_state,
 		     remote_sent, remote_failures, remote_queue_records,
 		     remote_queue_bytes, remote_queue_dropped,
-		     local_log_failures, event_gaps, events_missing);
+		     local_log_failures, event_gaps, events_missing, net_state);
 	if (n <= 0 || (size_t)n >= sizeof(buf)) {
 		errno = EOVERFLOW;
 		return -1;
@@ -1882,33 +1885,80 @@ static void node_scan_reap(void)
 }
 
 /*
- * Apply the kernel's net_mode with the nft helper. A mode counts as applied
- * only once the helper succeeded; until then it is retried on every periodic
- * pass (e.g. public-only at boot, before the network has a default route),
- * and the failure is logged once rather than every 5 seconds. The helper
- * leaves the previous rules in place when it fails.
+ * Apply the kernel's net_mode with the nft helper (TODO P1-8). A mode counts
+ * as applied only once the helper succeeded; until then it is retried on
+ * every periodic pass, and the failure is logged once rather than every 5
+ * seconds. The helper leaves the previous rules in place when it fails, and
+ * exits 3 when it could not find a LAN subnet and loaded its fail-closed
+ * "pending" rules instead (e.g. lan-only at boot before DHCP).
+ *
+ * Once applied, lan-only and public-only are re-checked every
+ * NET_REFRESH_SECS: a DHCP renewal onto another subnet, a new interface or a
+ * lost address changes what "LAN" means. The helper does not touch nft when
+ * nothing changed, and logs the change itself when something did.
  */
+#ifndef NET_REFRESH_SECS
+#define NET_REFRESH_SECS 15
+#endif
+
 static void apply_net_mode(void)
 {
 	static char applied[32] = "", failing[32] = "";
+	static time_t last_refresh;
 	char mode[32];
+	int rc, ruled;
+	time_t now = time(NULL);
 
 	if (read_sysfs_str("net_mode", mode, sizeof(mode)) != 0)
 		return;
-	if (!strcmp(mode, applied))
+	ruled = !strcmp(mode, "lan-only") || !strcmp(mode, "public-only");
+	if (!strcmp(mode, applied)) {
+		if (!ruled || now - last_refresh < NET_REFRESH_SECS)
+			return;
+		last_refresh = now;
+		rc = run_helper_quiet(HELPER_NET, mode);
+		if (rc == 0) {
+			snprintf(net_state, sizeof(net_state), "applied");
+			return;
+		}
+		/* fell back to pending or failed: retry every pass from now */
+		applied[0] = '\0';
+		snprintf(failing, sizeof(failing), "%s", mode);
+		snprintf(net_state, sizeof(net_state), rc == 3 ? "pending" : "failing");
+		syslog_line(rc == 3 ?
+			    "net: mode %s: no LAN subnet found any more; fail-closed pending rules loaded" :
+			    "net: mode %s: refresh failed (status %d); the loaded rules stay",
+			    mode, rc);
 		return;
+	}
 	if (strcmp(mode, failing))
 		syslog_line("net: applying mode %s", mode);
-	if (run_helper_quiet(HELPER_NET, mode) == 0) {
+	rc = run_helper_quiet(HELPER_NET, mode);
+	if (rc == 0) {
 		snprintf(applied, sizeof(applied), "%s", mode);
+		last_refresh = now;
+		snprintf(net_state, sizeof(net_state), "%s", ruled ? "applied" : "off");
 		if (!strcmp(mode, failing))
 			syslog_line("net: mode %s applied after retrying", mode);
 		failing[0] = '\0';
-	} else if (strcmp(mode, failing)) {
-		syslog_line("net: mode %s NOT applied yet (helper failed); retrying every 5s",
-			    mode);
+		return;
+	}
+	snprintf(net_state, sizeof(net_state), rc == 3 ? "pending" : "failing");
+	if (strcmp(mode, failing)) {
+		if (rc == 3)
+			syslog_line("net: mode %s: no LAN subnet yet; fail-closed pending rules loaded, retrying every 5s",
+				    mode);
+		else
+			syslog_line("net: mode %s NOT applied yet (helper status %d); retrying every 5s",
+				    mode, rc);
 		snprintf(failing, sizeof(failing), "%s", mode);
 	}
+}
+
+/* Clean stop: the helper applies net.conf's on_stop (keep by default). */
+static void net_on_stop(void)
+{
+	run_helper_quiet(HELPER_NET, "stop");
 }
 
 /* ---- #13 TimeVault scan ---- */
@@ -2714,6 +2764,7 @@ int main(void)
 		}
 	}
 
+	net_on_stop();
 	syslog_line("secure-sudod stopping");
 	close(pfd.fd);
 	return 0;

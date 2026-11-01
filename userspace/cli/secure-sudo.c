@@ -982,9 +982,10 @@ static int cmd_health(int json)
 	};
 	struct cfg_file cfg;
 	struct stat st;
-	char path[256], live[512], healthbuf[512], units_json[4096];
+	char path[256], live[512], healthbuf[768], units_json[4096];
 	char transport[16] = "unknown", remote_value[32] = "unknown";
 	char retention_state[16] = "unknown";
+	char net_state[16] = "unknown";	/* P1-8: off|applied|pending|failing */
 	char load_state[24] = "unknown";
 	char rejected_keys[512] = "unknown";
 	const char *audit_feed;
@@ -1038,6 +1039,9 @@ static int cmd_health(int json)
 		if (read_value(HEALTH_FILE, healthbuf, sizeof(healthbuf)) == 0) {
 			heartbeat_value(healthbuf, "remote_state", remote_value,
 					sizeof(remote_value));
+			/* optional: older daemons do not report it */
+			heartbeat_value(healthbuf, "net_state", net_state,
+					sizeof(net_state));
 			heartbeat_metrics =
 				heartbeat_counter(healthbuf, "remote_sent",
 						  &remote_sent) == 0 &&
@@ -1265,6 +1269,10 @@ static int cmd_health(int json)
 		  queue_records == 0 && queue_bytes == 0 && queue_dropped == 0;
 	if (!strcmp(retention_state, "hold_error"))
 		healthy = 0;
+	/* lan-only/public-only not (fully) in force: pending fail-closed rules
+	 * or a helper failure */
+	if (!strcmp(net_state, "pending") || !strcmp(net_state, "failing"))
+		healthy = 0;
 	if (!strcmp(transport, "udp") && strcmp(remote, "disabled"))
 		healthy = 0;
 	if (!strcmp(transport, "tls") && remote_sent == 0)
@@ -1294,7 +1302,7 @@ static int cmd_health(int json)
 		       "\"remote_queue_dropped\":%llu,"
 		       "\"local_log_failures\":%llu,"
 		       "\"event_gaps\":%llu,\"events_missing\":%llu,"
-		       "\"retention_state\":\"%s\","
+		       "\"retention_state\":\"%s\",\"network_policy\":\"%s\","
 		       "\"heartbeat_metrics\":\"%s\","
 		       "\"last_load\":\"%s\",\"load_updated\":%llu,"
 		       "\"load_accepted\":%llu,\"load_rejected\":%llu,"
@@ -1307,7 +1315,7 @@ static int cmd_health(int json)
 		       policy, audit_feed, transport, remote, remote_sent, remote_failures,
 		       queue_records, queue_bytes, queue_dropped, local_log_failures,
 		       event_gaps, events_missing,
-		       retention_state,
+		       retention_state, net_state,
 		       heartbeat_metrics ? "available" : "unavailable",
 		       load_state, load_updated, load_accepted, load_rejected,
 		       load_skipped, rejected_keys, load_rejected_omitted,
@@ -1334,7 +1342,7 @@ static int cmd_health(int json)
 		putchar('\n');
 		printf("Event stream gaps seen by the daemon: %llu (%llu records missing)\n",
 		       event_gaps, events_missing);
-		printf("Log retention: %s\n", retention_state);
+		printf("Log retention: %s\nNetwork policy rules: %s\n", retention_state, net_state);
 		printf("Add-on/timer health: %s (%d enabled unit failure(s))\n",
 		       addon_health, unit_errors);
 		printf("Last policy load: %s (%llu accepted, %llu rejected, "

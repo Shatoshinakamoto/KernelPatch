@@ -35,21 +35,26 @@ cat > "$T/stub/ip" <<'EOF'
 case "${STUB_NET:-}:$*" in
   noroute:*route*) ;;
   noaddr:*addr*) ;;
-  v4only:-6\ route*|v4only:*inet6*) ;;
+  v4only:-6\ route*) ;;
   *:"route show default") echo "default via 192.168.1.1 dev wlan0 proto dhcp metric 600" ;;
   *:"-6 route show default") echo "default via fe80::1 dev wlan0 proto ra metric 600 pref medium" ;;
-  *:"-o -f inet addr show dev wlan0") echo "3: wlan0    inet 192.168.1.23/24 brd 192.168.1.255 scope global dynamic wlan0" ;;
-  *:"-o -f inet6 addr show dev wlan0 scope global") echo "3: wlan0    inet6 2001:db8:1:2::23/64 scope global dynamic" ;;
+  *:"-o addr show scope global")
+	echo "3: wlan0    inet 192.168.1.23/24 brd 192.168.1.255 scope global dynamic wlan0"
+	[ "${STUB_NET:-}" = v4only ] ||
+		echo "3: wlan0    inet6 2001:db8:1:2::23/64 scope global dynamic" ;;
 esac
 EOF
 cat > "$T/stub/nft" <<EOF
 #!/bin/sh
+[ "\$1" = list ] && exit 1
 cat > "$T/nft.loaded"
 exit "\${STUB_NFT_RC:-0}"
 EOF
 chmod 0755 "$T/stub/ip" "$T/stub/nft"
+export SS_NET_CONF="$T/net.conf" SS_NET_SYSFS="$T/sysnet"
 net() { # mode -> NRC, ruleset in $T/rules (absent if nothing was produced)
-	rm -f "$T/rules" "$T/nft.loaded"
+	rm -f "$T/rules" "$T/nft.loaded" "$T/net.state"
+	export SS_NET_STATE="$T/net.state"
 	PATH="$T/stub:$PATH" SS_NET_DRYRUN="$T/rules" sh "$NET" "$@" >/dev/null 2>"$T/net.err"
 	NRC=$?
 }
@@ -75,7 +80,7 @@ check "net: lan-only keeps link-local IPv6 (neighbour discovery)" rules_have "fe
 net public-only
 eq "net: public-only exits 0" "$NRC" 0
 check "net: public-only drops the IPv4 LAN" rules_have "ip daddr @lan drop"
-check "net: public-only drops the IPv6 LAN" rules_have "ip6 daddr @priv6 drop"
+check "net: public-only drops the IPv6 LAN" rules_have "ip6 daddr @lan6 drop"
 check "net: public-only keeps DHCP" rules_have "udp sport { 67, 68 } udp dport { 67, 68 } accept"
 check "net: public-only keeps DHCPv6" rules_have "udp sport { 546, 547 } udp dport { 546, 547 } accept"
 check "net: public-only keeps DNS to the IPv4 gateway" rules_have "ip daddr 192.168.1.1 meta l4proto { tcp, udp } th dport 53 accept"
@@ -86,14 +91,30 @@ first_line() { grep -nF -- "$1" "$T/rules" | head -1 | cut -d: -f1; }
 check "net: exemptions come before the LAN drop" \
 	test "$(first_line 'dport 53 accept')" -lt "$(first_line 'ip daddr @lan drop')"
 STUB_NET=noroute net public-only
-eq "net: no default route exits 1" "$NRC" 1
-check "net: no default route loads nothing (current rules stay)" test ! -e "$T/rules"
+eq "net: no default route: the LAN is still known, rules apply (exit 0)" "$NRC" 0
+refute "net: ... with no gateway, no DNS exemption" rules_have "dport 53 accept"
 STUB_NET=noaddr net lan-only
-eq "net: no address on the interface exits 1" "$NRC" 1
+eq "net: no address and no rules yet: fail-closed pending rules (exit 3)" "$NRC" 3
+check "net: ... pending lan-only allows only loopback in the LAN set" rules_have "elements = { 127.0.0.0/8 }"
+STUB_NET=noaddr net public-only
+eq "net: pending public-only (exit 3)" "$NRC" 3
+check "net: ... pending public-only drops every private range" rules_have "elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }"
+echo "extra_lan = 10.0.0.0/8 }" > "$T/net.conf"
+net lan-only
+eq "net: a bad net.conf value is refused (exit 1)" "$NRC" 1
+check "net: ... nothing loaded" test ! -e "$T/rules"
+echo "extra_lan = 10.20.0.0/16 2001:db8:aa::/48" > "$T/net.conf"
+net lan-only
+check "net: extra_lan adds IPv4 and IPv6 subnets" sh -c "grep -q '10.20.0.0/16' '$T/rules' && grep -q '2001:db8:aa::/48' '$T/rules'"
+: > "$T/net.conf"
+mkdir -p "$T/sysnet/wlan0"; echo 65534 > "$T/sysnet/wlan0/type"
+net lan-only
+eq "net: a non-Ethernet link (WireGuard/tun type) is never LAN" "$NRC" 3
+rm -rf "$T/sysnet"
 STUB_NET=v4only net lan-only
 eq "net: IPv4-only host still works" "$NRC" 0
 check "net: IPv4-only host still drops IPv6 in lan-only" rules_have "ip6 daddr != @lan6 drop"
-rm -f "$T/nft.loaded"
+rm -f "$T/nft.loaded" "$T/net.state"
 PATH="$T/stub:$PATH" STUB_NFT_RC=1 sh "$NET" lan-only >/dev/null 2>&1; rc=$?
 check "net: nft load failure is reported (non-zero exit)" test "$rc" -ne 0
 check "net: the real run feeds nft the same ruleset" grep -q 'ip6 daddr != @lan6 drop' "$T/nft.loaded"
@@ -239,8 +260,8 @@ v6refute "public-only: LAN service over IPv6 (tcp/8080) blocked" treach 2001:db8
 
 inC ip route del default
 apply lan-only; rc=$?
-check "no default route: lan-only refused" test "$rc" -ne 0
-check "no default route: public-only rules kept" sh -c "nsenter -t $CL -n nft list chain inet secure_sudo output | grep -q '@lan drop'"
+eq "no default route: lan-only still applies to the LAN" "$rc" 0
+check "no default route: the LAN gateway is reachable" reach 10.99.0.1
 inC ip route add default via 10.99.0.1
 
 apply host; rc=$?

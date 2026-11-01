@@ -349,6 +349,15 @@ echo "remote_transport=udp retention_state=active remote_state=disabled remote_s
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "health degrades when the daemon saw event-stream gaps" sh -c \
 	"[ $rc -eq 1 ] && grep -q '\"event_gaps\":2,\"events_missing\":7' '$T/health.out'"
+for ns in pending failing; do
+	echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0 net_state=$ns" > "$HEALTH"
+	SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
+	check "health degrades when net_mode rules are $ns (P1-8)" sh -c \
+		"[ $rc -eq 1 ] && grep -q '\"network_policy\":\"$ns\"' '$T/health.out'"
+done
+echo "remote_transport=udp retention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0 net_state=applied" > "$HEALTH"
+SS_TEST_ALLOW_ROOT=1 "$CLI" health > "$T/health.out" 2>&1
+check "health shows the network policy rules state" grep -q '^Network policy rules: applied' "$T/health.out"
 echo "remote_transport=udp xretention_state=active remote_state=disabled remote_sent=0 remote_failures=0 remote_queue_records=0 remote_queue_bytes=0 remote_queue_dropped=0 local_log_failures=0 event_gaps=0 events_missing=0" > "$HEALTH"
 SS_TEST_ALLOW_ROOT=1 "$CLI" health --json > "$T/health.out" 2>&1; rc=$?
 check "heartbeat keys match whole names only (xretention_state is not retention_state)" sh -c \

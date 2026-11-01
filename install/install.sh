@@ -1330,6 +1330,12 @@ uninstall() {
 	# 3. The service.
 	if [ -z "$SS_ROOT" ] && m_get S secure-sudod.service >/dev/null; then
 		systemctl disable --now secure-sudod.service || warn "could not disable secure-sudod.service"
+		# net_mode's table outlives the daemon by design (net.conf on_stop =
+		# keep); an uninstall must not leave the host filtered
+		if command -v nft >/dev/null 2>&1 && nft list table inet secure_sudo >/dev/null 2>&1; then
+			nft delete table inet secure_sudo && log "removed the net_mode nftables table"
+		fi
+		rm -f /run/secure_sudo/net.state
 		m_del S secure-sudod.service
 	fi
 

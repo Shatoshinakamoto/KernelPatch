@@ -407,10 +407,14 @@ pushes in one step).
 Shortcut for `set net_mode <mode>`; also persisted. See
 [CONFIGURATION.md](CONFIGURATION.md#net_mode) for what each mode does. The LAN
 and public modes are enforced by the daemon's nftables helper; `host` mode's
-raw/packet-socket block is in the kernel.
+raw/packet-socket block is in the kernel. What counts as the LAN, and what
+happens on failures and when the daemon stops, is set in
+`/etc/secure_sudo/net.conf`. No mode isolates the host: during an incident use
+[`secure-sudo contain network`](#secure-sudo-contain-).
 
 ```sh
 sudo secure-sudo net host
+sudo /usr/libexec/secure-sudo/apply-net.sh status   # mode=lan-only status=applied table=loaded ...
 ```
 
 ## `secure-sudo radio <wifi|bluetooth|ethernet-only> <on|off>`

@@ -1154,6 +1154,26 @@ their scan while a package manager holds its lock (dpkg, rpm or zypper
 installs a package to slip a change past the baseline still leaves a
 logged, shipped record. Tested by `tests/userspace/test-addons.sh`.
 
+### 67. Network modes: second NICs, containers and DHCP changes escaped the rules (v10–v12, found 2026-11-01 by P1-8) — SC-7 / AC-4
+
+Testing the modes against real traffic in network namespaces found four
+gaps. (1) Only the default-route interface's subnets counted as the LAN, so
+`public-only` let the host reach a LAN on a second NIC. (2) There was no
+forward chain, so containers and namespaces routed through the host ignored
+both modes. (3) The rules were computed once per mode change, so after a
+DHCP renewal onto another subnet `lan-only` blocked the new LAN and allowed
+the old one. (4) At boot before an address, nothing was loaded at all, so
+`lan-only` was open until DHCP finished. Now every LAN interface counts
+(VPN and non-Ethernet links excluded, bridges are local, `net.conf` can
+override), a forward chain applies the same rules, the daemon re-checks
+every 15 s and re-applies on change (logged), and when no LAN subnet is
+found fail-closed pending rules load (`secure-sudo health` reports them).
+The stop policy (keep the rules by default) is now explicit and tested, and
+uninstall removes the table. The docs also said other nft tables "can still
+accept traffic" past the rules; that was wrong (a drop is final) and is now
+tested. Tested by `tests/userspace/test-netpolicy.sh` (71 checks),
+`test-helpers.sh`, `test-daemon-events.sh` and `test-cli.sh`.
+
 ---
 
 ## Residual notes / assumptions
