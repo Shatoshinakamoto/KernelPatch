@@ -108,6 +108,11 @@ firmware write, no partition change. Keep a root session open throughout
       change), `host`, `lan-only` (LAN reachable over IPv4 and IPv6, the
       internet not), `public-only` (internet reachable, LAN not, DHCP and DNS
       to the gateway still work). Return to your normal mode.
+- [ ] With a real VPN up (WireGuard/OpenVPN): `public-only` keeps the VPN
+      working, `lan-only` cuts it; `sudo /usr/libexec/secure-sudo/apply-net.sh status`
+      says `status=applied`. Unplug the cable / turn Wi-Fi off and on: within
+      15 s `journalctl -t secure-sudo-net` shows the rules re-applied for the
+      new address.
 - [ ] Suspend/resume and a full shutdown work.
 
 ## 7. Policy and recovery on this machine

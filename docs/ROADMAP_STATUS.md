@@ -29,7 +29,7 @@ under UEFI or Secure Boot, or on real hardware.
 | P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60), G3 (TPM-sealed OTP key, #61) and G4 (TPM clear through `/dev/tpm*`, #63) are built |
 | P1-6 | done | `secure-sudo diff` (= `load --dry-run`) previews a change against the running kernel; snapshots of the config files and the live kernel state (SHA256SUMS, chained to the previous one) before every load, set, lock and restore; a hash-chained change history (who, lint result, changes, accepted/rejected, snapshot) also sent to syslog; `restore ID` (verified, previewed, refused while locked unless `--no-load`). See "P1-6" below |
 | P1-7 | code-complete (tabletop remains) | [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md): triage, evidence, containment, escalation, recovery, rebuild, and the inventory of automatic destructive actions (false positives, exclusions, audit trail, undo, test); `secure-sudo contain network/account/process` with dry run, confirmation, evidence first and release, recorded in the history; guardrail tests for every destructive add-on and package/kernel hooks that re-baseline BootGuard/DriverGuard after updates (SECURITY_REVIEW #64–#66). Remaining: a people-run tabletop |
-| P1-8 | not started | see remaining-work notes below |
+| P1-8 | done | [CONFIGURATION.md](CONFIGURATION.md#net_mode): what counts as the LAN, failure modes, the fail-safe (keep) stop policy, and why no mode is host isolation (`contain network` is); every LAN interface, VPN exclusion, a forward chain for routed containers, refresh every 15 s, fail-closed pending rules, health state (SECURITY_REVIEW #67); `test-netpolicy.sh` |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
 
@@ -115,11 +115,12 @@ without root):
 |---|---|---|
 | `tests/userspace/test-pheonixbox.sh` | 26 | the real PheonixBox helper: refuses unprivileged; snapshot, lock, tamper, repair, re-lock, permission restore, hostile file names (root, private mount namespace with overlays) |
 | `tests/userspace/test-node-scan.sh` | 48 | `node-scan` (#11, gap G1): SEA/pkg/renamed-node markers incl. across read boundaries, a real Node binary with its fuse flipped, Electron apps skipped, unlistable names, merge order and the kernel's limits, the cache, partial scans, ownership order |
-| `tests/userspace/test-daemon-events.sh` | 71 | how the daemon acts on kernel events (typed fields, cooldown kill, quarantine), the ring reader, sequence gaps, the background node-scan, and the TimeVault baseline and Merkle root (G2) |
+| `tests/userspace/test-daemon-events.sh` | 79 | how the daemon acts on kernel events (typed fields, cooldown kill, quarantine), the ring reader, sequence gaps, the background node-scan, the TimeVault baseline and Merkle root (G2), and the net_mode apply/refresh/pending/stop loop (P1-8) |
 | `tests/userspace/test-otp.sh` | 86 | RFC 4226/6238 vectors, secret at rest, prefix, replay refusal, the master key sealed to a software TPM and the key-file fallback (G3) |
 | `tests/userspace/test-pam.sh` | 50 | both PAM modules through libpam, the documented stacks, real `pam_unix` + `pam_faillock` (root, private mount namespace) |
-| `tests/userspace/test-helpers.sh` | 77 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
-| `tests/userspace/test-cli.sh` | 160 | config parsing, `otp` hand-off to the helper, `lint`, `load` reporting (entry counts, node-scan merge), P1-6 `diff`/snapshots/history/restore (partial loads, forged snapshots, edited or removed history lines, restore while locked) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
+| `tests/userspace/test-netpolicy.sh` | 71 | net_mode against real traffic in namespaces: IPv4/IPv6, two LAN NICs, a VPN, DHCP subnet change, routed container, existing nftables + iptables-nft rules, restart (nft untouched), failed detection (kept / pending), bad config, on_stop keep/remove, forward = 0 |
+| `tests/userspace/test-helpers.sh` | 84 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
+| `tests/userspace/test-cli.sh` | 163 | config parsing, `otp` hand-off to the helper, `lint`, `load` reporting (entry counts, node-scan merge), P1-6 `diff`/snapshots/history/restore (partial loads, forged snapshots, edited or removed history lines, restore while locked) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
 | `tests/userspace/test-remote-forwarding.sh` | 11 | TLS CA/hostname validation and CA rotation, RFC 5425 delivery, queue persistence/exhaustion, outage retry |
 | `tests/userspace/test-addons.sh` | 31 | ProcGuard (monitor kills nothing, empty allowlist refused, PID 1/ancestors/stack exempt, renamed `secure-sudo-*` not exempt, respawn → quarantine, system dirs never deleted), BootGuard/DriverGuard (tamper staged/restored, scan deferred under a held dpkg lock, `refresh` re-baselines and drops a staged restore, hook script), TamperWatch (attributes a writer, never kills the stack or during a package update) |
 | `tests/userspace/test-contain.sh` | 32 | `secure-sudo contain`: dry runs change nothing, refusals (UID 0, own account, PID 1, kernel threads, own shell chain, bad addresses), real processes frozen with evidence and continued, descendants, `--kill`, account lock/expiry restored as it was, real nftables in a namespace |
@@ -484,8 +485,7 @@ while enabled inactive units or missing/stale baselines degrade health.
 
 ### Other P1 items still deferred
 
-P1-7 is code-complete (a people-run tabletop remains); P1-8 remains unstarted:
-and broader network-policy/failure-mode validation. The earlier overview's
+P1-7 is code-complete (a people-run tabletop remains); P1-8 is done. The earlier overview's
 "groundwork" below is historical; it does not mean these requirements are
 complete.
 
@@ -576,17 +576,32 @@ yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: t
 * Remaining: the tabletop exercise in INCIDENT_RESPONSE.md 9 needs people;
   CI cannot run it.
 
-## P1-8 — not started
+## P1-8 — done (2026-11-01)
 
-Pre-existing groundwork (not completion):
+* `tests/userspace/test-netpolicy.sh` builds a small network from
+  namespaces (internet, LAN router with DNS, a second LAN on another NIC, a
+  VPN-named link, a container behind a bridge) and checks real ping and UDP
+  traffic in every mode, IPv4 and IPv6, beside a pre-existing nftables table
+  and an iptables-nft rule. It found four gaps, built: the second NIC leaked
+  in public-only, forwarded container traffic ignored both modes, a DHCP
+  subnet change left stale rules, and nothing was loaded before the first
+  address (SECURITY_REVIEW #67).
+* Fail-safe policy: one-transaction replace, failures keep the loaded rules,
+  fail-closed pending rules when no LAN is found, `on_stop = keep` by
+  default, uninstall removes the table. `secure-sudo health` shows
+  `Network policy rules: off|applied|pending|failing`.
+* Documented that `host`/raw-socket blocking and the LAN modes are not host
+  isolation; the auditable isolation procedure is `secure-sudo contain
+  network` (P1-7).
+* Remaining by design: a namespace with its own uplink (macvlan) is not
+  covered; real NIC/Wi-Fi/VPN hardware checks are in HARDWARE_SMOKE_TEST.md.
+
+Earlier groundwork notes (historical):
 
 * P1-1: the ring drops whole events and exposes `events_dropped`
   (SECURITY_REVIEW #44); expanded in the partial implementation above.
 * P1-4: `install.sh verify` checks the running kernel, daemon and lint;
   `load` reports rejected settings; expanded in the partial implementation above.
-* P1-8: network modes are tested with real `nft` in namespaces for IPv4 and
-  IPv6; multiple interfaces, VPNs, DHCP changes, pre-existing rulesets and
-  daemon restarts are not.
 * P1-2: TLS syslog and a bounded persistent queue now exist; collector
   acknowledgment remains unresolved.
 

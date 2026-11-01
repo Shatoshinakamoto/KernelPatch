@@ -27,6 +27,13 @@ sleep 1
 exit 3
 STUB
 chmod 0755 "$T/cli-stub.sh"
+# Stands in for apply-net.sh (P1-8): records its arguments, exits with net-rc.
+cat > "$T/net-wrapper.sh" <<NETW
+#!/bin/sh
+echo "\$*" >> "$T/net-calls"
+exit "\$(cat "$T/net-rc" 2>/dev/null || echo 0)"
+NETW
+chmod 0755 "$T/net-wrapper.sh"
 
 if ! (cd "$ROOT" && ${CC:-cc} -O2 -Wall -Wextra -Werror \
 	-DLOGDIR="\"$T/log\"" -DQUARANTINE="\"$T/quarantine\"" \
@@ -35,6 +42,7 @@ if ! (cd "$ROOT" && ${CC:-cc} -O2 -Wall -Wextra -Werror \
 	-DEVENT_CURSOR="\"$T/event-cursor\"" -DHEALTH_FILE="\"$T/daemon.health\"" \
 	-DSECURE_SUDO_CLI="\"$T/cli-stub.sh\"" \
 	-DSYSFS="\"$T/sysfs\"" -DMANIFEST="\"$T/tv-manifest\"" \
+	-DHELPER_NET="\"$T/net-wrapper.sh\"" -DNETDIR="\"$T\"" -DNET_REFRESH_SECS=0 \
 	-o "$T/test-daemon-events" tests/userspace/test-daemon-events.c \
 	-lssl -lcrypto); then
 	not_ok "daemon event harness builds (-Werror)"

@@ -372,12 +372,19 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   sockets in `host` mode, root included); `secure-sudod` loading the
   `secure_sudo` nft table; netfilter in the kernel (SECURITY_REVIEW #47).
 * **Limits:** the LAN/public modes are nft rules loaded from userspace, so
-  root can flush them, and other nft tables can still accept traffic. LAN
-  detection is automatic and can be wrong on unusual networks. `host` mode
-  breaks DHCP clients that use packet sockets (§4.6). Not application-aware.
+  root can flush them (the daemon re-applies within 15 s; the flush itself
+  is not prevented). An `accept` in another nft table cannot bypass them (a
+  drop in any base chain is final). LAN detection is automatic and can be
+  wrong on unusual networks (override in `net.conf`). A namespace with its
+  own uplink (macvlan) is not covered. `host` mode breaks DHCP clients that
+  use packet sockets (§4.6). Not application-aware. **None of the modes is
+  host isolation**: that is `secure-sudo contain network`.
 * **Tested by:** `t_net` (packet socket in host mode, root included,
-  event); `tests/userspace/test-helpers.sh` (each mode's ruleset loaded into
-  real nft in network namespaces, IPv6, DHCP and DNS kept). P1-8 adds more.
+  event); `tests/userspace/test-netpolicy.sh` (real traffic through
+  namespaces: IPv4/IPv6, two LAN NICs, a VPN, a DHCP subnet change,
+  forwarded container traffic, existing nftables and iptables-nft rules,
+  restart, failed detection, on_stop); `test-helpers.sh` (ruleset text,
+  `nft -c`); `test-daemon-events.sh` (refresh, pending, stop).
 
 ### #11 Node.js child-process guard (kernel)
 
