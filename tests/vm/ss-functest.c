@@ -37,6 +37,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <sys/uio.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -1012,6 +1013,95 @@ static void t_concurrency(void)
 	wr(SECFS "blacklist", "\n");
 }
 
+/*
+ * P1-1 sustained throughput: one non-sudo process raises denials as fast as
+ * it can while this process drains the ring. Every record raised in the
+ * window must be either read or counted in events_dropped: none may vanish.
+ * The rates are printed for the record; they depend on the machine.
+ */
+#define SS_BURST 20000
+static void t_event_throughput(char *buf, size_t len)
+{
+	char v[64];
+	unsigned long long seq0 = 0, seq1 = 0, drop0 = 0, drop1 = 0;
+	unsigned long long lines = 0, bytes = 0, produced, dropped;
+	unsigned long long split = 0, bad = 0;
+	struct timespec t0, t1;
+	int fd, done = 0, st;
+	double secs;
+	pid_t kid;
+
+	(void)drain_events(buf, len);
+	if (rd(KNOB "events_sequence", v, sizeof(v)) == 0)
+		seq0 = strtoull(v, NULL, 10);
+	if (rd(KNOB "events_dropped", v, sizeof(v)) == 0)
+		drop0 = strtoull(v, NULL, 10);
+	fd = open(SECFS "events", O_RDONLY | O_NONBLOCK);
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	kid = fork();
+	if (kid == 0) {
+		int i;
+
+		if (become(&NONSUDO))
+			_exit(254);
+		for (i = 0; i < SS_BURST; i++)
+			if (do_perf(NULL) == 0)
+				_exit(1);	/* must be denied every time */
+		_exit(0);
+	}
+	while (fd >= 0 && kid > 0) {
+		/* 4 KiB reads, like a daemon's: smaller than the ring, so the
+		 * reader works on a ring that wraps under it */
+		ssize_t n = read(fd, buf, 4096);
+
+		if (n > 0) {
+			char *l, *save;
+
+			bytes += (unsigned long long)n;
+			if (buf[n - 1] != '\n')
+				split++;
+			buf[n] = '\0';
+			for (l = strtok_r(buf, "\n", &save); l;
+			     l = strtok_r(NULL, "\n", &save)) {
+				lines++;
+				if (!line_is_event(l) && bad++ == 0)
+					diag("not a whole record: '%.80s'", l);
+			}
+			continue;
+		}
+		if (done)
+			break;		/* the producer has exited and the ring is empty */
+		if (waitpid(kid, &st, WNOHANG) == kid)
+			done = 1;
+		else
+			sched_yield();
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	if (fd >= 0)
+		close(fd);
+	if (rd(KNOB "events_sequence", v, sizeof(v)) == 0)
+		seq1 = strtoull(v, NULL, 10);
+	if (rd(KNOB "events_dropped", v, sizeof(v)) == 0)
+		drop1 = strtoull(v, NULL, 10);
+	produced = seq1 - seq0;
+	dropped = drop1 - drop0;
+	secs = (double)(t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+	tap(done && WIFEXITED(st) && WEXITSTATUS(st) == 0 && produced >= SS_BURST,
+	    "#9 sustained burst: %d denials each raised a record (%llu)",
+	    SS_BURST, produced);
+	tap(split == 0 && bad == 0,
+	    "#9 sustained burst: every read ends at a record boundary and every "
+	    "line is a whole record (%llu split reads, %llu bad lines)", split, bad);
+	tap(lines + dropped == produced,
+	    "#9 sustained burst: every record was read or counted as dropped "
+	    "(%llu read + %llu dropped = %llu raised)", lines, dropped, produced);
+	diag("throughput: %llu records in %.3f s (%.0f/s); reader got %llu "
+	     "(%.0f/s, %llu bytes, %llu avg) and %llu were dropped",
+	     produced, secs, secs > 0 ? produced / secs : 0.0, lines,
+	     secs > 0 ? lines / secs : 0.0, bytes, lines ? bytes / lines : 0,
+	     dropped);
+}
+
 static void t_events(void)
 {
 	static char buf[1 << 18];
@@ -1203,6 +1293,7 @@ static void t_events(void)
 		tap(1, "#9 audit_events_dropped counter exists (%s)", dropped);
 	else
 		tap(0, "#9 audit_events_dropped counter exists");
+	t_event_throughput(buf, sizeof(buf));
 	knob_set("perf_guard", "0");
 }
 

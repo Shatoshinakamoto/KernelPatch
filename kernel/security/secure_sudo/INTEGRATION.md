@@ -127,24 +127,47 @@ script and security-review documentation.
 
 Kernel event lines use schema-v1 JSON: `schema_version`, per-boot random
 `boot_id`, per-boot `sequence`, `realtime_ns`, `monotonic_ns`, an event
-category, current-task PID/UID under `actor`, typed `target`, `operation`,
-`object`, `decision`, `reason`, and optional numeric `target_pid` and
-`target_uid` values where the producer supplies them, and the escaped original
-`message`, plus a `truncated` boolean that is true if the formatted message,
-event type, or a typed string was shortened to its bound. Cross-process
-memory-access events identify both target PID and UID. Missing structured
-values are JSON null.
+category, the current task under `actor` (`pid`, `uid`, `kernel_started`),
+typed `target`, `operation`, `object`, `decision`, `reason`, numeric
+`target_pid` and `target_uid`, the escaped original `message`, and a
+`truncated` boolean that is true if the formatted message, event type, or a
+typed string was shortened to its bound. Missing structured values are JSON
+null.
+
+Target identity is always typed:
+
+* A denial of the calling task's own action (most of them) names that task:
+  `target_pid`/`target_uid` equal the actor's, and `target` is a short label
+  of what kind of subject it is (`current_user`, `current_process`,
+  `module_loader`, ...).
+* Cross-process events (ptrace, `process_vm_writev`, `/proc/<pid>/mem`)
+  carry the other task's PID and UID.
+* The cooldown block (`failure_threshold`) carries the blocked UID and a
+  null `target_pid`, since its subject is a user, not a task.
+* Only the boot-time `event_log` record has a null target: no task or user
+  is its subject.
+
+`object` holds the path or name acted on, bounded at 256 output bytes, so a
+consumer never needs the message: `secure-sudod` takes the TimeVault path
+from `object` and the cooldown UID from `target_uid`. A record with any field
+cut short has `"truncated":true` and is never acted on.
+
+Deferred work: `actor.kernel_started` is true when the actor is a kernel
+thread or a process the kernel started itself, such as `modprobe` run for a
+module autoload or a core-dump pipe handler (its parent is a kernel thread).
+Such a record names the helper, not the userspace task whose action caused
+the work, which the kernel does not keep; the flag says so rather than
+leaving the helper to look like the initiator. PID 1 is not marked.
+
 Typed string fields are escaped and bounded to keep records within the ring's
 record-size limit. Decisions use `deny`, `allow`, `observe`, or `enforce`;
 operation, object and reason values are producer-defined stable identifiers,
 not inferred from message text. Non-ASCII message bytes are encoded as
 `\u00xx` byte escapes so the JSON remains valid even when a path is not UTF-8;
-`secure-sudod` decodes these escapes back to the original bytes. For deferred
-work, current-task identity can be a kernel worker; the initiating userspace
-task is not yet preserved, and some target fields remain descriptive labels
-rather than a fully typed PID/UID identity. `audit_events_dropped` counts
-calls for which the audit subsystem did not provide an event buffer; it is not
-a complete audit backlog accounting interface.
+`secure-sudod` decodes these escapes back to the original bytes.
+`audit_events_dropped` counts calls for which the audit subsystem did not
+provide an event buffer; it is not a complete audit backlog accounting
+interface.
 
 Sequence numbers are given under the ring lock, in the order records enter
 the ring, starting at 1 each boot. Because the ring drops the oldest whole
@@ -168,17 +191,22 @@ daemon crash a gap can be overstated by a few records, but never hidden.
 `secure-sudo health` reports `event_gaps`/`events_missing` and degrades
 while they are non-zero.
 
-The ring is 64 KiB and each complete JSON line is capped at 640 bytes. It has
-no producer-side rate limit: on saturation it discards oldest whole records,
-increments `events_dropped`, and preserves complete-line framing. At most 102
-maximum-size records fit at once; normal shorter lines allow more. Consumers
+The ring is 64 KiB and each complete JSON line is capped at 1024 bytes (the
+record is built in a static buffer under the ring lock, not on the hook's
+stack). It has no producer-side rate limit: on saturation it discards oldest
+whole records, increments `events_dropped`, and preserves complete-line
+framing. At least 64 maximum-size records fit at once; typical records are
+400 to 600 bytes, so 100 to 160 fit. A read returns whole records only (up
+to the last complete one that fits the buffer), so a reader with a buffer
+smaller than the ring never holds half a record that a producer then
+discards; only a buffer smaller than one record gets a partial one. Consumers
 must monitor the drop counter and sequence numbers rather than assume complete
 history.
 
 Example shape:
 
 ```json
-{"schema_version":1,"boot_id":"0123...","sequence":42,"realtime_ns":0,"monotonic_ns":0,"event_type":"perf","actor":{"pid":1000,"uid":1000},"target":"current_user","operation":"perf_event_open","object":"performance_event","decision":"deny","reason":"perf_guard","target_pid":null,"target_uid":null,"message":"perf: denied ...","truncated":false}
+{"schema_version":1,"boot_id":"0123...","sequence":42,"realtime_ns":0,"monotonic_ns":0,"event_type":"perf","actor":{"pid":1000,"uid":1000,"kernel_started":false},"target":"current_user","operation":"perf_event_open","object":"performance_event","decision":"deny","reason":"perf_guard","target_pid":1000,"target_uid":1000,"message":"perf: denied ...","truncated":false}
 ```
 
 All `/sys/kernel/secure_sudo/*` knobs are mode 0600 (root only) and refuse writes once the config is locked. Every securityfs policy file is a whole-file replace: one write sets the entire list. The CLI (`secure-sudo`) is the supported way to drive all of them: `settings`, `get`, `set`, `list`, `load`, `net`, `radio`, `timevault`, `prguard`, `lock`, `vault-allow`, `detect-admins`. See `docs/` for the full reference.

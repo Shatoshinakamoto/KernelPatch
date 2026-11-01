@@ -361,7 +361,8 @@ void ss_event(const char *fmt, ...)
 static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 			   loff_t *ppos)
 {
-	unsigned int n;
+	unsigned int n, len;
+	unsigned long flags;
 	char *bounce;
 	int ret;
 
@@ -380,7 +381,21 @@ static ssize_t events_read(struct file *file, char __user *ubuf, size_t count,
 	bounce = kvmalloc(count, GFP_KERNEL);
 	if (!bounce)
 		return -ENOMEM;
-	n = kfifo_out_spinlocked(&ss_ring, bounce, count, &ss_ring_lock);
+	/*
+	 * Hand out whole records only. A read that stopped mid-record would
+	 * leave the rest at the head of the ring, where a producer making room
+	 * discards it; the reader would then join the half it had to the next
+	 * record, and lose that one without it being counted. A buffer too
+	 * small for even one record still gets bytes, as before.
+	 */
+	spin_lock_irqsave(&ss_ring_lock, flags);
+	n = kfifo_out_peek(&ss_ring, bounce, count);
+	for (len = n; len && bounce[len - 1] != '\n'; len--)
+		;
+	if (!len)
+		len = n;
+	n = kfifo_out(&ss_ring, bounce, len);
+	spin_unlock_irqrestore(&ss_ring_lock, flags);
 	ret = copy_to_user(ubuf, bounce, n) ? -EFAULT : n;
 	kvfree(bounce);
 	return ret;
