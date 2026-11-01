@@ -203,7 +203,7 @@ In short:
   GitHub for every push and pull request; the VM jobs run weekly and on
   demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots, #48–#59 since).
+  (findings #35–#47 came from v12's tests and boots, #48–#60 since).
 * Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
   (P1-5); promises the code does not keep yet are tracked as features to
   build in [TODO.md](TODO.md), "Doc promises to build".

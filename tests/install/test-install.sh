@@ -185,14 +185,15 @@ I userspace --prebuilt "$STAGE" > /dev/null 2>&1
 # What the running daemon and CLI leave in their state directory.
 mkdir -p "$R/var/lib/secure_sudo/remote-queue"
 for f in daemon.health load.health event-cursor event-cursor.tmp \
-	node_sea_auto.list node_sea_scan.cache node_sea_scan.cache.tmp.123; do
+	node_sea_auto.list node_sea_scan.cache node_sea_scan.cache.tmp.123 \
+	manifest manifest.tmp manifest.prev; do
 	echo state > "$R/var/lib/secure_sudo/$f"
 done
 I uninstall > "$T/out" 2>&1; rc=$?
 check "install then uninstall succeeds" test "$rc" -eq 0
 check "... and says everything is gone" has 'uninstall complete'
 eq "install + uninstall leaves the root exactly as it was" "$(snap)" "$pristine"
-refute "... including the daemon's heartbeat, cursor, load and node-scan state" test -e "$R/var/lib/secure_sudo"
+refute "... including the daemon's heartbeat, cursor, load, node-scan and TimeVault state" test -e "$R/var/lib/secure_sudo"
 
 # Events still queued for the remote collector are never thrown away.
 mkroot

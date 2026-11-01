@@ -263,7 +263,163 @@ def verify_checkpoints(chain, checkpoints):
     return matched, report
 
 
-def verify_bundle(archive, trusted_key, checkpoints=None):
+# ---- G2: the TimeVault manifest's Merkle root ----
+#
+# RFC 6962 tree hash over the manifest's entries sorted by path (bytes):
+# leaf = SHA-256(0x00 || path || 0x00 || hex hash), node = SHA-256(0x01 ||
+# left || right), empty tree = SHA-256(""). secure-sudod computes the same.
+
+TV_HEADER = b"# secure_sudo timevault manifest v2"
+HEX64 = re.compile(rb"[0-9a-f]{64}")
+
+
+def read_timevault_manifest(path):
+    """Entries {path bytes: hex hash bytes} of a v2 (or v1) manifest."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise VerificationError("cannot read TimeVault manifest: {}".format(error))
+    lines = data.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    entries = {}
+    v2 = bool(lines) and lines[0] == TV_HEADER
+    for line in lines[1:] if v2 else lines:
+        if v2:
+            if len(line) < 66 or line[64:66] != b" /":
+                raise VerificationError("malformed TimeVault manifest line")
+            digest, raw, name, i = line[:64], line[65:], bytearray(), 0
+            while i < len(raw):
+                ch = raw[i:i + 1]
+                if ch == b"\\":
+                    nxt = raw[i + 1:i + 2]
+                    if nxt not in (b"\\", b"n", b"r"):
+                        raise VerificationError("bad escape in TimeVault manifest")
+                    name += {b"\\": b"\\", b"n": b"\n", b"r": b"\r"}[nxt]
+                    i += 2
+                    continue
+                name += ch
+                i += 1
+            name = bytes(name)
+        else:
+            name, _, digest = line.rpartition(b" ")
+            if not name.startswith(b"/"):
+                raise VerificationError("malformed TimeVault manifest line")
+        if not HEX64.fullmatch(digest):
+            raise VerificationError("malformed hash in TimeVault manifest")
+        entries.setdefault(name, digest)
+    return entries
+
+
+def merkle_root(entries):
+    leaves = [hashlib.sha256(b"\x00" + name + b"\x00" + entries[name]).digest()
+              for name in sorted(entries)]
+
+    def mth(items):
+        if len(items) == 1:
+            return items[0]
+        k = 1
+        while k * 2 < len(items):
+            k *= 2
+        return hashlib.sha256(b"\x01" + mth(items[:k]) + mth(items[k:])).digest()
+
+    return (mth(leaves) if leaves else hashlib.sha256(b"").digest()).hex()
+
+
+TV_TYPES = ("timevault_baseline", "timevault_merkle", "timevault_disengaged",
+            "timevault_manifest_modified", "timevault_manifest_unreadable")
+
+
+def load_timevault_records(path):
+    """The daemon's timevault_* records, in the order the collector got them."""
+    found = []
+    try:
+        with open(path, "rb") as source:
+            for raw in source:
+                start = raw.find(b"{")
+                if start < 0 or b"timevault_" not in raw:
+                    continue
+                try:
+                    record = json.loads(raw[start:].decode("utf-8", "strict"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if (isinstance(record, dict) and
+                        record.get("source") == "secure-sudod" and
+                        record.get("event_type") in TV_TYPES):
+                    found.append(record)
+    except OSError as error:
+        raise VerificationError("cannot read TimeVault records: {}".format(error))
+    return found
+
+
+def verify_timevault(records, manifest_entries=None):
+    """Check the forwarded roots tell one consistent story.
+
+    During an engagement the manifest never changes, so every root the
+    daemon sends must equal the baseline's. A new baseline is legitimate
+    only after a timevault_disengaged record (TimeVault is off again after
+    a reboot). Returns (report lines, problems); any problem fails.
+    """
+    report, problems = [], []
+    expected, open_engagement, seen = None, False, 0
+    for rec in records:
+        kind, root = rec.get("event_type"), rec.get("root")
+        when = rec.get("realtime_ns", "?")
+        if kind == "timevault_baseline":
+            if open_engagement:
+                problems.append(
+                    "TimeVault took a new baseline at {} ({}) with no "
+                    "disengage since the last one: the manifest was deleted "
+                    "or replaced and the daemon restarted".format(
+                        when, rec.get("reason")))
+            expected, open_engagement = root, True
+            seen += 1
+        elif kind == "timevault_merkle":
+            seen += 1
+            if expected is None:
+                expected, open_engagement = root, True
+            elif root != expected:
+                problems.append(
+                    "TimeVault manifest root changed at {} ({}): {} -> {}; the "
+                    "manifest was rewritten".format(when, rec.get("reason"),
+                                                    expected, root))
+                expected = root
+        elif kind == "timevault_disengaged":
+            if expected is not None and root not in (expected,):
+                problems.append(
+                    "TimeVault manifest set aside at {} has root {}, not {}".format(
+                        when, root, expected))
+            expected, open_engagement = None, False
+        elif kind == "timevault_manifest_modified":
+            report.append(
+                "WARNING: the TimeVault manifest was changed on the host at {} "
+                "(found root {}); the daemon {}".format(
+                    when, rec.get("found_root"),
+                    "put its copy back" if rec.get("restored") is True
+                    else "could NOT put its copy back"))
+            if rec.get("restored") is not True:
+                problems.append("the TimeVault manifest could not be restored")
+        elif kind == "timevault_manifest_unreadable":
+            report.append("WARNING: the daemon could not read the TimeVault "
+                          "manifest at {}: {}".format(when, rec.get("error")))
+    if not seen:
+        problems.append("no TimeVault root among the collector's records")
+    elif expected:
+        report.append("TimeVault: {} root record(s) agree; current root {}".format(
+            seen, expected))
+    if manifest_entries is not None:
+        root = merkle_root(manifest_entries)
+        if expected and root != expected:
+            problems.append(
+                "the bundle's TimeVault manifest has root {}, the collector "
+                "holds {}: it was rewritten".format(root, expected))
+        elif expected:
+            report.append("TimeVault: the bundle's manifest ({} entries) matches "
+                          "the off-host root".format(len(manifest_entries)))
+    return report, problems
+
+
+def verify_bundle(archive, trusted_key, checkpoints=None, timevault=None):
     with tempfile.TemporaryDirectory(prefix="secure-sudo-verify-") as temp:
         root = Path(temp)
         extract_bundle(archive, root)
@@ -272,6 +428,17 @@ def verify_bundle(archive, trusted_key, checkpoints=None):
         report = []
         if checkpoints is not None:
             _, report = verify_checkpoints(chain, checkpoints)
+        if timevault is not None:
+            tv_file = root / "live" / "timevault-manifest"
+            entries = (read_timevault_manifest(tv_file)
+                       if tv_file.is_file() else None)
+            if entries is None:
+                report.append("TimeVault: no manifest in this bundle "
+                              "(TimeVault was not engaged)")
+            tv_report, problems = verify_timevault(timevault, entries)
+            report.extend(tv_report)
+            if problems:
+                raise VerificationError("; ".join(problems))
 
         manifest_hash_path = root / "bundle-manifest.sha256"
         manifest_signature = root / "bundle-manifest.sig"
@@ -307,20 +474,41 @@ def main():
     parser = argparse.ArgumentParser(
         description="verify checksums, event chains, and signatures in an evidence bundle"
     )
-    parser.add_argument("archive", help="evidence .tar.gz created by secure-sudo evidence-export")
+    parser.add_argument("archive", nargs="?",
+                        help="evidence .tar.gz created by secure-sudo evidence-export")
     parser.add_argument("--trusted-key", help="trusted PEM public key for signed bundles")
     parser.add_argument(
         "--checkpoints",
         help="log_checkpoint records as received by the remote collector; "
              "each must match the bundle's logs")
+    parser.add_argument(
+        "--timevault",
+        help="the collector's records (as for --checkpoints): every "
+             "TimeVault Merkle root must agree, and the bundle's TimeVault "
+             "manifest must hash to the last one")
+    parser.add_argument(
+        "--timevault-root", metavar="MANIFEST",
+        help="print the Merkle root of a TimeVault manifest file and exit")
     args = parser.parse_args()
+
+    if args.timevault_root:
+        try:
+            print(merkle_root(read_timevault_manifest(args.timevault_root)))
+        except VerificationError as error:
+            parser.exit(1, "secure-sudo evidence-verify: {}\n".format(error))
+        return
+    if not args.archive:
+        parser.error("an evidence bundle is required")
 
     if args.trusted_key and not Path(args.trusted_key).is_file():
         parser.error("--trusted-key must name a readable public-key file")
     try:
         checkpoints = (load_checkpoints(args.checkpoints)
                        if args.checkpoints else None)
-        report = verify_bundle(args.archive, args.trusted_key, checkpoints) or []
+        timevault = (load_timevault_records(args.timevault)
+                     if args.timevault else None)
+        report = verify_bundle(args.archive, args.trusted_key, checkpoints,
+                               timevault) or []
     except VerificationError as error:
         parser.exit(1, "secure-sudo evidence-verify: {}\n".format(error))
     for line in report:

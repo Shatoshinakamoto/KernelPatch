@@ -121,6 +121,36 @@ static int log_contains(const char *needle)
 	return n;
 }
 
+/* The value of "key":"..." in the last log record of this type. */
+static int last_field(const char *type, const char *key, char *out, size_t n)
+{
+	char path[512], line[4096], want[96], k[64];
+	FILE *f;
+	int found = 0;
+
+	snprintf(want, sizeof(want), "\"event_type\":\"%s\"", type);
+	snprintf(k, sizeof(k), "\"%s\":\"", key);
+	todays_logpath(path, sizeof(path));
+	f = fopen(path, "re");
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *v, *q;
+
+		if (!strstr(line, want) || !(v = strstr(line, k)))
+			continue;
+		v += strlen(k);
+		q = strchr(v, '"');
+		if (!q || (size_t)(q - v) >= n)
+			continue;
+		memcpy(out, v, (size_t)(q - v));
+		out[q - v] = '\0';
+		found = 1;
+	}
+	fclose(f);
+	return found ? 0 : -1;
+}
+
 /* Feed one kernel record with this boot id and sequence. */
 static void seq_event(const struct cfg *c, const char *boot, unsigned seq)
 {
@@ -147,6 +177,7 @@ int main(int argc, char **argv)
 
 	if (argc != 2)
 		return 2;
+	setvbuf(stdout, NULL, _IOLBF, 0);	/* whole lines between helper output */
 	strcpy(cfg.remote_transport, "tls");
 	strcpy(cfg.vault_action, "quarantine");
 	g_cfg = &cfg;
@@ -403,6 +434,206 @@ int main(int argc, char **argv)
 		log_checkpoint(&cfg);
 		tap(log_contains("\"event_type\":\"log_checkpoint\"") == 2,
 		    "the next checkpoint covers the file as it is now");
+	}
+
+
+	/* ---- G2: the TimeVault manifest and its Merkle root ---- */
+	{
+		char w[1024], fa[1100], fb[1100], fsp[1100], fnl[1100], fc[1100];
+		char r1[80], got[80], m[1200], prev[1200];
+		int arch;
+		struct tv_set s2;
+		FILE *f;
+
+		snprintf(w, sizeof(w), "%s/tv-watch", argv[1]);
+		mkdir(w, 0700);
+		snprintf(m, sizeof(m), "%s/tv-watch/sub", argv[1]);
+		mkdir(m, 0700);
+		snprintf(fa, sizeof(fa), "%s/a", w);
+		snprintf(fb, sizeof(fb), "%s/sub/b", w);
+		snprintf(fsp, sizeof(fsp), "%s/with space", w);
+		snprintf(fnl, sizeof(fnl), "%s/new\nline\\x", w);
+		snprintf(fc, sizeof(fc), "%s/c", w);
+		write_file(fa, "alpha\n");
+		write_file(fb, "bravo\n");
+		write_file(fsp, "space\n");
+		write_file(fnl, "newline\n");
+		snprintf(cfg.vault_watch, sizeof(cfg.vault_watch), "%s", w);
+		mkdir(SYSFS, 0700);
+		write_file(SYSFS "/timevault", "1\n");
+		arch = count_archives();
+
+		rec(r, sizeof(r), "time_vault", "engage", "execution_allowlist",
+		    "enforce", "null", "null", "timevault: engaged", "false");
+		handle_event(&cfg, r);
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_baseline\",\"reason\":\"engaged\"") == 1 &&
+		    log_contains("\"leaves\":4") == 1 && count_archives() == arch &&
+		    exists(fa) && exists(fb) && exists(fsp) && exists(fnl),
+		    "G2: the first scan after `timevault on` is a baseline: 4 files recorded, none quarantined");
+		tap(last_field("timevault_baseline", "root", r1, sizeof(r1)) == 0 &&
+		    strlen(r1) == 64, "G2: the baseline record carries a 64-hex Merkle root");
+		f = fopen(MANIFEST, "re");
+		tap(f && fgets(m, sizeof(m), f) && !strcmp(m, TV_HEADER "\n") &&
+		    !fclose(f), "G2: the manifest file is v2 (header line)");
+
+		vault_scan(&cfg);
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_merkle\"") == 0 &&
+		    count_archives() == arch && exists(fa),
+		    "G2: rescans of an unchanged tree act on nothing and log nothing");
+		tv_checkpoint(&cfg);
+		tap(last_field("timevault_merkle", "root", got, sizeof(got)) == 0 &&
+		    !strcmp(got, r1) &&
+		    log_contains("\"reason\":\"checkpoint\"") == 1,
+		    "G2: the checkpoint record repeats the same root (a legitimate rescan)");
+
+		tv_free(&tv);		/* a daemon restart */
+		tv_loaded = 0;
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_merkle\",\"reason\":\"loaded\"") == 1 &&
+		    last_field("timevault_merkle", "root", got, sizeof(got)) == 0 &&
+		    !strcmp(got, r1) && tv.n == 4,
+		    "G2: after a restart the manifest is loaded (escaped names too) with the same root");
+
+		write_file(fb, "tampered\n");
+		vault_scan(&cfg);
+		tap(!exists(fb) && count_archives() == arch + 1 &&
+		    log_contains("\"reason\":\"scan\",\"root\":\"") == 1 &&
+		    log_contains("\"new\":0,\"changed\":1,\"acted\":1") == 1,
+		    "G2: a changed file is quarantined and the scan record says so");
+		tap(!strcmp(tv_root, r1),
+		    "G2: quarantining does not change the manifest (root unchanged)");
+		write_file(fb, "tampered\n");
+		write_file(fc, "charlie\n");
+		vault_scan(&cfg);
+		tap(!exists(fb) && !exists(fc) && count_archives() == arch + 3 &&
+		    log_contains("\"new\":1,\"changed\":1,\"acted\":2") == 1,
+		    "G2: the same tampered file dropped again is caught again; a new file too");
+		write_file(fb, "bravo\n");
+		vault_scan(&cfg);
+		tap(exists(fb) && count_archives() == arch + 3,
+		    "G2: the original content put back matches the baseline again");
+
+		/* The tree itself. */
+		tap(tv_read(MANIFEST, &s2, NULL) == 0 && s2.n == 4, "G2: manifest re-read");
+		tap(tv_root_hex(&s2, got) == 0 && !strcmp(got, r1),
+		    "G2: the root is a function of the entries alone");
+		s2.e[1].hash[10] = s2.e[1].hash[10] == '0' ? '1' : '0';
+		tap(tv_root_hex(&s2, got) == 0 && strcmp(got, r1),
+		    "G2: one changed hash changes the root");
+		s2.e[1].hash[10] = s2.e[1].hash[10] == '0' ? '1' : '0';
+		s2.e[2].path[strlen(s2.e[2].path) - 1] ^= 1;
+		tap(tv_root_hex(&s2, got) == 0 && strcmp(got, r1),
+		    "G2: one changed path changes the root");
+		s2.e[2].path[strlen(s2.e[2].path) - 1] ^= 1;
+		free(s2.e[3].path);
+		s2.n = 3;
+		tap(tv_root_hex(&s2, got) == 0 && strcmp(got, r1),
+		    "G2: a dropped entry changes the root");
+		tv_free(&s2);
+
+		/* Someone rewrites the manifest to bless their file. */
+		{
+			char hb[65], line[1300];
+			FILE *in, *out;
+
+			snprintf(prev, sizeof(prev), "%s.edit", MANIFEST);
+			write_file(fb, "evil\n");
+			tap(sha256_hex(fb, hb) == 0, "G2: hash of the planted file");
+			in = fopen(MANIFEST, "re");
+			out = fopen(prev, "we");
+			while (in && out && fgets(line, sizeof(line), in)) {
+				if (strstr(line, "/sub/b\n"))
+					snprintf(line, sizeof(line), "%s %s\n", hb, fb);
+				fputs(line, out);
+			}
+			if (in)
+				fclose(in);
+			if (out)
+				fclose(out);
+			rename(prev, MANIFEST);
+		}
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_manifest_modified\"") == 1 &&
+		    last_field("timevault_manifest_modified", "expected_root", got, sizeof(got)) == 0 &&
+		    !strcmp(got, r1) &&
+		    last_field("timevault_manifest_modified", "found_root", got, sizeof(got)) == 0 &&
+		    strlen(got) == 64 && strcmp(got, r1) &&
+		    log_contains("\"restored\":true") == 1,
+		    "G2: a rewritten manifest is recorded with both roots and put back");
+		tap(!exists(fb) && tv_read(MANIFEST, &s2, NULL) == 0 &&
+		    tv_root_hex(&s2, got) == 0 && !strcmp(got, r1),
+		    "G2: the blessed file is still quarantined; the file on disk has the baseline root again");
+		tv_free(&s2);
+		write_file(fb, "bravo\n");
+		{
+			struct timespec ts[2] = { { 0, UTIME_NOW }, { 0, UTIME_NOW } };
+
+			utimensat(AT_FDCWD, MANIFEST, ts, 0);
+		}
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_manifest_modified\"") == 1,
+		    "G2: a manifest only touched (same content) is not reported");
+		unlink(MANIFEST);
+		vault_scan(&cfg);
+		tap(log_contains("\"found_root\":\"missing\"") == 1 && exists(MANIFEST),
+		    "G2: a deleted manifest is reported and written back");
+
+		/* Reboot: TimeVault is off again. */
+		write_file(SYSFS "/timevault", "0\n");
+		vault_scan(&cfg);
+		snprintf(prev, sizeof(prev), "%s.prev", MANIFEST);
+		tap(log_contains("\"event_type\":\"timevault_disengaged\",\"root\":\"") == 1 &&
+		    !exists(MANIFEST) && exists(prev) && !tv_loaded,
+		    "G2: TimeVault off: the engagement's manifest is set aside (.prev)");
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_disengaged\"") == 1,
+		    "G2: and that is recorded once");
+		write_file(SYSFS "/timevault", "1\n");
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_baseline\",\"reason\":\"no_manifest\"") == 1 &&
+		    last_field("timevault_baseline", "root", got, sizeof(got)) == 0 &&
+		    !strcmp(got, r1),
+		    "G2: engaged with no engage record seen: a baseline marked no_manifest");
+
+		/* A manifest that cannot be read is never taken as empty. */
+		tv_free(&tv);
+		tv_loaded = 0;
+		write_file(MANIFEST, TV_HEADER "\nnot a manifest line\n");
+		write_file(fc, "charlie\n");
+		vault_scan(&cfg);
+		vault_scan(&cfg);
+		tap(log_contains("\"event_type\":\"timevault_manifest_unreadable\"") == 1 &&
+		    exists(fc) && exists(fa) && !tv_loaded,
+		    "G2: an unreadable manifest: nothing quarantined, reported once");
+		unlink(fc);
+
+		/* A v1 manifest (appended "PATH HASH", first entry wins). */
+		{
+			char ha[65], hs[65];
+
+			sha256_hex(fa, ha);
+			sha256_hex(fsp, hs);
+			f = fopen(MANIFEST, "we");
+			if (f) {
+				fprintf(f, "%s %s\n%s %s\n%s %s\n", fa, ha, fsp, hs,
+					fa, "0000000000000000000000000000000000000000000000000000000000000000");
+				fclose(f);
+			}
+		}
+		vault_scan(&cfg);
+		f = fopen(MANIFEST, "re");
+		tap(log_contains("\"reason\":\"loaded_v1\"") == 1 && tv.n == 2 &&
+		    tv_find(&tv, fsp) && f && fgets(m, sizeof(m), f) &&
+		    !strcmp(m, TV_HEADER "\n"),
+		    "G2: a v1 manifest is read (spaces in names, first entry wins) and rewritten as v2");
+		if (f)
+			fclose(f);
+		vault_scan(&cfg);
+		tap(exists(fa) && exists(fsp) && !exists(fb) &&
+		    log_contains("\"new\":2,\"changed\":0") == 1,
+		    "G2: files the v1 manifest never listed are treated as new");
 	}
 
 	printf("1..%d\n", n_test);

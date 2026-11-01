@@ -99,6 +99,11 @@ mkdir -p "$BUNDLE/live"
 if [[ -f $STATEDIR/daemon.health && ! -L $STATEDIR/daemon.health ]]; then
 	cp -- "$STATEDIR/daemon.health" "$BUNDLE/live/daemon.health"
 fi
+# The TimeVault manifest (G2): evidence-verify --timevault recomputes its
+# Merkle root and matches it against the roots the collector received.
+if [[ -f $STATEDIR/manifest && ! -L $STATEDIR/manifest ]]; then
+	cp -- "$STATEDIR/manifest" "$BUNDLE/live/timevault-manifest"
+fi
 for f in "$SYSFS"/* "$SECFS"/events_dropped; do
 	[[ -r $f && -f $f ]] || continue
 	name=${f##*/}
