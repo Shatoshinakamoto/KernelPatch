@@ -12,6 +12,15 @@
 #       secure-sudo-attest-verify on another machine.
 #   attest-report.sh ak
 #       The attestation key's public part and name, for enrollment.
+#   attest-report.sh quote --nonce HEX --ek
+#       The same bundle, plus the TPM's endorsement key and its
+#       manufacturer certificate, for an enrollment that checks them.
+#   attest-report.sh ek
+#       Only the endorsement key and certificate.
+#   attest-report.sh activate CHALLENGE.json
+#       Answer the verifier's credential-activation challenge: the TPM
+#       recovers its secret only if the challenge's AK and EK are both in
+#       this TPM. Prints the response JSON for the verifier.
 #
 # The report's own fields are as trustworthy as root on this host at the
 # moment it runs; what the TPM signature proves is the PCR values (the boot
@@ -31,7 +40,7 @@ CLI="${SS_ATTEST_CLI:-/usr/bin/secure-sudo}"
 R="${SS_ATTEST_ROOT:-}"
 
 usage() {
-	echo "usage: secure-sudo attest quote --nonce HEX [--pcrs 0,1,...] | ak | digest" >&2
+	echo "usage: secure-sudo attest quote --nonce HEX [--pcrs 0,1,...] [--ek] | ak | ek | activate CHALLENGE | digest" >&2
 	exit 2
 }
 
@@ -39,13 +48,24 @@ usage() {
 cmd="$1"; shift
 case "$cmd" in
   ak) exec "$BIN" ak ;;
+  ek) exec "$BIN" ek ;;
+  activate)
+	if [ $# -ne 1 ] || [ ! -r "$1" ]; then usage; fi
+	# the challenge is the verifier's JSON; take the two base64 fields
+	field() { tr -d ' \n' < "$1" | sed -n "s/.*\"$2\":\"\([A-Za-z0-9+\/=]*\)\".*/\1/p"; }
+	cred="$(field "$1" credential_b64)"; sec="$(field "$1" secret_b64)"
+	if [ -z "$cred" ] || [ -z "$sec" ]; then
+		echo "attest: $1 is not a challenge from secure-sudo-attest-verify" >&2; exit 2
+	fi
+	exec "$BIN" activate --credential "$cred" --secret "$sec" ;;
   quote) ;;
   *) usage ;;
 esac
 
-NONCE=""; PCRS=""
+NONCE=""; PCRS=""; EK=0
 while [ $# -gt 0 ]; do
 	case "$1" in
+	  --ek) EK=1; shift ;;
 	  --nonce) [ $# -ge 2 ] || usage; NONCE="$2"; shift 2 ;;
 	  --pcrs) [ $# -ge 2 ] || usage; PCRS="$2"; shift 2 ;;
 	  *) usage ;;
@@ -145,6 +165,10 @@ printf '{"bundle_version":1,"report_b64":"'
 base64 -w0 < "$T/report"
 printf '","tpm":'
 cat "$T/tpm"
+if [ "$EK" = 1 ]; then
+	printf ',"ek":'
+	"$BIN" ek
+fi
 if [ -s "$ima" ]; then
 	printf ',"ima_log_b64":"'
 	base64 -w0 < "$ima"

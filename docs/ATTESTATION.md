@@ -9,7 +9,7 @@ after updates, and what is still missing.
 
 | Piece | Where it runs | What it does |
 |---|---|---|
-| `secure-sudo-attest` (`/usr/libexec/secure-sudo/`) | host, as root | Talks to the TPM through tpm2-tss. Recreates the attestation key (AK) and signs a TPM2_Quote over the boot PCRs. It cannot extend, clear, or write NV, and it holds no stored key material. |
+| `secure-sudo-attest` (`/usr/libexec/secure-sudo/`) | host, as root | Talks to the TPM through tpm2-tss. Recreates the attestation key (AK) and signs a TPM2_Quote over the boot PCRs; recreates the endorsement key (EK), reads its certificate and answers credential-activation challenges. It cannot extend, clear, or write NV, and it holds no stored key material. |
 | `attest-report.sh` (`/usr/libexec/secure-sudo/`) | host, as root | Builds the host report, asks the tool to sign it, and prints the bundle. |
 | `secure-sudo attest ...` | host, as root | The front end: `attest quote --nonce HEX [--pcrs L]`, `attest ak`, `attest digest`. |
 | `secure-sudo-attest-verify` (`/usr/bin/`) | **verifier** (any machine you trust) | Needs only python3 and the `openssl` command. No TPM and no secure_sudo install. Generates nonces, enrolls hosts, and verifies bundles. |
@@ -84,13 +84,64 @@ locked, and the kernel and Secure Boot state at enrollment. To allow more
 policy versions, use `--allow-policy SHA256` (repeatable). `secure-sudo
 attest digest` prints the digest of the policy that is currently loaded.
 
-**Verifier trust.** Enrollment is trust on first use. The verifier trusts
-that the AK it sees at enrollment belongs to the host's real TPM, because
-you enrolled it at a time and place you control. It does not yet check the
-TPM manufacturer's endorsement key (EK) certificate or run credential
-activation (MakeCredential/ActivateCredential) to bind the AK to that EK
-cryptographically. That is listed under "Not done yet" below. Until then,
-protect the enrollment step the way you protect SSH host-key enrollment.
+**Verifier trust.** Without `--ek-ca`, enrollment is trust on first use.
+The verifier then trusts that the AK it sees at enrollment belongs to the
+host's real TPM, because you enrolled it at a time and place you control.
+Protect that step the way you protect SSH host-key enrollment. With
+`--ek-ca` the verifier checks the TPM itself instead ("Endorsement key and
+credential activation" below).
+
+### Endorsement key and credential activation
+
+Every TPM has an endorsement key (EK). The manufacturer stores a
+certificate for it in TPM NV (index `0x01c00002` for the RSA 2048 EK),
+signed by the manufacturer's CA. That certificate says "this key is the EK
+of a genuine TPM". Credential activation then proves that the AK lives in
+the same TPM.
+
+1. The host sends its EK with the bundle (`attest quote --ek`, or `attest
+   ek` on its own). The tool recreates the EK from the TCG EK Credential
+   Profile's default RSA template, so it is the key the certificate is for.
+2. The verifier checks that the EK uses the standard template (restricted
+   decryption key, `PolicySecret(endorsement)` policy, fixedTPM), that the
+   certificate is for that EK, and that the certificate chains to a CA you
+   pass with `--ek-ca` (roots; repeatable) and `--ek-intermediate`
+   (repeatable). Get those from the TPM vendor (Infineon, STMicro, Nuvoton,
+   Intel PTT and AMD fTPM all publish them).
+3. The verifier makes a challenge in software (`TPM2_MakeCredential`): a
+   random secret, encrypted to the EK and bound to the AK's name. It writes
+   the challenge next to the host record (`HOST.json.challenge`, or
+   `--challenge FILE`). The record says `"ek_activation": "pending"` and
+   holds only the secret's sha256.
+4. On the host, `sudo secure-sudo attest activate CHALLENGE > response.json`
+   runs `TPM2_ActivateCredential`. The TPM releases the secret only if an
+   object with exactly the AK's name is loaded next to the EK that the
+   challenge was encrypted to. A different TPM, or a different key, gets
+   nothing.
+5. `secure-sudo-attest-verify activate HOST.json --response response.json`
+   checks the secret, marks the record `"ek_activation": "done"`, and drops
+   the hash, so a response cannot be used twice.
+
+```sh
+N=$(secure-sudo-attest-verify nonce)
+sudo secure-sudo attest quote --nonce "$N" --ek > bundle.json              # host
+secure-sudo-attest-verify enroll bundle.json --nonce "$N" --out hosts/web1.json \
+    --ek-ca infineon-root.pem --ek-intermediate infineon-ica.pem --require-lock
+sudo secure-sudo attest activate web1.json.challenge > response.json        # host
+secure-sudo-attest-verify activate hosts/web1.json --response response.json
+```
+
+Until activation is done, `verify` fails ("the attestation key is bound to
+the enrolled TPM's endorsement key"). Re-enrolling with `--previous` and the
+same AK keeps the binding. With `--ek-ca` again, the EK must also be the one
+already enrolled. A TPM without an EK certificate (most software TPMs, some
+firmware TPMs) can still be bound with `--ek-no-cert`. That proves the AK
+and that EK share a TPM, but not that the TPM is genuine. Use it only when
+you recorded the EK from a trusted inventory.
+
+The challenge and response cross the network in the clear. That is safe:
+only the TPM can decrypt the challenge, and the response is useless once
+used.
 
 Keep the host records on the verifier and not on the host. They are not
 secret, but they are the trust anchor: anyone who can edit them can change
@@ -130,6 +181,8 @@ them pass. Use `--json` for machine output. The checks are:
     event log" below).
 11. The IMA log replays to the quoted PCR 10, and, with a reference list,
     every measured file has a known hash ("The IMA log" below).
+12. For a host enrolled with `--ek-ca` or `--ek-no-cert`, credential
+    activation is done, so the AK is bound to the enrolled TPM's EK.
 
 Lines marked `INFO` are shown for the operator and do not fail the result.
 
@@ -383,8 +436,14 @@ intact", while the quote answers "what booted".
 These are features the design needs. They are tracked in TODO P2-1 as
 missing work, not as permanent limits:
 
-- **EK certificate and credential activation**, to replace trust on first
-  use at enrollment.
+- **Credential activation with an ECC EK.** Only the RSA 2048 EK is
+  supported. Nearly every TPM has one, but a TPM that ships only an ECC EK
+  certificate (`0x01c0000a`) cannot be bound yet. Making the challenge for
+  it needs ECDH and the KDFe key derivation in the verifier.
+- **Automatic retrieval of intermediate CA certificates.** The verifier does
+  not follow the EK certificate's Authority Information Access URL. Pass
+  intermediates with `--ek-intermediate`.
 
-The firmware event-log parser and the IMA log replay that used to be listed
-here are built (sections above).
+The firmware event-log parser, the IMA log replay and the RSA EK
+certificate check with credential activation that used to be listed here
+are built (sections above).

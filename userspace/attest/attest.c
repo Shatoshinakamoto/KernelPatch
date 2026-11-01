@@ -5,6 +5,16 @@
  *   secure-sudo-attest ak
  *       Print the attestation key's public part (base64 TPM2B_PUBLIC) and
  *       TPM name as JSON. The verifier enrolls these once.
+ *   secure-sudo-attest ek
+ *       Print the TPM's endorsement key (EK, the default RSA 2048 template
+ *       of the TCG EK Credential Profile) and the manufacturer's EK
+ *       certificate from NV, when the TPM has one. The verifier checks the
+ *       certificate against the manufacturer's CA.
+ *   secure-sudo-attest activate --credential B64 --secret B64
+ *       TPM2_ActivateCredential: recover the verifier's secret from a
+ *       challenge made for this EK and this AK. The TPM releases it only
+ *       if the AK named in the challenge is loaded in the same TPM as that
+ *       EK, which binds the AK to the certified TPM (no trust on first use).
  *   secure-sudo-attest quote --nonce HEX --report FILE [--pcrs 0,1,...]
  *       Have the TPM sign the listed SHA-256 PCRs (default 0,1,2,3,4,5,7,8,9)
  *       together with sha256(nonce || report): the verifier's fresh nonce
@@ -18,7 +28,8 @@
  * the same key every time from the same TPM until the owner seed changes
  * (TPM2_Clear, which G4 blocks): nothing is stored on disk.
  *
- * This program deliberately does nothing else (no extend, no clear, no NV):
+ * This program deliberately does nothing else (no extend, no clear, no NV
+ * write; it only reads the EK certificate indices):
  * it is the one attestation binary on the kernel's tpm_openers list (G4), so
  * once the policy is locked a root shell still cannot drive the TPM through
  * it.
@@ -45,16 +56,36 @@
 
 static ESYS_CONTEXT *ctx;
 static TSS2_TCTI_CONTEXT *tcti;
+/* Transient objects and sessions, flushed on every exit: without a resource
+ * manager (a raw /dev/tpm0 or a software TPM) a failed run would otherwise
+ * leave them taking the TPM's few object slots. */
+static ESYS_TR live[4];
+static int nlive;
+
+static ESYS_TR track(ESYS_TR h)
+{
+	if (nlive < (int)(sizeof(live) / sizeof(live[0])))
+		live[nlive++] = h;
+	return h;
+}
+
+static void flush_live(void)
+{
+	while (ctx && nlive > 0)
+		Esys_FlushContext(ctx, live[--nlive]);
+}
 
 static void die_rc(const char *what, TSS2_RC rc)
 {
 	fprintf(stderr, "secure-sudo-attest: %s: %s\n", what, Tss2_RC_Decode(rc));
+	flush_live();
 	exit(1);
 }
 
 static void die(const char *msg)
 {
 	fprintf(stderr, "secure-sudo-attest: %s\n", msg);
+	flush_live();
 	exit(2);
 }
 
@@ -128,7 +159,7 @@ static ESYS_TR make_ak(TPM2B_PUBLIC **pub)
 				&none, &key, pub, NULL, NULL, NULL);
 	if (rc != TSS2_RC_SUCCESS)
 		die_rc("creating the attestation key (owner hierarchy)", rc);
-	return key;
+	return track(key);
 }
 
 static void hex(const unsigned char *b, size_t n, char *out)
@@ -151,6 +182,47 @@ static char *b64(const unsigned char *b, size_t n)
 		die("out of memory");
 	EVP_EncodeBlock((unsigned char *)o, b, (int)n);
 	return o;
+}
+
+/* The EK from the TCG EK Credential Profile's default RSA template (L-1):
+ * the key the manufacturer's EK certificate certifies. Its use needs
+ * PolicySecret(TPM_RH_ENDORSEMENT), which is the authPolicy below. */
+static ESYS_TR make_ek(TPM2B_PUBLIC **pub)
+{
+	static const BYTE policy[32] = {
+		0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
+		0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
+		0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa,
+	};
+	TPM2B_SENSITIVE_CREATE in = { 0 };
+	TPM2B_PUBLIC t = { 0 };
+	TPM2B_DATA outside = { 0 };
+	TPML_PCR_SELECTION none = { 0 };
+	ESYS_TR key;
+	TSS2_RC rc;
+
+	t.publicArea.type = TPM2_ALG_RSA;
+	t.publicArea.nameAlg = TPM2_ALG_SHA256;
+	t.publicArea.objectAttributes = TPMA_OBJECT_FIXEDTPM |
+		TPMA_OBJECT_FIXEDPARENT | TPMA_OBJECT_SENSITIVEDATAORIGIN |
+		TPMA_OBJECT_ADMINWITHPOLICY | TPMA_OBJECT_RESTRICTED |
+		TPMA_OBJECT_DECRYPT;
+	t.publicArea.authPolicy.size = sizeof(policy);
+	memcpy(t.publicArea.authPolicy.buffer, policy, sizeof(policy));
+	t.publicArea.parameters.rsaDetail.symmetric.algorithm = TPM2_ALG_AES;
+	t.publicArea.parameters.rsaDetail.symmetric.keyBits.aes = 128;
+	t.publicArea.parameters.rsaDetail.symmetric.mode.aes = TPM2_ALG_CFB;
+	t.publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
+	t.publicArea.parameters.rsaDetail.keyBits = 2048;
+	t.publicArea.parameters.rsaDetail.exponent = 0;
+	t.publicArea.unique.rsa.size = 256;	/* 256 zero bytes */
+
+	rc = Esys_CreatePrimary(ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
+				ESYS_TR_NONE, ESYS_TR_NONE, &in, &t, &outside,
+				&none, &key, pub, NULL, NULL, NULL);
+	if (rc != TSS2_RC_SUCCESS)
+		die_rc("creating the endorsement key (endorsement hierarchy)", rc);
+	return track(key);
 }
 
 static void print_ak(ESYS_TR key, const TPM2B_PUBLIC *pub)
@@ -336,7 +408,7 @@ static int cmd_quote(const char *nonce_hex, const char *report, const char *pcrs
 	Esys_Free(att);
 	Esys_Free(sig);
 	Esys_Free(pub);
-	Esys_FlushContext(ctx, key);
+	flush_live();
 	tpm_close();
 	return 0;
 }
@@ -352,7 +424,146 @@ static int cmd_ak(void)
 	print_ak(key, pub);
 	printf("}\n");
 	Esys_Free(pub);
-	Esys_FlushContext(ctx, key);
+	flush_live();
+	tpm_close();
+	return 0;
+}
+
+/* Read an NV index (an EK certificate) whole; NULL when it is not there. */
+static unsigned char *nv_read_all(TPM2_HANDLE index, size_t *len)
+{
+	TPM2B_NV_PUBLIC *np = NULL;
+	unsigned char *out;
+	ESYS_TR nv;
+	UINT16 size, off = 0;
+	TSS2_RC rc;
+
+	rc = Esys_TR_FromTPMPublic(ctx, index, ESYS_TR_NONE, ESYS_TR_NONE,
+				   ESYS_TR_NONE, &nv);
+	if (rc != TSS2_RC_SUCCESS)
+		return NULL;
+	rc = Esys_NV_ReadPublic(ctx, nv, ESYS_TR_NONE, ESYS_TR_NONE,
+				ESYS_TR_NONE, &np, NULL);
+	if (rc != TSS2_RC_SUCCESS)
+		return NULL;
+	size = np->nvPublic.dataSize;
+	Esys_Free(np);
+	out = malloc(size ? size : 1);
+	if (!out)
+		die("out of memory");
+	while (off < size) {
+		TPM2B_MAX_NV_BUFFER *d = NULL;
+		UINT16 n = (UINT16)(size - off > 512 ? 512 : size - off);
+
+		rc = Esys_NV_Read(ctx, nv, nv, ESYS_TR_PASSWORD, ESYS_TR_NONE,
+				  ESYS_TR_NONE, n, off, &d);
+		if (rc != TSS2_RC_SUCCESS || d->size != n)
+			die_rc("reading the EK certificate from NV", rc);
+		memcpy(out + off, d->buffer, n);
+		off = (UINT16)(off + n);
+		Esys_Free(d);
+	}
+	Esys_TR_Close(ctx, &nv);
+	*len = size;
+	return out;
+}
+
+static int cmd_ek(void)
+{
+	unsigned char buf[sizeof(TPM2B_PUBLIC)], *cert;
+	size_t off = 0, clen = 0;
+	TPM2B_PUBLIC *pub = NULL;
+	TSS2_RC rc;
+	char *p;
+
+	tpm_open();
+	make_ek(&pub);
+	rc = Tss2_MU_TPM2B_PUBLIC_Marshal(pub, buf, sizeof(buf), &off);
+	if (rc != TSS2_RC_SUCCESS)
+		die_rc("marshal EK public", rc);
+	p = b64(buf, off);
+	printf("{\"ek_alg\":\"rsa2048\",\"ek_public\":\"%s\",\"ek_cert\":", p);
+	free(p);
+	/* TCG EK Credential Profile: the RSA 2048 EK certificate index */
+	cert = nv_read_all(0x01C00002, &clen);
+	if (cert && clen) {
+		p = b64(cert, clen);
+		printf("\"%s\"}\n", p);
+		free(p);
+	} else {
+		printf("null}\n");
+	}
+	free(cert);
+	Esys_Free(pub);
+	flush_live();
+	tpm_close();
+	return 0;
+}
+
+static size_t unb64(const char *s, unsigned char *out, size_t max)
+{
+	size_t l = strlen(s);
+	int n;
+
+	if (!l || l % 4 || l / 4 * 3 > max)
+		die("bad base64 in the challenge");
+	n = EVP_DecodeBlock(out, (const unsigned char *)s, (int)l);
+	if (n < 0)
+		die("bad base64 in the challenge");
+	if (l >= 1 && s[l - 1] == '=')
+		n--;
+	if (l >= 2 && s[l - 2] == '=')
+		n--;
+	return (size_t)n;
+}
+
+static int cmd_activate(const char *cred_b64, const char *secret_b64)
+{
+	unsigned char cb[sizeof(TPM2B_ID_OBJECT)], sb[sizeof(TPM2B_ENCRYPTED_SECRET)];
+	char h[2 * sizeof(((TPM2B_DIGEST *)0)->buffer) + 1];
+	TPM2B_ID_OBJECT cred = { 0 };
+	TPM2B_ENCRYPTED_SECRET sec = { 0 };
+	TPM2B_DIGEST *out = NULL;
+	TPM2B_PUBLIC *akp = NULL, *ekp = NULL;
+	TPMT_SYM_DEF sym = { .algorithm = TPM2_ALG_NULL };
+	TPM2B_NONCE empty = { 0 };
+	ESYS_TR ak, ek, sess;
+	size_t cl, sl, off = 0;
+	TSS2_RC rc;
+
+	cl = unb64(cred_b64, cb, sizeof(cb));
+	sl = unb64(secret_b64, sb, sizeof(sb));
+	if (Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(cb, cl, &off, &cred) != TSS2_RC_SUCCESS || off != cl)
+		die("the challenge's credential is not a TPM2B_ID_OBJECT");
+	off = 0;
+	if (Tss2_MU_TPM2B_ENCRYPTED_SECRET_Unmarshal(sb, sl, &off, &sec) != TSS2_RC_SUCCESS || off != sl)
+		die("the challenge's secret is not a TPM2B_ENCRYPTED_SECRET");
+
+	tpm_open();
+	ak = make_ak(&akp);
+	ek = make_ek(&ekp);
+	/* the EK's policy: PolicySecret(TPM_RH_ENDORSEMENT) */
+	rc = Esys_StartAuthSession(ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+				   ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+				   TPM2_SE_POLICY, &sym, TPM2_ALG_SHA256, &sess);
+	if (rc != TSS2_RC_SUCCESS)
+		die_rc("StartAuthSession", rc);
+	track(sess);
+	rc = Esys_PolicySecret(ctx, ESYS_TR_RH_ENDORSEMENT, sess, ESYS_TR_PASSWORD,
+			       ESYS_TR_NONE, ESYS_TR_NONE, &empty, NULL, NULL, 0,
+			       NULL, NULL);
+	if (rc != TSS2_RC_SUCCESS)
+		die_rc("PolicySecret(endorsement)", rc);
+	rc = Esys_ActivateCredential(ctx, ak, ek, ESYS_TR_PASSWORD, sess,
+				     ESYS_TR_NONE, &cred, &sec, &out);
+	if (rc != TSS2_RC_SUCCESS)
+		die_rc("ActivateCredential (the challenge is not for this TPM's EK and AK)", rc);
+	hex(out->buffer, out->size, h);
+	printf("{\"tool\":\"secure-sudo-attest\",\"activated_secret\":\"%s\"}\n", h);
+	Esys_Free(out);
+	Esys_Free(akp);
+	Esys_Free(ekp);
+	flush_live();
 	tpm_close();
 	return 0;
 }
@@ -360,7 +571,8 @@ static int cmd_ak(void)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: secure-sudo-attest ak\n"
+		"usage: secure-sudo-attest ak | ek\n"
+		"       secure-sudo-attest activate --credential B64 --secret B64\n"
 		"       secure-sudo-attest quote --nonce HEX --report FILE [--pcrs " DEFAULT_PCRS "]\n");
 	exit(2);
 }
@@ -370,10 +582,19 @@ int main(int argc, char **argv)
 	const char *nonce = NULL, *report = NULL, *pcrs = DEFAULT_PCRS;
 	int i;
 
+	/* errors are decoded and reported here; keep tss2's own log quiet
+	 * (a missing EK certificate index is not an error) unless asked */
+	setenv("TSS2_LOG", "all+NONE", 0);
+
 	if (argc < 2)
 		usage();
 	if (!strcmp(argv[1], "ak") && argc == 2)
 		return cmd_ak();
+	if (!strcmp(argv[1], "ek") && argc == 2)
+		return cmd_ek();
+	if (!strcmp(argv[1], "activate") && argc == 6 &&
+	    !strcmp(argv[2], "--credential") && !strcmp(argv[4], "--secret"))
+		return cmd_activate(argv[3], argv[5]);
 	if (strcmp(argv[1], "quote"))
 		usage();
 	for (i = 2; i < argc; i++) {
