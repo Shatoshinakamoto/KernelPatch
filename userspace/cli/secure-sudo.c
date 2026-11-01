@@ -9,7 +9,9 @@
  * This tool is the single supported way to drive them. It reads the config in
  * /etc/secure_sudo/ and pushes it into those kernel files ("load"), flips
  * individual knobs ("set", "net", "timevault", "lock"), prints current state
- * ("status"), manages the TimeVault allowlist ("vault-allow", vault_allow.c),
+ * ("status"), previews, snapshots, records and restores policy changes
+ * ("diff", "snapshot", "history", "restore", policy_state.c), manages the
+ * TimeVault allowlist ("vault-allow", vault_allow.c),
  * re-detects admin groups ("detect-admins", detect_admins.c), and hands OTP
  * subcommands to the otp helper.
  *
@@ -53,9 +55,6 @@
 #endif
 #ifndef AUDIT_ENABLED_FILE
 #define AUDIT_ENABLED_FILE "/proc/sys/kernel/audit_enabled"
-#endif
-#ifndef BOOT_ID_FILE
-#define BOOT_ID_FILE "/proc/sys/kernel/random/boot_id"
 #endif
 
 static int require_root(void)
@@ -408,56 +407,12 @@ static void report(struct load_tally *t, const char *verdict, const char *what,
 /* Push a config list file into its securityfs target. Missing file = clear. */
 static void load_list(const struct listmap *m, struct load_tally *t)
 {
-	char cfg[256], sec[256], detail[160], *buf = NULL;
-	size_t cap = 0, len = 0;
+	char sec[256], detail[160], *buf;
+	size_t len = 0;
 	int err = 0, entries = 0, auto_added = 0, auto_dropped = 0, have = 0;
-	FILE *f;
 
-	snprintf(cfg, sizeof(cfg), CONFIG_DIR "/%s", m->cfg_file);
 	snprintf(sec, sizeof(sec), SECFS "/%s", m->secfs);
-
-	f = fopen(cfg, "re");
-	if (f) {
-		have = 1;
-		for (;;) {
-			char chunk[4096];
-			size_t n = fread(chunk, 1, sizeof(chunk), f);
-
-			if (n == 0)
-				break;
-			if (len + n + 1 > cap) {
-				char *grown;
-
-				cap = (len + n + 1) * 2;
-				grown = realloc(buf, cap);
-				if (!grown) {
-					free(buf);
-					fclose(f);
-					report(t, "rejected", m->secfs, 0, "out of memory");
-					return;
-				}
-				buf = grown;
-			}
-			memcpy(buf + len, chunk, n);
-			len += n;
-		}
-		fclose(f);
-	}
-	if (!strcmp(m->secfs, "node_sea_binaries")) {
-		/* hand-written entries first, then what node-scan found */
-		size_t alen = 0, glen = 0;
-		char *autol = node_sea_read_file(node_sea_auto_path(), &alen);
-		char *merged = NULL;
-
-		if (autol && node_sea_merge(buf, len, autol, alen, &merged, &glen,
-					    &auto_added, &auto_dropped) == 0) {
-			free(buf);
-			buf = merged;
-			len = glen;
-			have = 1;
-		}
-		free(autol);
-	}
+	buf = policy_list_payload(m, &len, &have, &auto_added, &auto_dropped);
 	if (buf) {
 		char *p, *save = NULL, *copy;
 
@@ -535,7 +490,28 @@ static void load_knobs(struct load_tally *t)
 	cfg_free(&c);
 }
 
-static int cmd_load(int force)
+/* The rejected settings as "a,b,c" (+N more) for the history record. */
+static void rejected_list(const struct load_tally *t, char *out, size_t n)
+{
+	size_t used = 0;
+	int i;
+
+	out[0] = '\0';
+	for (i = 0; i < t->rejected_keys_count && used + 1 < n; i++)
+		used += (size_t)snprintf(out + used, n - used, "%s%s", i ? "," : "",
+					 t->rejected_keys[i]);
+	if (t->rejected_keys_omitted && used + 1 < n)
+		snprintf(out + used, n - used, ",+%d more", t->rejected_keys_omitted);
+}
+
+/*
+ * `load` (P0-6) with the P1-6 record: a snapshot of the configuration and
+ * the live kernel before anything is written, and a history line saying who
+ * loaded what, the lint result and what the kernel accepted. @action is
+ * "load" or "restore"; restore passes the snapshot it already took.
+ */
+int policy_load(int force, const char *action, const char *restored_from,
+		const char *pre_snap, const char *pre_sums)
 {
 	struct lint_opts o = {
 		.cfgdir = CONFIG_DIR, .pamdir = "/etc/pam.d",
@@ -543,33 +519,66 @@ static int cmd_load(int force)
 		.quiet = 1, .pam_soft = 1,
 	};
 	struct load_tally t = { 0 };
+	struct ps_record r = { .action = action, .restored_from = restored_from,
+			       .lint_errors = -1, .changes = -1 };
+	char snap[64] = "", sums[65] = "", rej[600];
 	size_t i;
+	int errs;
 
-	printf("secure-sudo load: %s\n", CONFIG_DIR);
+	printf("secure-sudo %s: %s\n", action, CONFIG_DIR);
 	if (access(SYSFS, F_OK) != 0) {
 		fprintf(stderr, "secure-sudo: LSM not active (no %s); nothing loaded\n", SYSFS);
 		if (persist_load_health("refused", &t) != 0)
 			fprintf(stderr, "secure-sudo: could not persist load health: %s\n",
 				strerror(errno));
+		r.result = "refused";
+		r.detail = "LSM not active";
+		policy_history_append(&r);
 		return -1;
 	}
-	if (policy_lint(&o) > 0) {
+	errs = policy_lint(&o);
+	r.lint_errors = errs;
+	r.changes = policy_diff(0);
+	if (errs > 0) {
 		if (!force) {
 			fprintf(stderr, "secure-sudo: load refused: fix the errors above "
 				"(nothing was changed), or use `load --force`\n");
 			if (persist_load_health("refused", &t) != 0)
 				fprintf(stderr, "secure-sudo: could not persist load health: %s\n",
 					strerror(errno));
+			r.result = "refused";
+			r.detail = "lint errors";
+			policy_history_append(&r);
 			return -1;
 		}
 		fprintf(stderr, "secure-sudo: --force: loading despite the errors above\n");
+		r.detail = "--force despite lint errors";
 	}
+	if (pre_snap) {
+		snprintf(snap, sizeof(snap), "%s", pre_snap);
+		snprintf(sums, sizeof(sums), "%s", pre_sums);
+	} else if (policy_snapshot("pre-load", snap, sizeof(snap), sums,
+				   sizeof(sums)) != 0) {
+		/* Never block the boot-time load on the state directory. */
+		fprintf(stderr, "secure-sudo: warning: no snapshot taken before "
+			"loading: %s\n", strerror(errno));
+		snap[0] = sums[0] = '\0';
+	}
+	r.snapshot = snap;
+	r.snapshot_sums = sums;
 	for (i = 0; i < ss_nlists; i++)
 		load_list(&ss_lists[i], &t);
 	load_knobs(&t);
 
 	printf("load: %d accepted, %d rejected, %d skipped\n",
 	       t.accepted, t.rejected, t.skipped);
+	r.accepted = t.accepted;
+	r.rejected = t.rejected;
+	r.skipped = t.skipped;
+	rejected_list(&t, rej, sizeof(rej));
+	r.rejected_keys = rej;
+	r.result = t.rejected ? "partial" : "complete";
+	policy_history_append(&r);
 	if (persist_load_health(t.rejected ? "partial" : "complete", &t) != 0) {
 		fprintf(stderr, "secure-sudo: load was applied but could not persist "
 			"load health: %s\n", strerror(errno));
@@ -577,10 +586,20 @@ static int cmd_load(int force)
 	}
 	if (t.rejected) {
 		fprintf(stderr, "secure-sudo: load INCOMPLETE: the kernel is running a "
-			"partial policy; fix the rejected lines and run load again\n");
+			"partial policy (rejected: %s); fix the rejected lines and run "
+			"load again%s%s%s\n", rej[0] ? rej : "see above",
+			snap[0] ? ", or `secure-sudo restore " : "", snap,
+			snap[0] ? "` to go back to the state before this load" : "");
 		return -1;
 	}
+	if (snap[0])
+		printf("load: state before this load saved as snapshot %s\n", snap);
 	return 0;
+}
+
+static int cmd_load(int force)
+{
+	return policy_load(force, "load", NULL, NULL, NULL);
 }
 
 static int cmd_status(void)
@@ -766,38 +785,6 @@ static int read_load_health(char *state, size_t state_size,
 	if (strcmp(record_boot_id, current_boot_id))
 		snprintf(state, state_size, "stale");
 	return 0;
-}
-
-static int settings_equal(const struct knob *k, const char *configured,
-			  const char *live)
-{
-	char *end_cfg, *end_live;
-	unsigned long cfg_num, live_num;
-
-	if (k->type == K_BOOL) {
-		int cfg_true = !strcasecmp(configured, "1") ||
-			       !strcasecmp(configured, "yes") ||
-			       !strcasecmp(configured, "on") ||
-			       !strcasecmp(configured, "true") ||
-			       !strcasecmp(configured, "y");
-		int live_true = !strcasecmp(live, "1") ||
-				!strcasecmp(live, "yes") ||
-				!strcasecmp(live, "on") ||
-				!strcasecmp(live, "true") ||
-				!strcasecmp(live, "y");
-		return cfg_true == live_true;
-	}
-	if (k->type == K_U32) {
-		errno = 0;
-		cfg_num = strtoul(configured, &end_cfg, 10);
-		if (errno || end_cfg == configured || *end_cfg)
-			return 0;
-		errno = 0;
-		live_num = strtoul(live, &end_live, 10);
-		return !errno && end_live != live && !*end_live &&
-		       cfg_num == live_num;
-	}
-	return !strcmp(configured, live);
 }
 
 struct health_unit {
@@ -1112,10 +1099,10 @@ static int cmd_health(int json)
 				continue;
 			}
 			if (!strcmp(e->key, "audit_events"))
-				audit_configured = settings_equal(k, e->val, "1");
+				audit_configured = knob_values_equal(k, e->val, "1");
 			snprintf(path, sizeof(path), SYSFS "/%s", k->sysfs);
 			if (read_value(path, live, sizeof(live)) != 0 ||
-			    !settings_equal(k, e->val, live))
+			    !knob_values_equal(k, e->val, live))
 				mismatches++;
 		}
 		cfg_free(&cfg);
@@ -1639,6 +1626,11 @@ static void usage(void)
 "                       order before enforcing (read-only; any user)\n"
 "  load [--force]       lint, then push /etc/secure_sudo/* into the kernel and\n"
 "                       report every setting as accepted/rejected/skipped\n"
+"  load --dry-run, diff  show what load would change; changes nothing\n"
+"  snapshot [create|list|show ID|verify [ID]]   config + live kernel state,\n"
+"                       hash-checked; taken before every load/set/lock/restore\n"
+"  history [-n N] [--json] [--verify]   who changed policy, what, and the result\n"
+"  restore ID [--no-load] [-y]   put a snapshot's config back and load it\n"
 "  status               show current kernel policy state\n"
 "  health [--json]      compare config/live policy and report component health\n"
 "  evidence-export FILE [--signing-key EXTERNAL.pem] export incident evidence\n"
@@ -1663,6 +1655,45 @@ static void usage(void)
 "Kernel policy commands are root-only and refused once the config is locked;\n"
 "lint and evidence-verify are read-only and do not require root.\n");
 	vault_allow_usage();
+}
+
+/* P1-6: a snapshot before a change; a warning (not a failure) if it fails. */
+static void pre_snapshot(const char *reason, char snap[64], char sums[65])
+{
+	if (policy_snapshot(reason, snap, 64, sums, 65) != 0) {
+		fprintf(stderr, "secure-sudo: warning: no snapshot taken first: %s\n",
+			strerror(errno));
+		snap[0] = sums[0] = '\0';
+	}
+}
+
+static void record_change(const char *action, const char *detail, int ok,
+			  const char *snap, const char *sums)
+{
+	struct ps_record r = { .action = action, .detail = detail,
+			       .result = ok ? "complete" : "rejected",
+			       .snapshot = snap, .snapshot_sums = sums,
+			       .lint_errors = -1, .changes = -1 };
+
+	policy_history_append(&r);
+}
+
+/* `set`/`net`: kernel first, persist only what the kernel accepted. */
+static int set_and_record(const char *key, const char *val)
+{
+	char snap[64], sums[65], detail[600];
+	int ok;
+
+	pre_snapshot("pre-set", snap, sums);
+	ok = set_knob(key, val) == 0;
+	snprintf(detail, sizeof(detail), "%.60s = %.400s", key, val);
+	record_change("set", detail, ok, snap, sums);
+	if (!ok)
+		return 1;
+	if (persist_knob(key, val) != 0)
+		fprintf(stderr, "secure-sudo: set live, but failed to persist "
+			"'%s' to the config\n", key);
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -1691,9 +1722,20 @@ int main(int argc, char **argv)
 	if (require_root() != 0)
 		return 1;
 
+	if (!strcmp(argv[1], "load") && argc == 3 &&
+	    !strcmp(argv[2], "--dry-run"))
+		return cmd_diff(0, NULL);
 	if (!strcmp(argv[1], "load") &&
 	    (argc == 2 || (argc == 3 && !strcmp(argv[2], "--force"))))
 		return cmd_load(argc == 3) == 0 ? 0 : 1;
+	if (!strcmp(argv[1], "diff"))
+		return cmd_diff(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "snapshot"))
+		return cmd_snapshot(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "history"))
+		return cmd_history(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "restore"))
+		return cmd_restore(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 	if (!strcmp(argv[1], "health") &&
@@ -1706,20 +1748,16 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "set") && argc == 4) {
 		/* Push to the kernel first; only persist if the kernel accepted
 		 * it, so the saved config can never diverge from live policy. */
-		if (set_knob(argv[2], argv[3]) != 0)
+		if (!find_knob(argv[2])) {
+			fprintf(stderr, "secure-sudo: unknown knob '%s'\n", argv[2]);
 			return 1;
-		if (persist_knob(argv[2], argv[3]) != 0)
-			fprintf(stderr, "secure-sudo: set live, but failed to persist "
-				"'%s' to the config\n", argv[2]);
-		return 0;
+		}
+		return set_and_record(argv[2], argv[3]);
 	}
 	if (!strcmp(argv[1], "list") && argc == 3)
 		return cmd_list_one(argv[2]) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "net") && argc == 3) {
-		if (set_knob("net_mode", argv[2]) != 0)
-			return 1;
-		persist_knob("net_mode", argv[2]);
-		return 0;
+		return set_and_record("net_mode", argv[2]);
 	}
 	if (!strcmp(argv[1], "timevault") && argc == 3) {
 		const char *v = !strcmp(argv[2], "on") ? "1" :
@@ -1727,7 +1765,17 @@ int main(int argc, char **argv)
 		if (!v) { usage(); return 2; }
 		/* Not persisted: engaging TimeVault also locks the config, so
 		 * it is never re-engaged automatically by `load` at boot. */
-		return write_file(SYSFS "/timevault", v, 1) == 0 ? 0 : 1;
+		{
+			char snap[64] = "", sums[65] = "";
+			int ok;
+
+			if (*v == '1')
+				pre_snapshot("pre-timevault", snap, sums);
+			ok = write_file(SYSFS "/timevault", v, 1) == 0;
+			record_change("timevault", *v == '1' ? "on (locks the config)" :
+				      "off", ok, snap, sums);
+			return ok ? 0 : 1;
+		}
 	}
 	if (!strcmp(argv[1], "radio"))
 		return cmd_radio(argc - 2, argv + 2) == 0 ? 0 : 1;
@@ -1740,6 +1788,14 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "node-scan"))
 		return cmd_node_scan(argc - 2, argv + 2) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "lock")) {
+		char snap[64], sums[65];
+		int ok, drift = policy_diff(0);
+
+		/* Locking freezes the LIVE policy: say if it is not the file's. */
+		if (drift > 0)
+			fprintf(stderr, "secure-sudo: warning: the running policy differs "
+				"from %s in %d place(s) (`secure-sudo diff`); the lock "
+				"freezes the running one\n", CONFIG_DIR, drift);
 		/* Confirm unless -y: this cannot be undone without a reboot. */
 		if (!(argc == 3 && !strcmp(argv[2], "-y"))) {
 			char ans[8] = "";
@@ -1751,7 +1807,13 @@ int main(int argc, char **argv)
 				return 1;
 			}
 		}
-		return write_file(SYSFS "/lock", "1", 1) == 0 ? 0 : 1;
+		pre_snapshot("pre-lock", snap, sums);
+		ok = write_file(SYSFS "/lock", "1", 1) == 0;
+		record_change("lock", drift > 0 ? "running policy differed from "
+			      "the config" : "", ok, snap, sums);
+		if (ok && snap[0])
+			printf("lock: engaged; the locked state is snapshot %s\n", snap);
+		return ok ? 0 : 1;
 	}
 
 	usage();

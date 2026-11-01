@@ -76,7 +76,7 @@ if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSS_STATE_DIR="\"$T/state\"" \
 	-DOTP_HELPER="\"$T/otp-stub\"" \
 	-DSS_TESTING \
-	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c node_scan.c -lcrypto); then
+	-o "$CLI" secure-sudo.c policy.c policy_state.c vault_allow.c detect_admins.c node_scan.c -lcrypto); then
 	not_ok "CLI builds with test paths"; tap_done; exit 1
 fi
 ok "CLI builds with test paths (-Werror)"
@@ -417,6 +417,137 @@ if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null; then
 else
 	skip "non-root and ownership cases (need root and setpriv)"
 fi
+echo "# P1-6: diff (preview), snapshots, history, restore"
+ST="$T/state/policy"
+rm -rf "$T/state"
+export SUDO_USER=opsalice	# who the history and snapshots name
+fresh; setkey admin_gid 0
+"$CLI" diff > "$T/diff.out" 2>&1; rc=$?
+check "diff before any load lists every difference" sh -c \
+	"[ $rc -eq 0 ] && grep -qE '^  change +sudo_max_fails +live old -> config 5' '$T/diff.out' && grep -qE '^  change +blacklist$' '$T/diff.out'"
+check "... list entries to add and remove, with counts" sh -c \
+	"grep -qE '^ +- old$' '$T/diff.out' && grep -qE '^ +\([0-9]+ to add, 1 to remove\)' '$T/diff.out'"
+cp -a "$SYS" "$T/sys-before"; cp -a "$SEC" "$T/sec-before"; cp -a "$CFG" "$T/cfg-before"
+"$CLI" load --dry-run > "$T/dry.out" 2>&1
+check "load --dry-run is the same preview" diff "$T/diff.out" "$T/dry.out"
+check "diff and --dry-run change nothing (kernel, config, no snapshot)" sh -c \
+	"diff -r '$SYS' '$T/sys-before' && diff -r '$SEC' '$T/sec-before' && diff -r '$CFG' '$T/cfg-before' && [ ! -e '$ST/snapshots' ] || [ -z \"\$(ls -A '$ST/snapshots')\" ]"
+rm -rf "$T/sys-before" "$T/sec-before" "$T/cfg-before"
+"$CLI" load > "$T/load.out" 2>&1
+snap1="$(ls "$ST/snapshots" | head -1)"
+check "load takes a snapshot first and names it" grep -q "saved as snapshot $snap1" "$T/load.out"
+check "... with the old live state and the config files" sh -c \
+	"grep -qx 'sudo_max_fails = old' '$ST/snapshots/$snap1/live/settings' && [ \"\$(cat '$ST/snapshots/$snap1/live/blacklist')\" = old ] && cmp -s '$CFG/blacklist.conf' '$ST/snapshots/$snap1/disk/blacklist.conf'"
+check "... root-only, with reason and SHA256SUMS" sh -c \
+	"[ \"\$(stat -c %a '$ST/snapshots/$snap1')\" = 700 ] && grep -qx 'reason = pre-load' '$ST/snapshots/$snap1/meta' && (cd '$ST/snapshots/$snap1' && sha256sum -c --quiet SHA256SUMS)"
+"$CLI" diff > "$T/diff.out" 2>&1
+check "after a clean load diff reports 0 changes" grep -q '^diff: 0 change(s): the kernel runs the configuration' "$T/diff.out"
+check "history records the load: result, counts, lint, snapshot" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"load\".*\"result\":\"complete\",\"lint_errors\":0,\"changes\":[1-9][0-9]*,\"accepted\":[0-9]*,\"rejected\":0.*\"snapshot\":\"$snap1\"'"
+check "... and who ran it (SUDO_USER)" sh -c "tail -1 '$ST/history.jsonl' | grep -q '\"sudo_user\":\"opsalice\"'"
+check "history file is root-only" sh -c "[ \"\$(stat -c %a '$ST/history.jsonl')\" = 600 ]"
+"$CLI" snapshot verify "$snap1" > "$T/sv.out" 2>&1; rc=$?
+eq "snapshot verify: intact snapshot passes" "$rc" 0
+
+# A partial load: the kernel refuses one setting.
+setkey sudo_max_fails 6
+rm "$SYS/bpf_guard"; mkdir "$SYS/bpf_guard"
+"$CLI" load > "$T/load.out" 2>&1; rc=$?
+snap2="$(ls "$ST/snapshots" | tail -1)"
+check "partial load: INCOMPLETE names what was rejected and the restore point" sh -c \
+	"[ $rc -eq 1 ] && grep -q 'load INCOMPLETE.*rejected: bpf_guard.*secure-sudo restore $snap2' '$T/load.out'"
+check "partial load is in the history with the rejected setting" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"result\":\"partial\".*\"rejected\":1.*\"rejected_keys\":\"bpf_guard\"'"
+"$CLI" diff > "$T/diff.out" 2>&1
+check "diff after a partial load shows what did not apply" sh -c \
+	"grep -qE '^  unknown +bpf_guard' '$T/diff.out' && ! grep -qE 'sudo_max_fails' '$T/diff.out'"
+rmdir "$SYS/bpf_guard"; echo 1 > "$SYS/bpf_guard"
+
+# Restore the first snapshot (before sudo_max_fails = 6).
+echo "/usr/bin/extra-entry" >> "$CFG/blacklist.conf"
+echo n | "$CLI" restore "$snap1" > "$T/rs.out" 2>&1; rc=$?
+check "restore previews and stops without 'yes'" sh -c \
+	"[ $rc -eq 1 ] && grep -qE '^  change +sudo_max_fails +now 6 -> snapshot 5' '$T/rs.out' && grep -qE '^ +- /usr/bin/extra-entry' '$T/rs.out' && grep -q aborted '$T/rs.out' && grep -q extra-entry '$CFG/blacklist.conf'"
+nsnap="$(ls "$ST/snapshots" | wc -l)"
+"$CLI" restore "$snap1" -y > "$T/rs.out" 2>&1; rc=$?
+pre="$(sed -n 's/^restore: current state saved as snapshot //p' "$T/rs.out")"
+check "restore -y: files back as in the snapshot, and loaded" sh -c \
+	"[ $rc -eq 0 ] && cmp -s '$CFG/blacklist.conf' '$ST/snapshots/$snap1/disk/blacklist.conf' && grep -qE '^sudo_max_fails *= *5' '$CFG/secure-sudo.conf' && [ \"\$(cat '$SYS/sudo_max_fails')\" = 5 ]"
+check "... after saving what it replaced" sh -c \
+	"[ -n '$pre' ] && grep -q extra-entry '$ST/snapshots/$pre/disk/blacklist.conf' && [ \$(ls '$ST/snapshots' | wc -l) -eq $((nsnap + 1)) ]"
+check "... recorded as a restore with its source" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"restore\".*\"result\":\"complete\".*\"snapshot\":\"$pre\".*\"restored_from\":\"$snap1\"'"
+
+# Integrity: a changed snapshot file and a changed history line are caught.
+chmod u+w "$ST/snapshots/$snap1/disk/blacklist.conf"
+echo "/tmp/evil" >> "$ST/snapshots/$snap1/disk/blacklist.conf"
+"$CLI" snapshot verify "$snap1" > "$T/sv.out" 2>&1; rc=$?
+check "snapshot verify: an edited file fails" sh -c \
+	"[ $rc -eq 1 ] && grep -q 'disk/blacklist.conf changed since the snapshot was taken' '$T/sv.out'"
+"$CLI" restore "$snap1" -y > "$T/rs.out" 2>&1; rc=$?
+check "restore refuses a snapshot that fails verification" sh -c \
+	"[ $rc -eq 1 ] && grep -q 'failed its integrity check' '$T/rs.out' && ! grep -q /tmp/evil '$CFG/blacklist.conf'"
+# A careful forger also rewrites SHA256SUMS: the snapshot then checks out
+# on its own, but the next snapshot and the history recorded the old sums.
+chmod u+w "$ST/snapshots/$snap1/SHA256SUMS"
+(cd "$ST/snapshots/$snap1" && awk '{print $2}' SHA256SUMS | xargs sha256sum > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS)
+"$CLI" snapshot verify "$snap1" > "$T/sv.out" 2>&1; rc=$?
+eq "(forged snapshot with rewritten sums checks out on its own)" "$rc" 0
+"$CLI" snapshot verify "$snap2" > "$T/sv.out" 2>&1
+check "... but the next snapshot sees its predecessor changed" grep -q "previous snapshot $snap1 changed after this one" "$T/sv.out"
+"$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
+check "history --verify flags the record whose snapshot changed" sh -c \
+	"[ $rc -eq 1 ] && grep -q \"snapshot $snap1 is not the one recorded\" '$T/hv.out'"
+rm -rf "${ST:?}/snapshots/$snap1"
+"$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
+eq "history --verify: intact chain passes" "$rc" 0
+cp "$ST/history.jsonl" "$T/hist.bak"
+sed -i '2s/"result":"[a-z]*"/"result":"complete"/; 2s/"accepted":[0-9]*/"accepted":999/' "$ST/history.jsonl"
+"$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
+check "history --verify: an edited record breaks the chain" sh -c \
+	"[ $rc -eq 1 ] && grep -q 'line 3: does not follow line 2' '$T/hv.out'"
+cp "$T/hist.bak" "$T/hist.del"; sed -i '2d' "$T/hist.del"; cp "$T/hist.del" "$ST/history.jsonl"
+"$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
+eq "history --verify: a removed record breaks the chain" "$rc" 1
+cp "$T/hist.bak" "$ST/history.jsonl"
+"$CLI" history -n 2 > "$T/h.out" 2>&1
+check "history prints the latest records readably" sh -c \
+	"[ \$(wc -l < '$T/h.out') -eq 2 ] && grep -qE 'restore +opsalice +complete +changes=[0-9]+ accepted=[0-9]+ rejected=0' '$T/h.out'"
+
+# set, lock: snapshot first, recorded either way.
+"$CLI" set sudo_max_fails 9 > /dev/null 2>&1
+check "set is recorded with what it set" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"set\".*\"result\":\"complete\".*\"detail\":\"sudo_max_fails = 9\".*\"snapshot\":\"[0-9TZ-]*\"'"
+rm "$SYS/max_ram_percent"; mkdir "$SYS/max_ram_percent"
+"$CLI" set max_ram_percent 77 > /dev/null 2>&1; rc=$?
+check "a set the kernel refuses is recorded as rejected, not persisted" sh -c \
+	"[ $rc -eq 1 ] && tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"set\".*\"result\":\"rejected\".*max_ram_percent = 77' && ! grep -qE '^max_ram_percent *= *77' '$CFG/secure-sudo.conf'"
+rmdir "$SYS/max_ram_percent"; echo 80 > "$SYS/max_ram_percent"
+echo 7 > "$SYS/sudo_max_fails"
+"$CLI" lock -y > "$T/lock.out" 2>&1; rc=$?
+check "lock warns when the running policy is not the config's" sh -c \
+	"[ $rc -eq 0 ] && grep -q 'running policy differs from .* in [0-9]* place' '$T/lock.out' && grep -q 'locked state is snapshot' '$T/lock.out'"
+check "lock is recorded with its pre-lock snapshot" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"lock\".*\"result\":\"complete\"' && grep -lx 'reason = pre-lock' '$ST'/snapshots/*/meta >/dev/null"
+any="$(ls "$ST/snapshots" | head -1)"
+"$CLI" restore "$any" -y > "$T/rs.out" 2>&1; rc=$?
+check "restore refused while locked (points at --no-load)" sh -c \
+	"[ $rc -eq 1 ] && grep -q 'locked until reboot.*--no-load' '$T/rs.out'"
+"$CLI" restore "$any" --no-load -y > "$T/rs.out" 2>&1; rc=$?
+check "restore --no-load while locked: files only, for the next boot" sh -c \
+	"[ $rc -eq 0 ] && grep -q 'not loaded (locked: they apply at the next boot)' '$T/rs.out' && cmp -s '$CFG/secure-sudo.conf' '$ST/snapshots/$any/disk/secure-sudo.conf'"
+"$CLI" restore ../../etc -y > "$T/rs.out" 2>&1; rc=$?
+eq "restore refuses an id that is not a snapshot id" "$rc" 2
+echo 0 > "$SYS/lock"
+"$CLI" snapshot -m "before upgrade" > "$T/sn.out" 2>&1
+check "manual snapshot with a reason" sh -c \
+	"id=\$(sed -n 's/^snapshot //p' '$T/sn.out'); grep -qx 'reason = beforeupgrade' '$ST/snapshots/'\$id/meta"
+"$CLI" snapshot list > "$T/sl.out" 2>&1
+check "snapshot list shows id, reason, lock state" grep -qE '^[0-9]{8}T[0-9]{6}Z-[0-9]{9} +pre-lock +by +opsalice +locked=0' "$T/sl.out"
+"$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
+eq "history chain still verifies after every action" "$rc" 0
+unset SUDO_USER
+
 # `secure-sudo otp ...` hands the subcommand to the helper, not "otp".
 rm -f "$T/otp-args"
 SS_TEST_ALLOW_ROOT=1 "$CLI" otp seal >/dev/null 2>&1

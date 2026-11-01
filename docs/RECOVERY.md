@@ -155,6 +155,23 @@ is refused. The configuration file can still be edited by root. Fix the file,
 then reboot; `secure-sudo load` runs at boot (in `secure-sudod.service`) and
 applies the fixed configuration.
 
+### 4g. Go back to a policy that worked
+
+Every `load`, `set`, `lock` and `restore` first takes a snapshot of
+`/etc/secure_sudo/` and the live kernel state (COMMANDS.md, `secure-sudo
+snapshot`). To undo a change without editing files by hand:
+
+```sh
+sudo secure-sudo history            # what changed, when, by whom; the snapshot before it
+sudo secure-sudo snapshot list
+sudo secure-sudo restore ID         # shows the changes, asks, saves the current state, loads
+sudo secure-sudo diff               # 0 changes: the kernel runs the restored policy
+```
+
+A partial load prints the snapshot to restore. On a locked box, `restore ID
+--no-load` puts the files back for the next boot. Restore refuses a snapshot
+that fails `snapshot verify`.
+
 ### 4f. TPM: lockout password, `disableClear`, `tpm_openers`
 
 `install.sh tpm-lockout` (part of `all`) printed a TPM lockout password once.

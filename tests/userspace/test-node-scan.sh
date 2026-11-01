@@ -26,7 +26,7 @@ echo 0 > "$SYS/lock"
 if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSYSFS="\"$SYS\"" -DSECFS="\"$SEC\"" -DCONFIG_DIR="\"$CFG\"" \
 	-DSS_STATE_DIR="\"$ST\"" -DSS_TESTING \
-	-o "$CLI" secure-sudo.c policy.c vault_allow.c detect_admins.c node_scan.c \
+	-o "$CLI" secure-sudo.c policy.c policy_state.c vault_allow.c detect_admins.c node_scan.c \
 	-lcrypto 2> "$T/build.err"); then
 	not_ok "CLI builds with test paths ($(head -1 "$T/build.err"))"
 	tap_done; exit 1

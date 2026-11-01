@@ -104,6 +104,11 @@ fi
 if [[ -f $STATEDIR/manifest && ! -L $STATEDIR/manifest ]]; then
 	cp -- "$STATEDIR/manifest" "$BUNDLE/live/timevault-manifest"
 fi
+# Policy change history (P1-6): who changed policy and what the kernel
+# accepted; `secure-sudo history --verify` checks its hash chain.
+if [[ -f $STATEDIR/policy/history.jsonl && ! -L $STATEDIR/policy/history.jsonl ]]; then
+	cp -- "$STATEDIR/policy/history.jsonl" "$BUNDLE/live/policy-history.jsonl"
+fi
 for f in "$SYSFS"/* "$SECFS"/events_dropped; do
 	[[ -r $f && -f $f ]] || continue
 	name=${f##*/}
