@@ -1,0 +1,5 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# Installed as /etc/kernel/install.d/99-secure-sudo-addons.install (systemd
+# kernel-install: Fedora, Arch, ...). Arguments: add|remove VERSION ...
+exec /usr/libexec/secure-sudo/addons-refresh "kernel-${1:-unknown}-${2:-unknown}"

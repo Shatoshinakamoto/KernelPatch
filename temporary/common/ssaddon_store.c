@@ -25,7 +25,13 @@
 
 /* Locus client target: read from /etc/secure_sudo/addons/locus-client.conf,
  * one "host = ..." / "port = ..." pair. Absent => no allocator, use defaults. */
+#ifndef SSADDON_PKG_LOCKS
+#define SSADDON_PKG_LOCKS "/var/lib/dpkg/lock-frontend:/var/lib/dpkg/lock:" \
+			  "/var/lib/rpm/.rpm.lock:/run/zypp.pid"
+#endif
+#ifndef LOCUS_CLIENT_CONF
 #define LOCUS_CLIENT_CONF "/etc/secure_sudo/addons/locus-client.conf"
+#endif
 
 /* ---- directory bucket (hourly rotation) ---- */
 
@@ -362,4 +368,43 @@ int locus_request_root(const char *purpose, char *out, size_t n)
 		return -1;
 	snprintf(out, n, "%s", resp + 3);
 	return 0;
+}
+
+int ssaddon_pkg_busy(char *which, size_t n)
+{
+	char list[] = SSADDON_PKG_LOCKS, *save = NULL, *p;
+
+	for (p = strtok_r(list, ":", &save); p; p = strtok_r(NULL, ":", &save)) {
+		struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+		int fd = open(p, O_RDONLY | O_CLOEXEC);
+		int busy;
+
+		if (fd < 0)
+			continue;
+		busy = fcntl(fd, F_GETLK, &fl) == 0 && fl.l_type != F_UNLCK;
+		close(fd);
+		if (busy) {
+			snprintf(which, n, "%s", p);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int ssaddon_is_stack_exe(const char *path)
+{
+	static const char *const ours[] = {
+		"/usr/bin/secure-sudo", "/usr/sbin/secure-sudod",
+		"/usr/libexec/secure-sudo/", NULL
+	};
+	struct stat st;
+	int i;
+
+	for (i = 0; ours[i]; i++)
+		if (!strncmp(path, ours[i], strlen(ours[i])))
+			break;
+	if (!ours[i] || strstr(path, "/../"))
+		return 0;
+	return stat(path, &st) == 0 && st.st_uid == 0 &&
+	       !(st.st_mode & (S_IWGRP | S_IWOTH));
 }

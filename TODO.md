@@ -222,9 +222,13 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     containment, escalation, recovery, rebuild, and an inventory of every
     automatic kill/wipe/restore/quarantine) and `secure-sudo contain`
     (dry run, confirmation, evidence first, release; tests/userspace/
-    test-contain.sh). Remaining: guardrail tests for the ProcGuard,
-    TamperWatch, DriverGuard and BootGuard add-ons, and re-baselining
-    BootGuard/DriverGuard after a kernel update.
+    test-contain.sh).
+  - Built 2026-11-01: guardrail tests for every destructive add-on
+    (tests/userspace/test-addons.sh, 31 checks) and package/kernel hooks
+    that re-baseline BootGuard/DriverGuard after an update. The tests found
+    three real bugs, fixed (SECURITY_REVIEW #64-#66). Code-complete;
+    remaining: a people-run tabletop exercise (INCIDENT_RESPONSE.md 9),
+    which is the "done when" test and cannot be run by CI.
   - Document triage, evidence preservation, network isolation, account
     containment, process quarantine, policy lock, escalation, recovery, and
     post-incident rebuild steps.

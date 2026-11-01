@@ -58,6 +58,25 @@ for f in "$SRC"/config/*.conf; do
 	fi
 done
 
+# 3b. Package and kernel hooks: re-baseline BootGuard/DriverGuard after a
+#     legitimate update, so it is not restored away as tampering. They do
+#     nothing until a guard has a baseline.
+log "installing package/kernel hooks (re-baseline after updates)"
+install -D -m0755 "$SRC/hooks/addons-refresh" /usr/libexec/secure-sudo/addons-refresh
+for d in /etc/kernel/postinst.d /etc/kernel/postrm.d; do
+	[ -d "$d" ] && install -m0755 "$SRC/hooks/kernel-hook" "$d/zzz-secure-sudo-addons"
+done
+if [ -d /etc/kernel/install.d ] || command -v kernel-install >/dev/null 2>&1; then
+	install -D -m0755 "$SRC/hooks/kernel-install.install" \
+		/etc/kernel/install.d/99-secure-sudo-addons.install
+fi
+[ -d /etc/apt/apt.conf.d ] && install -m0644 "$SRC/hooks/apt.conf" /etc/apt/apt.conf.d/99secure-sudo-addons
+[ -d /etc/dnf/libdnf5-plugins/actions.d ] &&
+	install -m0644 "$SRC/hooks/dnf5.actions" /etc/dnf/libdnf5-plugins/actions.d/secure-sudo-addons.actions
+[ -d /etc/dnf/plugins/post-transaction-actions.d ] &&
+	install -m0644 "$SRC/hooks/dnf4.action" /etc/dnf/plugins/post-transaction-actions.d/secure-sudo-addons.action
+true
+
 # 4. systemd units.
 if [ -d "$UNITDIR" ]; then
 	log "installing systemd units to $UNITDIR"

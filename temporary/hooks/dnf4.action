@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
+# secure_sudo add-ons (dnf4 post-transaction-actions plugin): re-baseline
+# BootGuard/DriverGuard after every transaction.
+*:any:/usr/libexec/secure-sudo/addons-refresh dnf-transaction

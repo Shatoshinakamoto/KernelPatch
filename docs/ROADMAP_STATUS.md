@@ -28,7 +28,7 @@ under UEFI or Secure Boot, or on real hardware.
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
 | P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60), G3 (TPM-sealed OTP key, #61) and G4 (TPM clear through `/dev/tpm*`, #63) are built |
 | P1-6 | done | `secure-sudo diff` (= `load --dry-run`) previews a change against the running kernel; snapshots of the config files and the live kernel state (SHA256SUMS, chained to the previous one) before every load, set, lock and restore; a hash-chained change history (who, lint result, changes, accepted/rejected, snapshot) also sent to syslog; `restore ID` (verified, previewed, refused while locked unless `--no-load`). See "P1-6" below |
-| P1-7 | partly (active) | [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md): triage, evidence, containment, escalation, recovery, rebuild, and the inventory of automatic destructive actions (false positives, exclusions, audit trail, undo, test); `secure-sudo contain network/account/process` with dry run, confirmation, evidence first and release, recorded in the history. Remaining: add-on guardrail tests, BootGuard/DriverGuard re-baseline after kernel updates |
+| P1-7 | code-complete (tabletop remains) | [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md): triage, evidence, containment, escalation, recovery, rebuild, and the inventory of automatic destructive actions (false positives, exclusions, audit trail, undo, test); `secure-sudo contain network/account/process` with dry run, confirmation, evidence first and release, recorded in the history; guardrail tests for every destructive add-on and package/kernel hooks that re-baseline BootGuard/DriverGuard after updates (SECURITY_REVIEW #64–#66). Remaining: a people-run tabletop |
 | P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
@@ -121,6 +121,7 @@ without root):
 | `tests/userspace/test-helpers.sh` | 77 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
 | `tests/userspace/test-cli.sh` | 160 | config parsing, `otp` hand-off to the helper, `lint`, `load` reporting (entry counts, node-scan merge), P1-6 `diff`/snapshots/history/restore (partial loads, forged snapshots, edited or removed history lines, restore while locked) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
 | `tests/userspace/test-remote-forwarding.sh` | 11 | TLS CA/hostname validation and CA rotation, RFC 5425 delivery, queue persistence/exhaustion, outage retry |
+| `tests/userspace/test-addons.sh` | 31 | ProcGuard (monitor kills nothing, empty allowlist refused, PID 1/ancestors/stack exempt, renamed `secure-sudo-*` not exempt, respawn → quarantine, system dirs never deleted), BootGuard/DriverGuard (tamper staged/restored, scan deferred under a held dpkg lock, `refresh` re-baselines and drops a staged restore, hook script), TamperWatch (attributes a writer, never kills the stack or during a package update) |
 | `tests/userspace/test-contain.sh` | 32 | `secure-sudo contain`: dry runs change nothing, refusals (UID 0, own account, PID 1, kernel threads, own shell chain, bad addresses), real processes frozen with evidence and continued, descendants, `--kill`, account lock/expiry restored as it was, real nftables in a namespace |
 | `tests/userspace/test-evidence-export.sh` | 24 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation, TimeVault manifest against the collector's roots, policy history in the bundle |
 | `tests/oscap/` | 39 | result parsing and the STIG gate's rule-by-rule comparison, release vs diagnostic mode, independent checks (OSB-19) |
@@ -483,7 +484,7 @@ while enabled inactive units or missing/stale baselines degrade health.
 
 ### Other P1 items still deferred
 
-P1-7 is partly done (see the table); P1-8 remains unstarted:
+P1-7 is code-complete (a people-run tabletop remains); P1-8 remains unstarted:
 and broader network-policy/failure-mode validation. The earlier overview's
 "groundwork" below is historical; it does not mean these requirements are
 complete.
@@ -549,7 +550,7 @@ yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: t
   local history and snapshots consistently. The syslog copy is the
   record they cannot rewrite once it is forwarded.
 
-## P1-7 — partly done (2026-11-01)
+## P1-7 — code-complete (2026-11-01; tabletop remains)
 
 * [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) is now the runbook: roles
   and the first five minutes, triage (read-only commands and what to look
@@ -564,10 +565,16 @@ yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: t
   pipeline never fired, so the helper froze its own caller; fixed before
   release.
 * Section 8 lists every automatic destructive action with its false-positive
-  cost, exclusions, audit trail, undo and test. Four add-on actions
-  (ProcGuard, TamperWatch, DriverGuard, BootGuard) have no tests yet, and a
-  kernel update looks like tampering to BootGuard (enforce by default) and
-  DriverGuard. Those are the remaining P1-7 work.
+  cost, exclusions, audit trail, undo and test; every row now has a test.
+* `tests/userspace/test-addons.sh` (31 checks) drives ProcGuard,
+  BootGuard, DriverGuard and TamperWatch against temporary trees and real
+  processes. It found three bugs, fixed: ProcGuard's exemption could be
+  borrowed by naming a binary `secure-sudo-*` and it deleted system
+  binaries (#64); TamperWatch killed PheonixBox repairs and package updates
+  (#65); BootGuard and DriverGuard rolled kernel updates back (#66). New
+  apt/dnf/kernel-install hooks run `addons-refresh` after an update.
+* Remaining: the tabletop exercise in INCIDENT_RESPONSE.md 9 needs people;
+  CI cannot run it.
 
 ## P1-8 — not started
 

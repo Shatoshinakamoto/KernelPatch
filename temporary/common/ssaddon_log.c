@@ -18,8 +18,15 @@
 #include <sys/types.h>
 #include <netdb.h>
 
-#define CONF		"/etc/secure_sudo/addons/logging.conf"
-#define DEF_DIR		"/var/log/secure_sudo/addons"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef SSL_CONF
+#define SSL_CONF	"/etc/secure_sudo/addons/logging.conf"
+#endif
+#define CONF		SSL_CONF
+#ifndef SSL_DEF_DIR
+#define SSL_DEF_DIR	"/var/log/secure_sudo/addons"
+#endif
+#define DEF_DIR		SSL_DEF_DIR
 #define DEF_MAX		(8UL * 1024 * 1024)	/* rotate at 8 MiB */
 
 /* Module state, set up once by ssl_init(). */
@@ -150,7 +157,8 @@ void ssl_init(const char *feature)
 
 	/* Local log dir is root-only: the logs name quarantined malware paths
 	 * and host state that should not leak to unprivileged users. */
-	mkdir("/var/log/secure_sudo", 0700);
+	if (!strncmp(S.dir, "/var/log/secure_sudo/", 21))
+		mkdir("/var/log/secure_sudo", 0700);
 	mkdir(S.dir, 0700);
 	snprintf(S.logpath, sizeof(S.logpath), "%s/%s.log", S.dir, S.feature);
 

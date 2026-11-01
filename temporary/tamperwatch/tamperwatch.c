@@ -17,7 +17,11 @@
  *     the GUI).
  *   - mode = quarantine (opt-in) additionally compresses the offender's exe
  *     into the hourly-rotated quarantine and kills it; mode = log (default)
- *     only records.
+ *     only records. Never killed, whatever the mode: PID 1, tamperwatch
+ *     itself, the installed secure_sudo programs (PheonixBox writes the
+ *     protected files when it repairs them), and any writer while a package
+ *     manager holds its lock (an update rewriting a protected file); those
+ *     are logged as "not killed" with the reason.
  *
  * Needs fanotify (CONFIG_FANOTIFY) and root (CAP_SYS_ADMIN). Honest limits: it
  * marks regular files that exist when it starts / rescans; a brand-new file
@@ -42,9 +46,19 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 
-#define PBOX_CONF	"/etc/secure_sudo/pheonixbox.conf"
-#define CONF		"/etc/secure_sudo/addons/tamperwatch.conf"
-#define DEF_QROOT	"/var/lib/secure_sudo/addons/tamperwatch/quarantine"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef TW_PBOX_CONF
+#define TW_PBOX_CONF	"/etc/secure_sudo/pheonixbox.conf"
+#endif
+#ifndef TW_CONF
+#define TW_CONF		"/etc/secure_sudo/addons/tamperwatch.conf"
+#endif
+#ifndef TW_QROOT
+#define TW_QROOT	"/var/lib/secure_sudo/addons/tamperwatch/quarantine"
+#endif
+#define PBOX_CONF	TW_PBOX_CONF
+#define CONF		TW_CONF
+#define DEF_QROOT	TW_QROOT
 #define LOCUS_PURPOSE	"tamperwatch-quarantine"
 
 struct cfg {
@@ -174,9 +188,29 @@ static int pid_exe(pid_t pid, char *out, size_t n)
 	return 0;
 }
 
+/* Why this writer must not be killed, or NULL. */
+static const char *never_kill(pid_t pid, const char *exe, char *why, size_t n)
+{
+	if (pid <= 1)
+		return "PID 1";
+	if (pid == getpid())
+		return "tamperwatch itself";
+	if (ssaddon_is_stack_exe(exe))
+		return "a secure_sudo program (e.g. a PheonixBox repair)";
+	if (ssaddon_pkg_busy(why, n))
+		return "a package manager is running";
+	return NULL;
+}
+
 static void quarantine_offender(const struct cfg *c, pid_t pid, const char *exe)
 {
-	char root[PATH_MAX], bucket[PATH_MAX], sample[PATH_MAX];
+	char root[PATH_MAX], bucket[PATH_MAX], sample[PATH_MAX], lock[PATH_MAX];
+	const char *no = never_kill(pid, exe, lock, sizeof(lock));
+
+	if (no) {
+		ssl_warn("not killed: pid %d (%s): %s", pid, exe, no);
+		return;
+	}
 
 	if (c->rotate && locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) == 0)
 		;

@@ -237,15 +237,19 @@ enforcement is not a substitute for the tests and recovery work).
 | sudo cooldown blocks sudo | `sudo_cooldown_enabled`, `sudo_max_fails` failures in `sudo_window_sec` | an admin who mistypes is locked out of sudo for `sudo_block_time_sec` | thresholds | `cooldown` event | wait out `sudo_block_time_sec`, or from an open root session `secure-sudo set sudo_cooldown_enabled 0` | ss-functest |
 | Config lock / TimeVault engage | only by hand (`lock`, `timevault on`) | policy cannot be fixed until reboot | | history (`lock`, `timevault`) with a snapshot | reboot | test-cli (history), ss-functest |
 | PheonixBox **repair** of a protected file | `pheonixbox on`, every scan | a legitimate edit is reverted to the snapshot | `pheonixbox snapshot` after a real update; `pheonixbox remove` | PheonixBox log | the reverted content is in the tamper log; `pheonixbox off`, edit, `snapshot` | test-pheonixbox |
-| ProcGuard kills a process not on its allowlist; quarantines and (`remove_on_infection`) deletes its file after `respawn_threshold` kills | **`mode = monitor`**: nothing killed | a needed program is killed, its executable removed | `procguard_allow.conf`; never kills the secure_sudo stack; refuses to run with an empty allowlist | `addons/procguard.log` (shipped off-box if configured) | restore the executable from the compressed sample in the quarantine | **not yet** (P1-7 guardrail tests) |
-| TamperWatch kills the writer of a protected file and quarantines its executable | **`mode = log`** | an updater or admin tool is killed | the PheonixBox set, `tamperwatch.conf` | `addons/tamperwatch.log` | restore from its quarantine | **not yet** |
-| DriverGuard restores a changed module from backup | **`mode = monitor`** | a module updated by the distro is rolled back | `driverguard baseline` after a kernel update | `addons/driverguard.log` | `driverguard baseline` and reinstall the package | **not yet** |
-| BootGuard stages a restore of changed `/boot` files, applied at next boot | **`mode = enforce`** | a kernel update's new initramfs or GRUB config is rolled back at the next boot: a kernel without its initramfs may not boot | `bootguard baseline` after every kernel update | `addons/bootguard.log` | boot the previous kernel (RECOVERY.md 1), `bootguard baseline` | **not yet** |
+| ProcGuard kills a process not on its allowlist; quarantines and (`remove_on_infection`) deletes its file after `respawn_threshold` kills | **`mode = monitor`**: nothing killed | a needed program is killed, its executable removed | `procguard_allow.conf`; never kills PID 1, kernel threads, itself or its ancestors, or root-owned secure_sudo binaries at their installed paths; never deletes from a system directory; refuses to run with an empty allowlist | `addons/procguard.log` (shipped off-box if configured) | restore the executable from the compressed sample in the quarantine | test-addons |
+| TamperWatch kills the writer of a protected file and quarantines its executable | **`mode = log`** | an updater or admin tool is killed | the PheonixBox set, `tamperwatch.conf`; never kills PID 1, itself, the secure_sudo stack, or anything while a package manager holds its lock (logged `not killed`) | `addons/tamperwatch.log` | restore from its quarantine | test-addons |
+| DriverGuard restores a changed module from backup | **`mode = monitor`** | a module updated by the distro is rolled back | scan deferred while a package manager runs; the package/kernel hooks run `driverguard refresh` after an update | `addons/driverguard.log` (`baseline refreshed`) | `driverguard refresh` and reinstall the package | test-addons |
+| BootGuard stages a restore of changed `/boot` files, applied at next boot | **`mode = enforce`** | a kernel update's new initramfs or GRUB config is rolled back at the next boot: a kernel without its initramfs may not boot | scan deferred while a package manager runs; the hooks run `bootguard refresh` after a kernel update, which also drops a restore staged before it | `addons/bootguard.log` (`baseline refreshed`, `staged restore DROPPED`) | boot the previous kernel (RECOVERY.md 1), `bootguard refresh` | test-addons |
 | `contain` (network, account, process) | only by hand | see section 4 | | history (`contain`, `release`), `/var/lib/secure_sudo/contain/` | `contain release ...` | test-contain, test-cli |
 
-The rows marked "not yet" are the remaining P1-7 work: guardrail tests for
-the add-ons, and BootGuard and DriverGuard re-baselining after a package
-update so a kernel update is not treated as tampering.
+After a package or kernel update, `/usr/libexec/secure-sudo/addons-refresh`
+(installed by `install-temporary.sh` into the apt, dnf and kernel-install
+hooks) re-baselines BootGuard and DriverGuard, so an update is not treated as
+tampering; every refresh is logged with what changed (docs/ADDONS.md,
+"Package and kernel hooks"). After a manual kernel or module install, run
+`secure-sudo-bootguard refresh` and `secure-sudo-driverguard refresh`
+yourself.
 
 ## 9. Tabletop exercise
 

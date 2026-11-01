@@ -62,8 +62,16 @@ allowed is an intruder:
 incomplete, so ProcGuard:
 
 * refuses to run with an **empty allowlist**;
-* always exempts **PID 1**, kernel threads, its own process tree, and the
-  secure_sudo binaries, whatever the list says;
+* always exempts **PID 1**, kernel threads, its own process **and every
+  ancestor** (the shell/unit that started it), and the secure_sudo binaries,
+  whatever the list says. The secure_sudo exemption is by **path and owner**,
+  not process name: only root-owned, non-group/world-writable executables at
+  `/usr/bin/secure-sudo*`, `/usr/sbin/secure-sudod` or `/usr/libexec/secure-sudo/`
+  count, so a renamed `/tmp/secure-sudo-x` is *not* exempt (SECURITY_REVIEW #64);
+* never deletes a binary from a system directory (`/usr`, `/bin`, `/sbin`,
+  `/lib*`, `/boot`, `/etc`) on infection: the sample is still quarantined and
+  shipped, and the log says `INFECTION left on disk` so the operator removes or
+  reinstalls it through the package manager;
 * defaults to **`mode = monitor`** — it only logs what it *would* kill. Only
   `mode = enforce` acts. Build the allowlist in monitor mode first.
 
@@ -98,6 +106,14 @@ re-hashes; a changed or missing module is a tamper, and in `mode = enforce` it
 is restored from the newest backup that has it. (This protects the files the
 kernel loads; a module *already loaded* is the core LSM's job — #6 driver-BYOVD
 hashes the loaded bytes.) Config `/etc/secure_sudo/addons/driverguard.conf`.
+
+**Updates are not tampering.** While a package manager holds its lock (dpkg,
+rpm or zypper), `scan` is deferred and logs `scan deferred`, so a module being
+replaced by an update is never "repaired" back to the old file. After the
+update, the shipped package/kernel hooks run `secure-sudo-driverguard refresh`,
+which re-baselines and logs what changed (`DRIVER baseline refreshed (reason)`)
+so the change is on the record (SECURITY_REVIEW #66). Run
+`secure-sudo-driverguard refresh` yourself after a manual module install.
 
 ## 3. BiosGuard — firmware tamper **detection only**
 
@@ -139,9 +155,17 @@ nothing is written to the live boot partition. The shipped
 `secure-sudo-bootguard-restore.service` runs `restore-staged` early at boot and,
 if `PENDING` is set, restores each listed file from its compressed backup before
 the system is fully up, then clears the flag. New, unknown files in `/boot` are
-reported, not deleted (a kernel update legitimately adds files — re-run
-`baseline` after a real update). Backups honour the `rotate` toggle. Config
+reported, not deleted. Backups honour the `rotate` toggle. Config
 `/etc/secure_sudo/addons/bootguard.conf`.
+
+**Updates are not tampering.** A kernel or bootloader update legitimately
+rewrites `/boot`. While a package manager holds its lock, `scan` is deferred
+(`scan deferred`). Afterwards the shipped hooks run
+`secure-sudo-bootguard refresh <reason>`, which re-baselines, logs every
+changed/added/removed path (`BOOT baseline refreshed (reason): ...`), and drops
+any restore staged before the update (`BOOT staged restore DROPPED by refresh`),
+so the next boot does not roll the update back (SECURITY_REVIEW #66). Run
+`refresh` yourself after a manual kernel install.
 
 > Assurance note: the systemd unit applies the restore as early as a normal
 > systemd unit can (after `/boot` is mounted, before services use it). For the
@@ -204,6 +228,13 @@ executable into the rotating quarantine and `SIGKILL`s it. Needs root and
 starts/rescans; a brand-new file created under a protected dir is covered on the
 next rescan.
 
+**Never killed**, even in `mode = quarantine`: PID 1, tamperwatch itself, any
+secure_sudo stack binary (so a PheonixBox repair or `secure-sudo restore` is
+attributed but not killed), and any writer while a package manager holds its
+lock (so a package update that touches a protected file is logged, not
+broken). Each skip is logged as `not killed: pid N (exe): reason`
+(SECURITY_REVIEW #65).
+
 ## 7. Kernel memory-access feed (prguard_observe)
 
 The core Process Runtime Guard (#20, `ss_prguard.c`) already brokers
@@ -265,6 +296,24 @@ SECURITY_REVIEW #29.) Keep the bind on loopback unless you front it with your
 own authenticated TLS proxy: this console can change config and kill processes.
 
 ---
+
+## Package and kernel hooks
+
+`install-temporary.sh` installs `/usr/libexec/secure-sudo/addons-refresh` and
+wires it into the distro's update path, so BootGuard and DriverGuard
+re-baseline after a legitimate update instead of treating it as tampering:
+
+| Hook | Distro | Fires |
+|---|---|---|
+| `/etc/apt/apt.conf.d/99secure-sudo-addons` | Debian/Ubuntu | after every dpkg run |
+| `/etc/kernel/postinst.d/zzz-secure-sudo-addons`, `postrm.d/` | Debian/Ubuntu | kernel install/remove |
+| `/etc/kernel/install.d/99-secure-sudo-addons.install` | Fedora/RHEL/SUSE (kernel-install) | kernel add/remove |
+| `/etc/dnf/libdnf5-plugins/actions.d/secure-sudo-addons.actions` or `/etc/dnf/plugins/post-transaction-actions.d/` | Fedora/RHEL | after a dnf transaction |
+
+Each run is logged (`baseline refreshed (reason)`), so an attacker who installs
+a package to slip a change past the baseline still leaves a record, and the
+record is shipped off-box with everything else. Tested by
+`tests/userspace/test-addons.sh`.
 
 ## Logging and off-box backup (shared)
 

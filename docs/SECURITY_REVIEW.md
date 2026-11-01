@@ -1115,6 +1115,45 @@ it in, and the test kernel and a no-TPM build variant cover both). Tested
 by new in-kernel checks, `tests/install/test-install.sh` (+7) and the
 Ubuntu VM run with a software TPM.
 
+### 64. ProcGuard's exemptions could be borrowed, and it deleted system binaries (v8–v12, found 2026-11-01 by P1-7 tests) — SI-3 / SI-7
+
+The secure_sudo exemption matched the process **name**, so any program
+named `secure-sudo-*` (for example `/tmp/secure-sudo-x`) was never killed.
+It now matches the executable **path and owner**: only root-owned,
+non-group/world-writable files at `/usr/bin/secure-sudo*`,
+`/usr/sbin/secure-sudod` or `/usr/libexec/secure-sudo/`. Its own-tree
+exemption covered only the direct parent; it now covers every ancestor, so
+the shell or unit that started it is never killed. With
+`remove_on_infection`, a respawning program under `/usr`, `/bin`, `/sbin`,
+`/lib*`, `/boot` or `/etc` had its binary deleted, which can break the
+system (a respawning system service with a stale allowlist). Those files
+are now quarantined and shipped but left on disk (`INFECTION left on disk`)
+for the operator to reinstall. Tested by `tests/userspace/test-addons.sh`.
+
+### 65. TamperWatch killed PheonixBox repairs and package updates (v10–v12, found 2026-11-01) — SI-7 / CP-10
+
+In `mode = quarantine`, any writer of a protected file was killed: that
+included PheonixBox restoring the file, `secure-sudo restore`, and dpkg/rpm
+updating a protected file, so a repair or an update could be left half
+done. It now never kills PID 1, itself, a secure_sudo stack binary (same
+path-and-owner rule as #64), or any writer while a package manager holds
+its lock; each skip is logged `not killed: pid N (exe): reason` and the
+write is still attributed. Tested by `tests/userspace/test-addons.sh`.
+
+### 66. BootGuard and DriverGuard rolled back kernel and package updates (v8–v12, found 2026-11-01) — CM-3 / CP-10
+
+A kernel update rewrites `/boot` and `/lib/modules`. BootGuard (enforce by
+default) staged a restore of the old initramfs and GRUB config for the next
+boot, and DriverGuard in enforce mode restored old module files, so an
+update could leave a kernel without its matching initramfs or modules. The
+docs said only "re-run `baseline` after a real update". Now both defer
+their scan while a package manager holds its lock (dpkg, rpm or zypper
+`F_GETLK` probe), and new hooks for apt, dnf4/dnf5 and kernel-install run
+`refresh`, which re-baselines, logs every changed/added/removed path, and
+(BootGuard) drops a restore staged before the update. An attacker who
+installs a package to slip a change past the baseline still leaves a
+logged, shipped record. Tested by `tests/userspace/test-addons.sh`.
+
 ---
 
 ## Residual notes / assumptions

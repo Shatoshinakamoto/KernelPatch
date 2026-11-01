@@ -59,4 +59,20 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
  * and the caller should fall back to its configured default root. */
 int locus_request_root(const char *purpose, char *out, size_t n);
 
+/*
+ * Is a package manager in the middle of a transaction (dpkg, rpm, zypper
+ * hold their lock)? Then /boot and the module tree are being rewritten on
+ * purpose: BootGuard and DriverGuard defer their scan, and the package hook
+ * re-baselines when it ends. Writes the lock file to @which. 1 or 0.
+ */
+int ssaddon_pkg_busy(char *which, size_t n);
+
+/*
+ * Is @path an installed secure_sudo program (/usr/bin/secure-sudo*,
+ * /usr/sbin/secure-sudod, /usr/libexec/secure-sudo/), root-owned and not
+ * group/world-writable? The guards never kill those. A name is not enough:
+ * /tmp/secure-sudo-x is not one (SECURITY_REVIEW #64).
+ */
+int ssaddon_is_stack_exe(const char *path);
+
 #endif /* SSADDON_STORE_H */
