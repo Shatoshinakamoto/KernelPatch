@@ -109,6 +109,25 @@ TimeVault keys:
 | `vault_action` | `quarantine` | `quarantine` (zip aside, keep evidence) or `wipe` (delete). Applies both to a new/changed file the daemon finds while scanning **and** to a binary the kernel blocked at exec for a hash mismatch or for not being listed. |
 | `vault_watch` | `/etc,/usr/local/bin,/opt,/usr/local/sbin` | Comma list of trees the daemon scans while engaged. |
 
+**The scan manifest and its Merkle root (G2).** The daemon's first scan after
+TimeVault engages records every regular file under `vault_watch` (path and
+SHA-256) in `/var/lib/secure_sudo/manifest` and acts on none of them: this is
+the baseline, so engage on a known-good system. Every later scan (every 5 s)
+quarantines (or wipes) a file that is new or whose hash differs from the
+baseline; the manifest is not updated, so a removed file that comes back is
+caught again, and putting the original content back makes it match. Files
+are re-hashed only when their size, times or inode change. The daemon logs
+and forwards the manifest's Merkle root (RFC 6962 over the entries sorted by
+path) as `timevault_baseline`, as `timevault_merkle` when it loads the
+manifest after a restart, after a scan that found something, and with every
+`log_checkpoint`. If the file is changed or deleted behind its back it logs
+`timevault_manifest_modified` with both roots and writes its own copy back. A
+manifest it cannot read is never taken as empty: it logs
+`timevault_manifest_unreadable` and quarantines nothing. When TimeVault is
+off (after a reboot) the old manifest is moved to `manifest.prev`
+(`timevault_disengaged`), so the next engagement takes a fresh baseline.
+`secure-sudo evidence-verify --timevault` checks the forwarded roots.
+
 Node child guard (#11) keys, read by `secure-sudo node-scan` and the daemon:
 
 | Key | Default | Meaning |

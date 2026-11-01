@@ -180,6 +180,8 @@ sudo secure-sudo evidence-export /root/incident.tar.gz --signing-key /mnt/key/in
 secure-sudo evidence-verify /root/incident-2026-10-26.tar.gz
 secure-sudo evidence-verify /root/incident.tar.gz --trusted-key /mnt/trusted/incident-ed25519.pub
 secure-sudo evidence-verify /root/incident.tar.gz --checkpoints collector-secure_sudo.log
+secure-sudo evidence-verify /root/incident.tar.gz --timevault collector-secure_sudo.log
+secure-sudo evidence-verify --timevault-root /var/lib/secure_sudo/manifest
 ```
 
 `evidence-verify` safely inspects the archive without extracting untrusted
@@ -194,6 +196,17 @@ the collector's copy was never on the host. The verifier reports, per log,
 how many lines are anchored that way and how many came after the last
 checkpoint. The file can be the collector's raw syslog output; the JSON
 record is taken from the first `{` on each line.
+
+`--timevault FILE` checks the TimeVault manifest (gap G2) against the same
+collector file. While TimeVault is engaged the manifest never changes, so
+every `timevault_merkle` root the daemon forwarded must equal the
+engagement's `timevault_baseline` root; a different root means the
+manifest was rewritten, and a second baseline with no `timevault_disengaged`
+in between means it was deleted and retaken. The bundle's copy
+(`live/timevault-manifest`) must hash to the last root. Outside changes the
+daemon caught and undid (`timevault_manifest_modified`) are reported as
+warnings. `--timevault-root MANIFEST` prints a manifest's root, to compare
+by hand.
 For signed bundles, pass the independently trusted public key; the verifier
 checks both signatures and rejects a signed bundle if no trusted key is
 provided. Unsigned bundles receive integrity checks but no authenticity proof.

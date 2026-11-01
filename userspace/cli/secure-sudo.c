@@ -1639,6 +1639,7 @@ static void usage(void)
 "  health [--json]      compare config/live policy and report component health\n"
 "  evidence-export FILE [--signing-key EXTERNAL.pem] export incident evidence\n"
 "  evidence-verify FILE [--trusted-key PUBLIC.pem] [--checkpoints COLLECTOR.log]\n"
+"                  [--timevault COLLECTOR.log]; or --timevault-root MANIFEST\n"
 "                       verify an evidence bundle (and against off-host checkpoints)\n"
 "  settings             list every configurable knob and policy list\n"
 "  get [<knob>]         show one (or all) live scalar knob value(s)\n"

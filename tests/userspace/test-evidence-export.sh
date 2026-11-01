@@ -185,4 +185,34 @@ printf '{"source":"secure-sudod","event_type":"log_checkpoint","log":"../x.log",
 refute_with "a malformed checkpoint record is rejected, not skipped" \
 	"malformed log_checkpoint" \
 	python3 "$VERIFY" "$T/cp-ok.tar.gz" --checkpoints "$T/bad-collector.log"
+# ---- G2: the TimeVault manifest against the off-host Merkle roots ----
+printf '# secure_sudo timevault manifest v2\n%064d /etc/a\n%064d /etc/with space\n' 0 1 \
+	> "$T/state/manifest"
+TVROOT=$(python3 "$VERIFY" --timevault-root "$T/state/manifest")
+eq "--timevault-root prints a 64-hex root" "${#TVROOT}" 64
+tvrec() { # type root [extra json]
+	printf '<85>1 2026-10-27T10:00:00Z host secure_sudo - - - {"schema_version":1,"source":"secure-sudod","realtime_ns":1,"event_type":"%s","reason":"x","root":"%s","leaves":2%s}\n' "$@"
+}
+{ tvrec timevault_baseline "$TVROOT"; tvrec timevault_merkle "$TVROOT"; } > "$T/tv-collector.log"
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/tv-ok.tar.gz" >/dev/null 2>&1
+if python3 "$VERIFY" "$T/tv-ok.tar.gz" --timevault "$T/tv-collector.log" >"$T/out" 2>&1 &&
+	grep -q "the bundle's manifest (2 entries) matches the off-host root" "$T/out" &&
+	grep -q "2 root record(s) agree" "$T/out"; then
+	ok "G2: the exported TimeVault manifest matches the collector's root"
+else
+	not_ok "G2: the exported TimeVault manifest matches the collector's root ($(cat "$T/out"))"
+fi
+sed -i 's|^0000000000000000000000000000000000000000000000000000000000000000 /etc/a$|'"$(printf '%064d' 9)"' /etc/a|' "$T/state/manifest"
+PATH="$T/bin:$PATH" bash "$SCRIPT" "$T/tv-edited.tar.gz" >/dev/null 2>&1
+refute_with "G2: a manifest rewritten on the host fails against the collector's root" \
+	"bundle's TimeVault manifest has root .* it was rewritten" \
+	python3 "$VERIFY" "$T/tv-edited.tar.gz" --timevault "$T/tv-collector.log"
+tvrec timevault_merkle "$(printf '%064d' 7)" >> "$T/tv-collector.log"
+refute_with "G2: a root that changes mid-engagement is flagged" \
+	"root changed .* manifest was rewritten" \
+	python3 "$VERIFY" "$T/tv-ok.tar.gz" --timevault "$T/tv-collector.log"
+: > "$T/tv-empty.log"
+refute_with "G2: --timevault with no root in the collector's records fails" \
+	"no TimeVault root" \
+	python3 "$VERIFY" "$T/tv-ok.tar.gz" --timevault "$T/tv-empty.log"
 tap_done

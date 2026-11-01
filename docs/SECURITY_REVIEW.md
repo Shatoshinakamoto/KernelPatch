@@ -1032,6 +1032,38 @@ real ones out of the kernel's 256 entries; Electron apps are skipped
 because confining one confines a whole desktop UI. Uninstall removes the
 scan's state files.
 
+### 60. TimeVault's scan had no baseline and no Merkle tree (v2–v12, fixed and built 2026-11-01, gap G2) — SI-7 / AU-9 / AU-10
+
+FEATURE_MAP #13 said the daemon kept a Merkle tree over the watched trees;
+it appended "path hash" lines to a flat file. Building the tree found worse:
+the file was never seeded, so the first scan after `timevault on` treated
+every file under `vault_watch` (default `/etc`, `/opt`, `/usr/local/*`) as new
+and quarantined it, which removes `/etc/passwd`, `/etc/shadow` and the rest.
+No test engaged TimeVault with the daemon running. Also: a quarantined
+file's hash was recorded as known, so the same file dropped again was let
+be; the lookup split at the first space (names with spaces never matched)
+and returned the first of several entries; an unset buffer was read when a
+file had no entry; every file was re-hashed and the whole manifest re-read
+for every file, every 5 s.
+
+Now the first scan of an engagement is a baseline that acts on nothing, the
+manifest never changes during the engagement (TimeVault cannot be
+disengaged until reboot), and it is held in memory, sorted, written
+atomically (v2 format, escaped names) and re-hashed only for files whose
+stat changed. Its RFC 6962 Merkle root is logged and forwarded at the
+baseline, at load, after any finding and with every checkpoint, so a
+legitimate rescan always repeats the root while a rewritten manifest
+cannot. The daemon detects a rewrite or deletion itself, records both roots
+and restores its copy; an unreadable manifest is never treated as empty.
+`evidence-verify --timevault` checks the collector's roots and the bundle's
+copy of the manifest (exported as `live/timevault-manifest`). A root
+attacker who stops the daemon, deletes the manifest and restarts it gets a
+new baseline that includes their files; the daemon marks it `no_manifest`
+and the collector check flags a second baseline without a disengage. The
+remaining gap: files present before engaging are trusted by design.
+Tested in `tests/userspace/test-daemon-events.sh` (+28 checks, with an
+independent Python root) and `test-evidence-export.sh` (+5).
+
 ---
 
 ## Residual notes / assumptions

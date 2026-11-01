@@ -373,7 +373,11 @@ that is a missing feature to build, not a sentence to delete. Each doc says
   directories, at `load` and on a timer, and register them in
   `node_sea_binaries`. **Done when:** a test SEA binary is found and
   registered and the Node guard applies to it without manual listing.
-- [ ] **G2: TimeVault Merkle tree** (FEATURE_MAP #13). Build a Merkle tree
+- [x] **G2: TimeVault Merkle tree** (FEATURE_MAP #13). Built 2026-11-01
+  (SECURITY_REVIEW #60): RFC 6962 root over the baseline manifest, logged and
+  forwarded; `evidence-verify --timevault`; tested by
+  `tests/userspace/test-daemon-events.sh` and `test-evidence-export.sh`.
+  Build a Merkle tree
   over the manifest; log and forward its root each scan. **Done when:** a
   collector can tell a rewritten manifest from a legitimate rescan, and a
   test proves a changed entry changes the root.

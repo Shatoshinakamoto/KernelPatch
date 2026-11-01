@@ -416,6 +416,9 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   (and, with `timevault_strict_mmap=1`, every shared library); those programs
   root-owned and not group/world-writable; `secure-sudod` for quarantine;
   forwarding so the record survives. Engaging latches the lock until reboot.
+  The daemon's first scan after engaging records the watched trees as the
+  baseline (gap G2): files already there then are trusted, so engage on a
+  known-good system.
 * **Limits:** an allowlisted interpreter (bash, python, perl) runs any
   script. Without `timevault_strict_mmap` (default off) shared libraries are
   not checked, so `LD_PRELOAD` or `dlopen` of an unlisted library runs code
@@ -431,7 +434,9 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   refused for root too, package manager refused even with its hash, memfd
   refused, listed binary cannot be opened for writing, event, counter,
   cannot disengage); `test-daemon-events.sh` (quarantine path checks,
-  SECURITY_REVIEW #48 and #52).
+  SECURITY_REVIEW #48 and #52; the baseline, rescans, the Merkle root, a
+  rewritten or deleted manifest, #60); `test-evidence-export.sh`
+  (`--timevault` against the collector's roots).
 
 ### #14 Rotating OTP sudo password and #15 encrypted OTP secret (PAM + helper)
 
@@ -617,7 +622,7 @@ writing this document. Each is tracked in [TODO.md](../TODO.md) under
 | Gap | Promised in | What is missing | Plan |
 |---|---|---|---|
 | G1 | FEATURE_MAP #11 | "The daemon finds SEA binaries by their fuse marker and registers them." Nothing did. | **Built 2026-11-01:** `secure-sudo node-scan`, run by the daemon at start and every `node_sea_scan_interval` minutes; `load` sends its finds after the hand-written list. |
-| G2 | FEATURE_MAP #13 | "The daemon keeps the Merkle tree over watched trees." It keeps a flat SHA-256 manifest. | Build a Merkle tree over the manifest, log and forward its root each scan so a collector can spot a rewritten manifest. |
+| G2 | FEATURE_MAP #13 | "The daemon keeps the Merkle tree over watched trees." It kept a flat SHA-256 manifest. | **Built 2026-11-01:** the manifest is a baseline taken when the vault engages; its Merkle root is logged and forwarded (baseline, load, findings, every checkpoint); the daemon puts back a rewritten manifest and `evidence-verify --timevault` flags one (SECURITY_REVIEW #60). |
 | G3 | FEATURE_MAP #15 | "Sealed with TPM2 when there is one, with a root-only key file as the fallback." Only the key file exists. | Seal the OTP key with the TPM (systemd-creds or tpm2-tools) when present, key file as fallback, swtpm in the distro VM test. |
 | G4 | README #5 "Block TPM clear" | Only the PPI route is blocked; `TPM2_Clear` through `/dev/tpm*` is not, and an LSM cannot read the command bytes. | Needs a decision: set a TPM lockout password at install, and/or restrict which programs may open `/dev/tpm*`. |
 

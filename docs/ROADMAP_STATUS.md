@@ -26,7 +26,7 @@ under UEFI or Secure Boot, or on real hardware.
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
 | P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
-| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 is built (`node-scan`, #59) and G2–G4 are to build |
+| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59) and G2 (TimeVault Merkle root, #60) are built and G3–G4 are to build |
 | P1-6 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
@@ -113,13 +113,13 @@ without root):
 |---|---|---|
 | `tests/userspace/test-pheonixbox.sh` | 26 | the real PheonixBox helper: refuses unprivileged; snapshot, lock, tamper, repair, re-lock, permission restore, hostile file names (root, private mount namespace with overlays) |
 | `tests/userspace/test-node-scan.sh` | 48 | `node-scan` (#11, gap G1): SEA/pkg/renamed-node markers incl. across read boundaries, a real Node binary with its fuse flipped, Electron apps skipped, unlistable names, merge order and the kernel's limits, the cache, partial scans, ownership order |
-| `tests/userspace/test-daemon-events.sh` | 43 | how the daemon acts on kernel events (typed fields, cooldown kill, quarantine), the ring reader, sequence gaps, and the background node-scan |
+| `tests/userspace/test-daemon-events.sh` | 71 | how the daemon acts on kernel events (typed fields, cooldown kill, quarantine), the ring reader, sequence gaps, the background node-scan, and the TimeVault baseline and Merkle root (G2) |
 | `tests/userspace/test-otp.sh` | 66 | RFC 4226/6238 vectors, secret at rest, prefix, replay refusal |
 | `tests/userspace/test-pam.sh` | 50 | both PAM modules through libpam, the documented stacks, real `pam_unix` + `pam_faillock` (root, private mount namespace) |
 | `tests/userspace/test-helpers.sh` | 77 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
 | `tests/userspace/test-cli.sh` | 117 | config parsing, `lint`, `load` reporting (entry counts, node-scan merge) and persisted boot-bound load-health status, health status/JSON, including audit-feed activity, log-retention hold, systemd add-on/timer state, scan outcomes/age and baseline freshness, against stand-in knob and list files |
 | `tests/userspace/test-remote-forwarding.sh` | 11 | TLS CA/hostname validation and CA rotation, RFC 5425 delivery, queue persistence/exhaustion, outage retry |
-| `tests/userspace/test-evidence-export.sh` | 18 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation |
+| `tests/userspace/test-evidence-export.sh` | 23 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation, TimeVault manifest against the collector's roots |
 | `tests/oscap/` | 39 | result parsing and the STIG gate's rule-by-rule comparison, release vs diagnostic mode, independent checks (OSB-19) |
 | `tests/provenance/` | 19 | P0-4 above |
 | `tests/install/test-install.sh` | 131 | P0-5 below |
@@ -512,7 +512,7 @@ Four doc promises the code does not keep yet are tracked as features to
 build in [TODO.md](../TODO.md) "Doc promises to build" (G1 Node SEA
 auto-detection, G2 TimeVault Merkle tree, G3 TPM2-sealed OTP secret, G4
 TPM clear through `/dev/tpm*`). Until each lands, its doc says "not built
-yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59).
+yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: the TimeVault manifest's Merkle root (SECURITY_REVIEW #60).
 
 ## P1-6 through P1-8 — not started
 

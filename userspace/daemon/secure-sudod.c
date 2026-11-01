@@ -50,7 +50,9 @@
 #include <openssl/x509v3.h>
 
 #define EVENTS   "/sys/kernel/security/secure_sudo/events"
+#ifndef SYSFS
 #define SYSFS    "/sys/kernel/secure_sudo"
+#endif
 #define CONFIG   "/etc/secure_sudo/secure-sudo.conf"
 #ifndef LOGDIR
 #define LOGDIR   "/var/log/secure_sudo"
@@ -60,7 +62,9 @@
 #define HEALTH_FILE STATEDIR "/daemon.health"
 #endif
 #define RETENTION_HOLD STATEDIR "/retention.hold"
+#ifndef MANIFEST
 #define MANIFEST STATEDIR "/manifest"
+#endif
 #ifndef EVENT_CURSOR
 #define EVENT_CURSOR STATEDIR "/event-cursor"
 #endif
@@ -891,7 +895,10 @@ static void write_local_log(const struct cfg *c, const char *line, size_t len)
 			      "\"found_bytes\":%llu", chain_name, was, found);
 }
 
-/* Log and forward a log_checkpoint record for today's log (P1-3). */
+static void tv_checkpoint(const struct cfg *c);	/* G2, below */
+
+/* Log and forward a log_checkpoint record for today's log (P1-3), and the
+ * TimeVault manifest's Merkle root with it (G2). */
 
 static void log_checkpoint(const struct cfg *c)
 {
@@ -907,6 +914,7 @@ static void log_checkpoint(const struct cfg *c)
 	daemon_record(c, "log_checkpoint",
 		      "\"log\":\"%s\",\"lines\":%llu,\"chain\":\"%s\"",
 		      chain_name, chain_lines, chain_hex);
+	tv_checkpoint(c);
 }
 
 static void write_log(const struct cfg *c, const char *line, size_t len)
@@ -1419,6 +1427,16 @@ static int ev_vault_path(const struct ss_ev *e, char *path, size_t size)
 	return 1;
 }
 
+/* The kernel's record of `timevault on` (typed fields only, as above). */
+static int ev_vault_engaged(const struct ss_ev *e)
+{
+	return e->schema == 1 && !strcmp(e->event_type, "time_vault") &&
+	       !strcmp(e->operation, "engage") &&
+	       !strcmp(e->decision, "enforce");
+}
+
+static int tv_engage_seen;		/* G2: set from the ring, see below */
+
 /* ---- #13 acting on a file without trusting its path ---- */
 
 static int run_helper_argv(const char *const argv[]);	/* defined below */
@@ -1752,6 +1770,8 @@ static void handle_event(const struct cfg *c, const char *line)
 		kill_offenders(uid);
 	if (ev_vault_path(&e, path, sizeof(path)))
 		vault_act(c, path);
+	if (ev_vault_engaged(&e))
+		tv_engage_seen = 1;
 }
 
 /* ---- #10 network mode ---- */
@@ -1929,43 +1949,403 @@ err:
 	return -1;
 }
 
-/* Look up a path's previously recorded hash in the manifest. */
-static int manifest_lookup(const char *path, char out[65])
+/*
+ * ---- G2: the TimeVault manifest and its Merkle tree ----
+ *
+ * The manifest is the set of files (path + SHA-256) the watched trees held
+ * when TimeVault engaged: the first scan of an engagement records every
+ * file and acts on none (the baseline). Every later scan compares against
+ * it; a new or changed file is quarantined (or wiped) and the manifest is
+ * left as it was, so a file that comes back is caught again. TimeVault
+ * cannot be disengaged until reboot, so the manifest never changes during
+ * an engagement and its Merkle root stays the same from scan to scan.
+ *
+ * The root (RFC 6962 tree hash over the entries sorted by path, leaf =
+ * SHA-256(0x00 || path || 0x00 || hex hash), node = SHA-256(0x01 || l ||
+ * r)) is logged and forwarded off the host at the baseline, when the
+ * daemon loads the manifest, after every scan that finds something and at
+ * each log checkpoint. So a collector holds the root the host started
+ * with: a legitimate rescan repeats it, a rewritten manifest cannot. The
+ * daemon also notices a rewrite itself (timevault_manifest_modified) and
+ * puts its own copy back. `evidence-verify --timevault` checks the
+ * collector's records and a bundle's copy of the manifest against them.
+ *
+ * Earlier versions appended to a flat manifest with no baseline, so the
+ * first scan after `timevault on` quarantined every file under /etc, and a
+ * quarantined file's hash was recorded as known, so the same file dropped
+ * again was let be.
+ *
+ * On disk: a header line, then "HASH PATH" per entry, sorted by path, with
+ * '\\', newline and carriage return in the path written as \\\\, \\n, \\r.
+ */
+#ifndef TV_MAX_ENTRIES
+#define TV_MAX_ENTRIES 1000000
+#endif
+#define TV_HEADER "# secure_sudo timevault manifest v2"
+
+struct tv_ent {
+	char *path;
+	char hash[65];
+	int have_stat;			/* the stat key below is valid */
+	dev_t dev;
+	ino_t ino;
+	off_t size;
+	struct timespec mtim, ctim;
+};
+
+struct tv_set {
+	struct tv_ent *e;
+	size_t n, cap;
+	int overflow;
+};
+
+static struct tv_set tv;		/* the manifest of this engagement */
+static int tv_loaded;			/* tv holds it */
+static char tv_root[65];
+static struct stat tv_disk;		/* the manifest file as we left it */
+
+static void tv_free(struct tv_set *s)
 {
-	FILE *f = fopen(MANIFEST, "re");
-	char line[1200];
-	int found = 0;
+	size_t i;
 
-	if (!f)
-		return -1;
-	while (fgets(line, sizeof(line), f)) {
-		char *sp = strchr(line, ' ');
+	for (i = 0; i < s->n; i++)
+		free(s->e[i].path);
+	free(s->e);
+	memset(s, 0, sizeof(*s));
+}
 
-		if (!sp)
+static struct tv_ent *tv_add(struct tv_set *s, const char *path,
+			     const char *hash)
+{
+	struct tv_ent *e;
+
+	if (s->n >= TV_MAX_ENTRIES) {
+		s->overflow = 1;
+		return NULL;
+	}
+	if (s->n == s->cap) {
+		size_t cap = s->cap ? s->cap * 2 : 1024;
+		struct tv_ent *ne = realloc(s->e, cap * sizeof(*ne));
+
+		if (!ne) {
+			s->overflow = 1;
+			return NULL;
+		}
+		s->e = ne;
+		s->cap = cap;
+	}
+	e = &s->e[s->n];
+	memset(e, 0, sizeof(*e));
+	e->path = strdup(path);
+	if (!e->path) {
+		s->overflow = 1;
+		return NULL;
+	}
+	snprintf(e->hash, sizeof(e->hash), "%s", hash);
+	s->n++;
+	return e;
+}
+
+static int tv_cmp(const void *a, const void *b)
+{
+	return strcmp(((const struct tv_ent *)a)->path,
+		      ((const struct tv_ent *)b)->path);
+}
+
+/* Sort by path; of two entries for one path the first added is kept. */
+static void tv_sort(struct tv_set *s)
+{
+	size_t i, o = 0;
+
+	for (i = 0; i < s->n; i++)	/* stable: break ties on position */
+		s->e[i].size = (off_t)i;
+	qsort(s->e, s->n, sizeof(*s->e), tv_cmp);
+	for (i = 0; i < s->n; i++) {
+		if (o && !strcmp(s->e[o - 1].path, s->e[i].path)) {
+			if (s->e[i].size < s->e[o - 1].size) {
+				free(s->e[o - 1].path);
+				s->e[o - 1] = s->e[i];
+			} else {
+				free(s->e[i].path);
+			}
 			continue;
-		*sp = '\0';
-		trim(sp + 1);
-		if (!strcmp(line, path)) {
-			snprintf(out, 65, "%s", sp + 1);
-			found = 1;
+		}
+		s->e[o++] = s->e[i];
+	}
+	s->n = o;
+	for (i = 0; i < s->n; i++) {
+		s->e[i].size = 0;
+		s->e[i].have_stat = 0;
+	}
+}
+
+static struct tv_ent *tv_find(const struct tv_set *s, const char *path)
+{
+	struct tv_ent key = { .path = (char *)path };
+
+	return s->n ? bsearch(&key, s->e, s->n, sizeof(*s->e), tv_cmp) : NULL;
+}
+
+static int tv_sha(const void *buf, size_t len, unsigned char out[32])
+{
+	unsigned int dlen = 0;
+
+	return EVP_Digest(buf, len, out, &dlen, EVP_sha256(), NULL) == 1 &&
+	       dlen == 32 ? 0 : -1;
+}
+
+static int tv_leaf(const struct tv_ent *e, unsigned char out[32])
+{
+	size_t pl = strlen(e->path);
+	unsigned char *b = malloc(pl + 66);
+	int rc;
+
+	if (!b)
+		return -1;
+	b[0] = 0x00;
+	memcpy(b + 1, e->path, pl);
+	b[1 + pl] = 0x00;
+	memcpy(b + 2 + pl, e->hash, 64);
+	rc = tv_sha(b, pl + 66, out);
+	free(b);
+	return rc;
+}
+
+/* RFC 6962 MTH over h[0..n), n >= 1; the leaf hashes are overwritten. */
+static int tv_mth(unsigned char (*h)[32], size_t n, unsigned char out[32])
+{
+	unsigned char node[65], l[32];
+	size_t k = 1;
+
+	if (n == 1) {
+		memcpy(out, h[0], 32);
+		return 0;
+	}
+	while (k * 2 < n)
+		k *= 2;
+	if (tv_mth(h, k, l) != 0 || tv_mth(h + k, n - k, node + 33) != 0)
+		return -1;
+	node[0] = 0x01;
+	memcpy(node + 1, l, 32);
+	return tv_sha(node, sizeof(node), out);
+}
+
+static int tv_root_hex(const struct tv_set *s, char out[65])
+{
+	unsigned char (*h)[32], r[32];
+	size_t i;
+	int rc = 0;
+
+	if (!s->n)
+		rc = tv_sha("", 0, r);
+	else {
+		h = malloc(s->n * sizeof(*h));
+		if (!h)
+			return -1;
+		for (i = 0; i < s->n && !rc; i++)
+			rc = tv_leaf(&s->e[i], h[i]);
+		if (!rc)
+			rc = tv_mth(h, s->n, r);
+		free(h);
+	}
+	if (rc)
+		return -1;
+	for (i = 0; i < 32; i++)
+		sprintf(out + i * 2, "%02x", r[i]);
+	out[64] = '\0';
+	return 0;
+}
+
+static int tv_hexhash(const char *s)
+{
+	int i;
+
+	for (i = 0; i < 64; i++)
+		if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+			return 0;
+	return s[64] == '\0';
+}
+
+/*
+ * Read a manifest file. Returns 0, or -1 with errno (ENOENT: none there;
+ * EBADMSG: not a manifest). A v1 file ("PATH HASH" lines, appended) is
+ * read too, once, so an engagement that began under the old daemon keeps
+ * its entries; it is rewritten as v2.
+ */
+static int tv_read(const char *file, struct tv_set *s, struct stat *st)
+{
+	FILE *f;
+	char *line = NULL;
+	size_t cap = 0;
+	ssize_t n;
+	int v2 = -1, bad = 0;
+	int fd = open(file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+
+	memset(s, 0, sizeof(*s));
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "r");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
+	if (st && fstat(fd, st) != 0)
+		bad = 1;
+	while (!bad && (n = getline(&line, &cap, f)) > 0) {
+		char path[1100], *p, *o, *hash;
+
+		if (line[n - 1] == '\n')
+			line[--n] = '\0';
+		if (v2 < 0) {
+			v2 = !strcmp(line, TV_HEADER);
+			if (v2)
+				continue;
+		}
+		if (v2) {
+			if (n < 67 || line[64] != ' ' || line[65] != '/') {
+				bad = 1;
+				break;
+			}
+			line[64] = '\0';
+			hash = line;
+			for (p = line + 65, o = path; *p; p++) {
+				if ((size_t)(o - path) >= sizeof(path) - 1) {
+					bad = 1;
+					break;
+				}
+				if (*p != '\\') {
+					*o++ = *p;
+					continue;
+				}
+				p++;
+				if (*p == '\\')
+					*o++ = '\\';
+				else if (*p == 'n')
+					*o++ = '\n';
+				else if (*p == 'r')
+					*o++ = '\r';
+				else {
+					bad = 1;
+					break;
+				}
+			}
+			*o = '\0';
+		} else {
+			char *sp = strrchr(line, ' ');
+
+			if (!sp || line[0] != '/' ||
+			    (size_t)(sp - line) >= sizeof(path)) {
+				bad = 1;
+				break;
+			}
+			*sp = '\0';
+			hash = sp + 1;
+			snprintf(path, sizeof(path), "%s", line);
+		}
+		if (bad || !tv_hexhash(hash)) {
+			bad = 1;
 			break;
 		}
+		if (!tv_add(s, path, hash))
+			bad = 1;
 	}
+	if (ferror(f))
+		bad = 1;
+	free(line);
 	fclose(f);
-	return found ? 0 : -1;
+	if (bad) {
+		tv_free(s);
+		errno = EBADMSG;
+		return -1;
+	}
+	tv_sort(s);
+	return 0;
 }
 
-static void manifest_record(const char *path, const char *hash)
+static void tv_put_path(FILE *f, const char *p)
 {
-	FILE *f = fopen(MANIFEST, "ae");
-
-	if (f) {
-		fprintf(f, "%s %s\n", path, hash);
-		fclose(f);
+	for (; *p; p++) {
+		if (*p == '\\')
+			fputs("\\\\", f);
+		else if (*p == '\n')
+			fputs("\\n", f);
+		else if (*p == '\r')
+			fputs("\\r", f);
+		else
+			fputc(*p, f);
 	}
 }
 
-static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
+/* Write the in-memory manifest, atomically, and remember the result. */
+static int tv_write(void)
+{
+	char tmp[600];
+	FILE *f;
+	size_t i;
+	int fd, failed = 0;
+
+	snprintf(tmp, sizeof(tmp), "%s.tmp", MANIFEST);
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+		  0600);
+	if (fd < 0)
+		return -1;
+	f = fdopen(fd, "w");
+	if (!f) {
+		close(fd);
+		unlink(tmp);
+		return -1;
+	}
+	fprintf(f, "%s\n", TV_HEADER);
+	for (i = 0; i < tv.n; i++) {
+		fprintf(f, "%s ", tv.e[i].hash);
+		tv_put_path(f, tv.e[i].path);
+		fputc('\n', f);
+	}
+	if (fflush(f) != 0 || fsync(fd) != 0)
+		failed = 1;
+	if (fclose(f) != 0)
+		failed = 1;
+	if (failed || rename(tmp, MANIFEST) != 0 ||
+	    lstat(MANIFEST, &tv_disk) != 0) {
+		unlink(tmp);
+		memset(&tv_disk, 0, sizeof(tv_disk));
+		return -1;
+	}
+	return 0;
+}
+
+static int tv_same_stat(const struct stat *a, const struct stat *b)
+{
+	return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
+	       a->st_size == b->st_size &&
+	       a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
+	       a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
+	       a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
+	       a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+static void tv_merkle_record(const struct cfg *c, const char *reason,
+			     unsigned long newf, unsigned long changed,
+			     unsigned long acted)
+{
+	daemon_record(c, "timevault_merkle",
+		      "\"reason\":\"%s\",\"root\":\"%s\",\"leaves\":%zu,"
+		      "\"new\":%lu,\"changed\":%lu,\"acted\":%lu",
+		      reason, tv_root, tv.n, newf, changed, acted);
+}
+
+/* With each log checkpoint: the root again, so a collector keeps it. */
+static void tv_checkpoint(const struct cfg *c)
+{
+	if (tv_loaded)
+		tv_merkle_record(c, "checkpoint", 0, 0, 0);
+}
+
+/* Walk one tree: record (baseline) or check every regular file. */
+static void vault_scan_dir(const struct cfg *c, const char *dir, int depth,
+			   struct tv_set *base, unsigned long *newf,
+			   unsigned long *changed, unsigned long *acted)
 {
 	DIR *d;
 	struct dirent *de;
@@ -1976,7 +2356,8 @@ static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
 	if (!d)
 		return;
 	while ((de = readdir(d))) {
-		char path[1024], have[65], prev[65];
+		char path[1024], have[65];
+		struct tv_ent *e;
 		struct stat st;
 
 		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
@@ -1987,39 +2368,60 @@ static void vault_scan_dir(const struct cfg *c, const char *dir, int depth)
 		if (lstat(path, &st) != 0)
 			continue;
 		if (S_ISDIR(st.st_mode)) {
-			vault_scan_dir(c, path, depth + 1);
+			vault_scan_dir(c, path, depth + 1, base, newf, changed,
+				       acted);
 			continue;
 		}
 		if (!S_ISREG(st.st_mode))
 			continue;
+		if (base) {
+			if (sha256_hex(path, have) == 0 && !tv_add(base, path, have))
+				break;		/* over the limit: caller gives up */
+			continue;
+		}
+		e = tv_find(&tv, path);
+		if (e && e->have_stat && e->dev == st.st_dev &&
+		    e->ino == st.st_ino && e->size == st.st_size &&
+		    e->mtim.tv_sec == st.st_mtim.tv_sec &&
+		    e->mtim.tv_nsec == st.st_mtim.tv_nsec &&
+		    e->ctim.tv_sec == st.st_ctim.tv_sec &&
+		    e->ctim.tv_nsec == st.st_ctim.tv_nsec)
+			continue;	/* untouched since it last matched */
 		if (sha256_hex(path, have) != 0)
 			continue;
-		if (manifest_lookup(path, prev) == 0 && !strcmp(prev, have))
-			continue;	/* known and unchanged */
+		if (e && !strcmp(e->hash, have)) {
+			e->have_stat = 1;
+			e->dev = st.st_dev;
+			e->ino = st.st_ino;
+			e->size = st.st_size;
+			e->mtim = st.st_mtim;
+			e->ctim = st.st_ctim;
+			continue;	/* as it was at the baseline */
+		}
 
-		/* New or changed file while the vault is engaged. */
+		/* New or changed since TimeVault engaged. */
+		if (e)
+			(*changed)++;
+		else
+			(*newf)++;
 		syslog_line("timevault: %s %s (action=%s)",
-			    prev[0] ? "changed" : "new", path, c->vault_action);
+			    e ? "changed" : "new", path, c->vault_action);
 		if (vault_act(c, path) != 0) {
-			/* Not recorded: a file that could not be quarantined
-			 * must not become "known" and stop being flagged. */
 			syslog_line("timevault: %s left in place, will retry", path);
 			continue;
 		}
-		manifest_record(path, have);
+		(*acted)++;
+		/* The manifest keeps the baseline: if the file comes back,
+		 * it is caught again. */
 	}
 	closedir(d);
 }
 
-static void vault_scan(const struct cfg *c)
+static void vault_walk(const struct cfg *c, struct tv_set *base,
+		       unsigned long *newf, unsigned long *changed,
+		       unsigned long *acted)
 {
 	char buf[1024], *p, *tok, *save;
-	char enabled[8];
-
-	if (read_sysfs_str("timevault", enabled, sizeof(enabled)) != 0)
-		return;
-	if (strcmp(enabled, "1"))
-		return;
 
 	snprintf(buf, sizeof(buf), "%s", c->vault_watch);
 	p = buf;
@@ -2027,8 +2429,160 @@ static void vault_scan(const struct cfg *c)
 		p = NULL;
 		trim(tok);
 		if (*tok)
-			vault_scan_dir(c, tok, 0);
+			vault_scan_dir(c, tok, 0, base, newf, changed, acted);
+		if (base && base->overflow)
+			return;
 	}
+}
+
+/* TimeVault is off: an old engagement's manifest is kept aside. */
+static void tv_disengaged(const struct cfg *c)
+{
+	char prev[600];
+	struct tv_set old;
+	struct stat st;
+
+	if (!tv_loaded && lstat(MANIFEST, &st) != 0)
+		return;
+	if (!tv_loaded && tv_read(MANIFEST, &old, NULL) == 0) {
+		tv_free(&tv);
+		tv = old;
+		if (tv_root_hex(&tv, tv_root) != 0)
+			snprintf(tv_root, sizeof(tv_root), "unknown");
+	} else if (!tv_loaded) {
+		snprintf(tv_root, sizeof(tv_root), "unreadable");
+	}
+	snprintf(prev, sizeof(prev), "%s.prev", MANIFEST);
+	if (rename(MANIFEST, prev) != 0 && errno != ENOENT)
+		syslog_line("timevault: cannot set the old manifest aside: %s",
+			    strerror(errno));
+	daemon_record(c, "timevault_disengaged",
+		      "\"root\":\"%s\",\"leaves\":%zu", tv_root, tv.n);
+	tv_free(&tv);
+	tv_loaded = 0;
+	tv_root[0] = '\0';
+}
+
+/* Engaged and no manifest in memory: load it, or take the baseline. */
+static void tv_start(const struct cfg *c)
+{
+	struct tv_set s;
+	unsigned long z = 0;
+
+	if (tv_read(MANIFEST, &s, &tv_disk) == 0) {
+		int legacy = 0;
+		char line[64];
+		FILE *f = fopen(MANIFEST, "re");
+
+		if (f) {
+			legacy = !fgets(line, sizeof(line), f) ||
+				 strncmp(line, TV_HEADER, strlen(TV_HEADER));
+			fclose(f);
+		}
+		tv = s;
+		if (tv_root_hex(&tv, tv_root) != 0) {
+			tv_free(&tv);
+			return;
+		}
+		tv_loaded = 1;
+		if (legacy && tv_write() != 0)
+			syslog_line("timevault: cannot rewrite the manifest: %s",
+				    strerror(errno));
+		tv_merkle_record(c, legacy ? "loaded_v1" : "loaded", 0, 0, 0);
+		return;
+	}
+	if (errno != ENOENT) {
+		/* There is a manifest we cannot read: acting on its absence
+		 * would quarantine the whole tree, so do nothing but say so. */
+		static time_t said;
+		time_t now = time(NULL);
+
+		if (now - said >= 3600) {
+			said = now;
+			daemon_record(c, "timevault_manifest_unreadable",
+				      "\"error\":\"%s\"", strerror(errno));
+		}
+		return;
+	}
+	memset(&s, 0, sizeof(s));
+	vault_walk(c, &s, &z, &z, &z);
+	if (s.overflow) {
+		daemon_record(c, "timevault_manifest_unreadable",
+			      "\"error\":\"more than %d files to record\"",
+			      TV_MAX_ENTRIES);
+		tv_free(&s);
+		return;
+	}
+	tv_sort(&s);
+	tv = s;
+	if (tv_root_hex(&tv, tv_root) != 0) {
+		tv_free(&tv);
+		return;
+	}
+	tv_loaded = 1;
+	if (tv_write() != 0)
+		syslog_line("timevault: cannot write the manifest: %s",
+			    strerror(errno));
+	/* "engaged": the kernel's engage record came first. "no_manifest":
+	 * the daemon found TimeVault on and no manifest (a daemon started
+	 * after `timevault on`, or a manifest deleted); a collector that
+	 * already holds a root for this engagement treats it as tampering. */
+	daemon_record(c, "timevault_baseline",
+		      "\"reason\":\"%s\",\"root\":\"%s\",\"leaves\":%zu",
+		      tv_engage_seen ? "engaged" : "no_manifest", tv_root,
+		      tv.n);
+	tv_engage_seen = 0;
+}
+
+/* Has someone else changed the manifest file? Put ours back if so. */
+static void tv_check_disk(const struct cfg *c)
+{
+	struct stat st;
+	struct tv_set s;
+	char found[65] = "";
+
+	if (lstat(MANIFEST, &st) == 0 && tv_same_stat(&st, &tv_disk))
+		return;
+	if (tv_read(MANIFEST, &s, &st) == 0) {
+		int same = tv_root_hex(&s, found) == 0 &&
+			   !strcmp(found, tv_root);
+
+		if (!same && !found[0])
+			snprintf(found, sizeof(found), "unknown");
+		tv_free(&s);
+		if (same) {
+			tv_disk = st;	/* touched, not changed */
+			return;
+		}
+	} else {
+		snprintf(found, sizeof(found), "%s",
+			 errno == ENOENT ? "missing" : "unreadable");
+	}
+	daemon_record(c, "timevault_manifest_modified",
+		      "\"expected_root\":\"%s\",\"found_root\":\"%s\","
+		      "\"restored\":%s", tv_root, found,
+		      tv_write() == 0 ? "true" : "false");
+}
+
+static void vault_scan(const struct cfg *c)
+{
+	char enabled[8];
+	unsigned long newf = 0, changed = 0, acted = 0;
+
+	if (read_sysfs_str("timevault", enabled, sizeof(enabled)) != 0)
+		return;
+	if (strcmp(enabled, "1")) {
+		tv_disengaged(c);
+		return;
+	}
+	if (!tv_loaded) {
+		tv_start(c);
+		return;		/* the baseline scan acts on nothing */
+	}
+	tv_check_disk(c);
+	vault_walk(c, NULL, &newf, &changed, &acted);
+	if (newf || changed)
+		tv_merkle_record(c, "scan", newf, changed, acted);
 }
 
 /* ---- main loop ---- */
