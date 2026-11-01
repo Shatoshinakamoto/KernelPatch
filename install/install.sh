@@ -1326,16 +1326,19 @@ uninstall() {
 		log "purged /etc/secure_sudo and /var/log/secure_sudo"
 	fi
 	# 7. State the daemon and the CLI keep for themselves (heartbeat, last
-	#    load result, event-stream position, and their temporary files). It
+	#    load result, event-stream position, what node-scan found, and their
+	#    temporary files). It
 	#    is rebuilt on the next start and holds nothing an investigation
 	#    needs; the logs and the quarantine do, and they stay. Events still
 	#    queued for the remote collector stay too. The service is stopped
 	#    (step 3), so nothing rewrites these behind us.
 	local sd="$SS_ROOT/var/lib/secure_sudo" f
-	for f in daemon.health daemon.health.tmp load.health event-cursor event-cursor.tmp; do
+	for f in daemon.health daemon.health.tmp load.health event-cursor event-cursor.tmp \
+		node_sea_auto.list node_sea_scan.cache; do
 		rm -f -- "${sd:?}/$f"
 	done
-	rm -f -- "$sd"/load.health.tmp.??????
+	rm -f -- "$sd"/load.health.tmp.?????? "$sd"/node_sea_auto.list.tmp.* \
+		"$sd"/node_sea_scan.cache.tmp.*
 	if [ -d "$sd/remote-queue" ] && ! rmdir "$sd/remote-queue" 2>/dev/null; then
 		warn "kept /var/lib/secure_sudo/remote-queue: events not yet delivered to the remote collector"
 	fi

@@ -1009,6 +1009,29 @@ binary, such as the PheonixBox helper with #55, could have been installed
 over the fixed source. They are removed from the repository and listed in
 `.gitignore`; the gate already cleans and rebuilds every component.
 
+### 58. `load` reported every policy list as "1 entry" (P0-6 load report, fixed 2026-11-01) — AU-3 / CM-3
+
+The loop in `load_list` that counts a list's entries stopped after the
+first line, so `load` printed "1 entry" for a list of any length. The
+kernel received the whole list; only the report was wrong, but the report
+is what an operator reads to confirm a change went in (P0-6). Found while
+testing the node-scan merge (gap G1). Fixed, with a three-entry check in
+`tests/userspace/test-cli.sh`.
+
+### 59. Node runtimes outside the standard paths were never registered (v2–v12, built 2026-11-01, gap G1) — CM-7 / SI-3
+
+FEATURE_MAP #11 said the daemon found single-executable apps by their fuse
+marker and registered them for the Node child guard; nothing did, so a
+Node app shipped as an SEA or pkg build was never guarded unless listed by
+hand. `secure-sudo node-scan` now finds them (and renamed node binaries),
+the daemon runs it at start and hourly as a niced background child so event
+draining never waits on it, and `load` sends its finds after the hand-
+written list. Design points: registering only adds restriction; root-owned,
+root-only-writable files are listed first so planted files cannot crowd
+real ones out of the kernel's 256 entries; Electron apps are skipped
+because confining one confines a whole desktop UI. Uninstall removes the
+scan's state files.
+
 ---
 
 ## Residual notes / assumptions

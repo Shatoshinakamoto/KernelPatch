@@ -19,12 +19,21 @@ cat > "$T/quarantine-wrapper.sh" <<WRAP
 SS_QUARANTINE_DIR="$T/quarantine" exec sh "$ROOT/userspace/daemon/helpers/quarantine.sh" "\$@"
 WRAP
 chmod 0755 "$T/quarantine-wrapper.sh"
+# Stands in for `secure-sudo` (node-scan): records how it was run, then fails.
+cat > "$T/cli-stub.sh" <<STUB
+#!/bin/sh
+echo "\$* nice=\$(nice)" >> "$T/cli-calls"
+sleep 1
+exit 3
+STUB
+chmod 0755 "$T/cli-stub.sh"
 
 if ! (cd "$ROOT" && ${CC:-cc} -O2 -Wall -Wextra -Werror \
 	-DLOGDIR="\"$T/log\"" -DQUARANTINE="\"$T/quarantine\"" \
 	-DHELPER_QUAR="\"$T/quarantine-wrapper.sh\"" \
 	-DREMOTE_QUEUE="\"$T/remote-queue\"" \
 	-DEVENT_CURSOR="\"$T/event-cursor\"" -DHEALTH_FILE="\"$T/daemon.health\"" \
+	-DSECURE_SUDO_CLI="\"$T/cli-stub.sh\"" \
 	-o "$T/test-daemon-events" tests/userspace/test-daemon-events.c \
 	-lssl -lcrypto); then
 	not_ok "daemon event harness builds (-Werror)"

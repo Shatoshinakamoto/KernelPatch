@@ -406,9 +406,9 @@ static void report(struct load_tally *t, const char *verdict, const char *what,
 /* Push a config list file into its securityfs target. Missing file = clear. */
 static void load_list(const struct listmap *m, struct load_tally *t)
 {
-	char cfg[256], sec[256], detail[96], *buf = NULL;
+	char cfg[256], sec[256], detail[160], *buf = NULL;
 	size_t cap = 0, len = 0;
-	int err = 0, entries = 0;
+	int err = 0, entries = 0, auto_added = 0, auto_dropped = 0, have = 0;
 	FILE *f;
 
 	snprintf(cfg, sizeof(cfg), CONFIG_DIR "/%s", m->cfg_file);
@@ -416,6 +416,7 @@ static void load_list(const struct listmap *m, struct load_tally *t)
 
 	f = fopen(cfg, "re");
 	if (f) {
+		have = 1;
 		for (;;) {
 			char chunk[4096];
 			size_t n = fread(chunk, 1, sizeof(chunk), f);
@@ -440,12 +441,28 @@ static void load_list(const struct listmap *m, struct load_tally *t)
 		}
 		fclose(f);
 	}
+	if (!strcmp(m->secfs, "node_sea_binaries")) {
+		/* hand-written entries first, then what node-scan found */
+		size_t alen = 0, glen = 0;
+		char *autol = node_sea_read_file(node_sea_auto_path(), &alen);
+		char *merged = NULL;
+
+		if (autol && node_sea_merge(buf, len, autol, alen, &merged, &glen,
+					    &auto_added, &auto_dropped) == 0) {
+			free(buf);
+			buf = merged;
+			len = glen;
+			have = 1;
+		}
+		free(autol);
+	}
 	if (buf) {
 		char *p, *save = NULL, *copy;
 
 		buf[len] = '\0';
 		copy = strdup(buf);
-		for (p = copy; p && (p = strtok_r(p == copy ? copy : NULL, "\n", &save)); p = NULL) {
+		for (p = copy ? strtok_r(copy, "\n", &save) : NULL; p;
+		     p = strtok_r(NULL, "\n", &save)) {
 			while (*p == ' ' || *p == '\t')
 				p++;
 			if (*p && *p != '#')
@@ -456,8 +473,17 @@ static void load_list(const struct listmap *m, struct load_tally *t)
 	if (write_file_err(sec, buf ? buf : "\n", buf ? len : 1, &err) != 0) {
 		snprintf(detail, sizeof(detail), "%s", strerror(err));
 		report(t, "rejected", m->secfs, 0, detail);
-	} else if (!f) {
+	} else if (!have) {
 		report(t, "accepted", m->secfs, 0, "cleared (no config file)");
+	} else if (auto_dropped) {
+		snprintf(detail, sizeof(detail), "%d entries (%d from node-scan); "
+			 "%d found runtime(s) NOT listed: kernel list full",
+			 entries, auto_added, auto_dropped);
+		report(t, "rejected", m->secfs, 0, detail);
+	} else if (auto_added) {
+		snprintf(detail, sizeof(detail), "%d entr%s (%d from node-scan)",
+			 entries, entries == 1 ? "y" : "ies", auto_added);
+		report(t, "accepted", m->secfs, 0, detail);
 	} else {
 		snprintf(detail, sizeof(detail), "%d entr%s", entries,
 			 entries == 1 ? "y" : "ies");
@@ -1624,6 +1650,8 @@ static void usage(void)
 "  timevault <on|off>   engage/disengage TimeVault lockdown\n"
 "  lock                 lock the config until reboot (irreversible)\n"
 "  detect-admins [-n]   re-detect admin groups (sudo/wheel/admin/sudoers)\n"
+"  node-scan [--dry-run] [DIR...]  find SEA/pkg/renamed Node runtimes and\n"
+"                       register them for the Node child guard (#11)\n"
 "  otp <...>            OTP setup/show-qr/show-key/verify/reset/disable\n"
 "  pheonixbox <...>     on/off/snapshot/scan/status/add/remove/list snapshot tamper protection\n"
 "\nEvery configurable kernel setting is reachable here; `settings` lists them.\n"
@@ -1704,6 +1732,8 @@ int main(int argc, char **argv)
 		return cmd_vault_allow(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "detect-admins"))
 		return cmd_detect_admins(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "node-scan"))
+		return cmd_node_scan(argc - 2, argv + 2) == 0 ? 0 : 1;
 	if (!strcmp(argv[1], "lock")) {
 		/* Confirm unless -y: this cannot be undone without a reboot. */
 		if (!(argc == 3 && !strcmp(argv[2], "-y"))) {

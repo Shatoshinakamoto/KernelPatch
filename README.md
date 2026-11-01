@@ -74,7 +74,7 @@ temporary/                        opt-in add-ons (below)
 | 8 | K + U | Sudo brute-force cooldown: PAM feeds failures, the kernel blocks, the daemon kills the offender. |
 | 9 | K + U | Versioned JSON security events with per-boot sequence/clock/actor metadata and visible ring/audit loss counters; the daemon writes dated, rotated logs. `secure-sudo health` reports loss and component status; `evidence-export` creates hash-chained, optionally externally signed bundles. |
 | 10 | K + U | Network host mode denies raw/`AF_PACKET` sockets; nft rules for LAN/public modes. |
-| 11 | K | NodeJS child-process guard (LSM task blob + allowlist). |
+| 11 | K + U | NodeJS child-process guard (LSM task blob + allowlist); `secure-sudo node-scan` registers single-executable apps, pkg builds and renamed node binaries. |
 | 12 | K | Restrict exec and `PROT_EXEC` mmap from `/tmp`, `/var/tmp`, `/dev/shm`. |
 | 13 | K + U | **TimeVault:** hash-based exec gate with allowlist (+ auto-update entries), size cap, package-manager deny, and quarantine of blocked binaries. |
 | 14 | U | **Rotating OTP sudo password:** prefix + 6-digit TOTP, verified by `pam_secure_otp`; QR rendered locally (`userspace/otp`). |
@@ -203,7 +203,7 @@ In short:
   GitHub for every push and pull request; the VM jobs run weekly and on
   demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots, #48–#57 since).
+  (findings #35–#47 came from v12's tests and boots, #48–#59 since).
 * Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
   (P1-5); promises the code does not keep yet are tracked as features to
   build in [TODO.md](TODO.md), "Doc promises to build".
