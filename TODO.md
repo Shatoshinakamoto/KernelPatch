@@ -277,10 +277,14 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     Enrollment, verifier trust, revocation, recovery, and the IMA/EVM,
     fs-verity and dm-verity evaluation are in
     [docs/ATTESTATION.md](docs/ATTESTATION.md). Tested by `test-attest.sh`.
-    Still to build: part 2, where the kernel measures every policy change
-    into a PCR with a securityfs event log so the policy is proven and not
-    reported; EK certificate checks / credential activation; and replay of
-    the IMA and TPM event logs in the verifier.
+    Part 2 is built too: the LSM logs every accepted knob, list and lock in
+    `policy_log` and extends each into PCR 13, with `foreign` markers for
+    extends it did not make. The verifier replays the log, so the policy is
+    measured, not reported, once locked and with no PCR-extending program
+    on `tpm_openers`. Tested by `test-attest.sh` and in-kernel
+    `ss-functest` checks against a software TPM. Still to build: EK
+    certificate checks / credential activation, and replay of the IMA and
+    TPM event logs in the verifier.
 
 - [ ] **P2-2: Promote add-ons through an explicit maturity gate.**
   - Keep `temporary/` features opt-in until each has automated tests,

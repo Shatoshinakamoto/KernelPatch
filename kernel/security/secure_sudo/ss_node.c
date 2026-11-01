@@ -185,6 +185,8 @@ static ssize_t sl_write(struct file *file, struct strlist *sl,
 	sl->count = new_count;
 	sl->text = text;
 	sl->text_len = count;
+	ss_measure_list(sl == &node_children ? "node_allowed_children" :
+			 "node_sea_binaries", text, count);
 	mutex_unlock(&sl->lock);
 
 	sl_free_items(old_items, old_count);

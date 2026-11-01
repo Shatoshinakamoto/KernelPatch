@@ -172,6 +172,7 @@ static int to_set(char *text, size_t count)
 	to_count = new_count;
 	to_text = text;
 	to_text_len = count;
+	ss_measure_list("tpm_openers", text, count);	/* the defaults at boot too */
 	mutex_unlock(&to_lock);
 	to_free(old_list, old_count);
 	kfree(old_text);

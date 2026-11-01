@@ -1174,6 +1174,37 @@ accept traffic" past the rules; that was wrong (a drop is final) and is now
 tested. Tested by `tests/userspace/test-netpolicy.sh` (71 checks),
 `test-helpers.sh`, `test-daemon-events.sh` and `test-cli.sh`.
 
+### 68. Remote attestation could only report the policy, and a measured log is forgeable through the default TPM openers (found 2026-11-01 by P2-1) — SI-7 / AU-10
+
+Part 1 of P2-1 proved the boot chain but took the policy digest and lock
+state from a report that root builds, so a compromised root could claim any
+policy. The LSM now measures every policy change it accepts into PCR 13
+and keeps the event log in securityfs, and the verifier replays the log
+against the quote. Designing the replay found three ways a measured log can
+still lie, and each is now handled.
+
+1. Root can extend PCR 13 with the SHA-256 of a made-up event. The kernel
+   now checks the PCR before each of its own extends, and records a
+   `foreign` marker (itself extended) when the value is not what its events
+   give. The verifier fails any marker, any list change after the lock, and
+   any line with no matching extend.
+2. A forged event appended after the kernel's last one cannot be detected
+   from the log. It needs TPM access after the lock, and the default
+   `tpm_openers` grants that through systemd-pcrextend (writes any string
+   into any PCR) and tpm2-abrmd. The verifier checks the reported
+   `tpm_openers` against its measured hash, and fails if anything on it can
+   extend arbitrary values, unless the host is enrolled with
+   `--accept-pcr-extenders`. ATTESTATION.md says to remove those two
+   before locking. The G4 defaults stay as Pheonix chose them.
+3. A lock latched from a knob store was logged before that knob's write,
+   which made the verifier's "nothing after the lock" rule reject real
+   locks. The kernel now logs the lock after the knob that caused it.
+
+Hiding the log to fall back to a reported policy fails on a host enrolled
+as measured, and cannot be re-enrolled over it. Tested by
+`tests/userspace/test-attest.sh` (39 checks) and the in-kernel `ss-functest`
+P2-1 checks, which replay the log against a software TPM in the guest.
+
 ---
 
 ## Residual notes / assumptions

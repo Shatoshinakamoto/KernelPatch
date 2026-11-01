@@ -56,6 +56,7 @@ means its denials run after the stacked majors have had their say.
 | `ss_prguard.c`  | Protection #20: Process Runtime Guard (ptrace, process_vm_writev, /proc/pid/mem, W^X) |
 | `ss_bpf.c`      | Protection #22: BPF and perf guard (hook signature chosen per kernel version) |
 | `ss_sysctl.c`   | Protection #23: SysctlGuard |
+| `ss_measure.c`  | P2-1: policy log + TPM PCR measurement of every accepted policy change |
 | `ss_hooks.c`    | One registration per shared hook, dispatching to the protections in order. Since 6.9 each LSM gets one static-call slot per hook; registering a hook twice exhausts them and panics at boot (v11). `ci/check-lsm-hooks.sh` enforces this |
 
 All kernel-side protections from the feature map are present, plus the #1b

@@ -465,6 +465,7 @@ static ssize_t home_map_write(struct file *f, const char __user *u, size_t c,
 	old_list = hm_list; old_count = hm_count; old_text = hm_text;
 	hm_list = new_list; hm_count = new_count;
 	hm_text = text; hm_text_len = c;
+	ss_measure_list("home_map", text, c);
 	mutex_unlock(&hm_lock);
 	hm_free(old_list, old_count);
 	kfree(old_text);
@@ -507,6 +508,7 @@ static ssize_t allow_write(struct file *f, const char __user *u, size_t c,
 	old_list = allow_list; old_count = allow_count; old_text = allow_text;
 	allow_list = new_list; allow_count = new_count;
 	allow_text = text; allow_text_len = c;
+	ss_measure_list("home_write_allow", text, c);
 	mutex_unlock(&hm_lock);
 	sl_free(old_list, old_count);
 	kfree(old_text);

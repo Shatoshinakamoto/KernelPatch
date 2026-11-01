@@ -60,10 +60,22 @@ accel=(-accel tcg -cpu max)
 [ -w /dev/kvm ] && accel=(-accel kvm -cpu host)
 log="$res/console.log"
 echo "booting $(sed -n 's/^kernel_release=//p' "$kdir/build-info.txt" 2>/dev/null) under ${accel[1]} (timeout ${TIMEOUT}s)"
+# A software TPM for the P2-1 measurement checks, when swtpm is installed
+# (SS_VM_TPM=0 boots without one; the PCR replay is then skipped, not failed).
+tpm=()
+if [ "${SS_VM_TPM:-1}" != 0 ] && command -v swtpm >/dev/null 2>&1; then
+	mkdir -p "$work/tpm"
+	swtpm socket --tpm2 --tpmstate dir="$work/tpm" --ctrl type=unixio,path="$work/tpm/sock" \
+		--daemon --pid file="$work/tpm/pid"
+	tpm=(-chardev "socket,id=chrtpm,path=$work/tpm/sock"
+		-tpmdev "emulator,id=tpm0,chardev=chrtpm" -device "tpm-tis,tpmdev=tpm0")
+	echo "guest TPM: swtpm"
+fi
 timeout "$TIMEOUT" qemu-system-x86_64 "${accel[@]}" -m 1024 -smp 2 -nographic -no-reboot \
-	-kernel "$kdir/bzImage" -initrd "$work/initramfs.gz" \
+	"${tpm[@]}" -kernel "$kdir/bzImage" -initrd "$work/initramfs.gz" \
 	-append "console=ttyS0 panic=-1 loglevel=4" > "$log" 2>&1
 qrc=$?
+[ -s "$work/tpm/pid" ] && kill "$(cat "$work/tpm/pid")" 2>/dev/null
 tr -d '\r' < "$log" > "$log.tmp" && mv "$log.tmp" "$log"
 
 grep -E '^(ok|not ok|1\.\.|#)' "$log" > "$res/functest.tap"

@@ -636,15 +636,22 @@ Do not rely on them until they have tests.
 * **Needs:** a TPM 2.0, and an enrollment done at a time and place the
   operator controls (trust on first use: EK certificate checks are not built
   yet).
+* **Also (part 2):** the LSM measures every policy change it accepts
+  (knobs, lists, the lock) into PCR 13 with a securityfs log, and marks any
+  extend it did not make. The verifier replays the log, so the policy and
+  lock state are measured, not reported (SECURITY_REVIEW #68).
 * **Limits:** the boot chain is proven, because root cannot forge a quote
-  or set a PCR. The policy digest, LSM state and lock state are
-  *reported* by root on the host until part 2 (kernel policy measurement
-  into a PCR) is built. A firmware-menu TPM clear changes the key, and the
-  verifier reports it.
-* **Tested by:** `tests/userspace/test-attest.sh` (two software TPMs:
+  or set a PCR. The measured policy is proven only once locked, and only if
+  nothing on `tpm_openers` can extend arbitrary PCR values. The shipped
+  defaults include systemd-pcrextend and tpm2-abrmd, which the verifier
+  rejects unless told to accept them. A process that opened the TPM before
+  the lock could append events after the kernel's last one. A
+  firmware-menu TPM clear changes the key, and the verifier reports it.
+* **Tested by:** `tests/userspace/test-attest.sh` (software TPMs:
   enroll, verify, wrong and replayed nonces, edited reports and PCR values,
-  another TPM, a PCR change, re-enrollment with `--previous`, and the CLI
-  digest).
+  another TPM, a PCR change, re-enrollment with `--previous`, the CLI
+  digest, and every way to falsify the measured log), and the in-kernel
+  `ss-functest` P2-1 checks against a software TPM in the guest.
 
 ## 6. What names and compliance mappings do not mean
 

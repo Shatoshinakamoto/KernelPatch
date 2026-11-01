@@ -342,6 +342,7 @@ static ssize_t bl_file_write(struct file *file, const char __user *ubuf,
 	WRITE_ONCE(bl_count, new_count);
 	bl_text = text;
 	bl_text_len = count;
+	ss_measure_list("blacklist", text, count);
 	mutex_unlock(&bl_lock);
 
 	bl_free_list(old_list, old_count);

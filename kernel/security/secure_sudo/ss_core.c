@@ -235,10 +235,29 @@ void ss_sha256_buf(const void *data, size_t len, char *hex)
 
 /* --------------------------- #16 config lock ----------------------------- */
 
+/*
+ * P2-1: a knob store that latches the lock (lock=1, timevault_enabled=1) is
+ * measured as "knob ..." and then "lock ...", in that order, so the lock is
+ * the last event of the policy log: nothing the kernel measures can follow
+ * it, and the verifier fails anything that does. ss_kobj_store() below
+ * measures the knob and then the deferred lock.
+ */
+static struct task_struct *ss_knob_writer;	/* under ss_knob_mutex */
+static const char *ss_knob_lock_why;
+
+static void ss_knob_lock_measure(const char *why)
+{
+	if (READ_ONCE(ss_knob_writer) == current)
+		ss_knob_lock_why = why;
+	else
+		ss_measure_lock(why);
+}
+
 void ss_lock_engage(const char *why)
 {
 	if (atomic_cmpxchg(&ss_lock_state, 0, 1) == 0) {
 		pr_warn("configuration LOCKED until reboot (%s)\n", why);
+		ss_knob_lock_measure(why);
 		ss_event_typed_self("configuration_lock", "current_user",
 				    "engage_lock", "kernel_configuration", "enforce",
 				    why, "lock: engaged by %s; config frozen until reboot",
@@ -552,11 +571,69 @@ DEFINE_LSM(secure_sudo) = {
 
 /* ------------------------------------------------------------------------- */
 
+/*
+ * P2-1 part 2: every knob store goes through here, so each accepted write is
+ * measured (ss_measure.c) without touching every store. The mutex keeps the
+ * measured order the order the writes took effect. Same dispatch as the
+ * kernel's own kobj_sysfs_ops otherwise.
+ */
+static DEFINE_MUTEX(ss_knob_mutex);
+
+static ssize_t ss_kobj_show(struct kobject *kobj, struct attribute *attr,
+			    char *buf)
+{
+	struct kobj_attribute *ka = container_of(attr, struct kobj_attribute, attr);
+
+	return ka->show ? ka->show(kobj, ka, buf) : -EIO;
+}
+
+static ssize_t ss_kobj_store(struct kobject *kobj, struct attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct kobj_attribute *ka = container_of(attr, struct kobj_attribute, attr);
+	ssize_t ret;
+
+	if (!ka->store)
+		return -EIO;
+	mutex_lock(&ss_knob_mutex);
+	WRITE_ONCE(ss_knob_writer, current);
+	ret = ka->store(kobj, ka, buf, count);
+	WRITE_ONCE(ss_knob_writer, NULL);
+	if (ret > 0)
+		ss_measure_knob(attr->name, buf, count);
+	if (ss_knob_lock_why) {
+		ss_measure_lock(ss_knob_lock_why);
+		ss_knob_lock_why = NULL;
+	}
+	mutex_unlock(&ss_knob_mutex);
+	return ret;
+}
+
+static const struct sysfs_ops ss_kobj_sysfs_ops = {
+	.show  = ss_kobj_show,
+	.store = ss_kobj_store,
+};
+
+static void ss_kobj_release(struct kobject *kobj)
+{
+	kfree(kobj);
+}
+
+static const struct kobj_type ss_kobj_ktype = {
+	.release   = ss_kobj_release,
+	.sysfs_ops = &ss_kobj_sysfs_ops,
+};
+
 static int __init ss_sysfs_init(void)
 {
 	int ret;
 
-	ss_kobj = kobject_create_and_add(SS_NAME, kernel_kobj);
+	ss_kobj = kzalloc(sizeof(*ss_kobj), GFP_KERNEL);
+	if (ss_kobj && kobject_init_and_add(ss_kobj, &ss_kobj_ktype, kernel_kobj,
+					    "%s", SS_NAME)) {
+		kobject_put(ss_kobj);
+		ss_kobj = NULL;
+	}
 	if (!ss_kobj) {
 		pr_err("failed to create /sys/kernel/%s\n", SS_NAME);
 		return -ENOMEM;
@@ -626,6 +703,8 @@ static int __init ss_sysfs_init(void)
 			ret = ss_prguard_secfs(ss_secfs_dir);
 		if (!ret)
 			ret = ss_tpm_secfs(ss_secfs_dir);
+		if (!ret)
+			ret = ss_measure_secfs(ss_secfs_dir);	/* P2-1 */
 		if (ret)
 			pr_err("failed to create securityfs policy files (%d)\n",
 			       ret);

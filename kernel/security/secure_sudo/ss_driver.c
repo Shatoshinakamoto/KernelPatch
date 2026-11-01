@@ -409,6 +409,7 @@ static ssize_t drv_write(struct file *file, const char __user *ubuf,
 	drv_hashes = nh_list; WRITE_ONCE(drv_nhash, nh);
 	drv_names  = nn_list; WRITE_ONCE(drv_nname, nn);
 	drv_text = text; drv_text_len = count;
+	ss_measure_list("driver_blacklist", text, count);
 	mutex_unlock(&drv_lock);
 
 	free_items(oh, oh_c);

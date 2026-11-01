@@ -65,3 +65,18 @@ config SECURITY_SECURE_SUDO
 	      CONFIG_LSM="landlock,lockdown,yama,...,secure_sudo,bpf"
 
 	  or append secure_sudo to the lsm= kernel command line. If unsure, N.
+
+config SECURITY_SECURE_SUDO_MEASURE_PCR
+	int "TPM PCR that secure_sudo measures policy changes into"
+	depends on SECURITY_SECURE_SUDO
+	range 8 15
+	default 13
+	help
+	  Every accepted policy change (a knob, a list, the lock) is logged
+	  in /sys/kernel/security/secure_sudo/policy_log and extended into
+	  this PCR, so a remote verifier can replay the log against a TPM
+	  quote (docs/ATTESTATION.md). Pick a PCR nothing else on the
+	  machine extends: 13 is free unless systemd-stub measures system
+	  extensions (UKI with sysext images), in which case use 15 or 12
+	  only if they are free there too. The kernel notices and records
+	  any extend it did not make. Needs CONFIG_TCG_TPM=y.
