@@ -63,7 +63,12 @@ reap() { wait "\$@" 2>/dev/null; }
 : > "\$T/procguard_allow.conf"; conf enforce
 \$PG scan > /dev/null 2>&1; echo "R empty_rc=\$?"
 
-printf '%s\n' "$SLEEP" "$(readlink -f "$(command -v awk)")" > "\$T/procguard_allow.conf"
+# the scenario's own tools are allowed: in daemon mode a pass can land on a
+# forked bash child before it execs, or on a \$(seq) subshell, and kill it
+# (counting a kill against bash, not the respawning program)
+for t in "$SLEEP" awk bash seq find grep sed wc mount umount; do
+	readlink -f "\$(command -v "\$t")"
+done > "\$T/procguard_allow.conf"
 sleep 1000 & A=\$!
 "\$T/evil/evil" 1000 & E=\$!
 "\$T/evil/secure-sudo-x" 1000 & X=\$!
