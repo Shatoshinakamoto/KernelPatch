@@ -17,8 +17,8 @@ under UEFI or Secure Boot, or on real hardware.
 | Item | Status | One line |
 |---|---|---|
 | P0-1 build + CI gate | partly | `ci/build-gate.sh` passes from a clean copy and on GitHub for every push/PR, 6.12.114 in-tree in six configs; not yet a required check (branch protection) |
-| P0-2 tests | partly | 559 host checks pass in CI on every push; 135/135 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`); STIG gate compares rule IDs; not yet a required check |
-| P0-3 boot proof | partly | 6.12.114 with secure_sudo, all in CI: 135/135 in-kernel checks (initramfs, KVM), the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run (52 checks), and the STIG run 16/16: the hardened guest reboots and the release gate passes; not UEFI, other distros or hardware |
+| P0-2 tests | partly | 680 host checks pass in CI on every push; 233/233 in-kernel checks pass on 6.12.114 in CI (`kernel-boot`, run 41292806854); STIG gate compares rule IDs; not yet a required check |
+| P0-3 boot proof | partly | 6.12.114 with secure_sudo, all in CI: 233/233 in-kernel checks (initramfs, KVM), the full Ubuntu 24.04 install/trial/fallback/commit/drills/removal run (52 checks), and the STIG run 16/16: the hardened guest reboots and the release gate passes; not UEFI, other distros or hardware |
 | P0-4 source provenance | done | signature-verified before extraction, tamper test, SBOM, reproducible archive |
 | P0-5 transactional install | done (Ubuntu 24.04) | trial boot, automatic fallback, commit, rollback and byte-clean removal proven in a VM, on 6.14 and again on 6.12.114 in CI; other distros simulated only |
 | P0-6 policy validation + recovery | done | lint/load refuse bad policy before anything is applied; four recovery drills pass on the real kernel in a VM |
