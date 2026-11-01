@@ -387,4 +387,48 @@ eq "a known package is installed without a refresh" "$(tr '\n' '|' < "$T/apt.log
 : > "$T/apt.log"
 refute_with "a failed package install stops with a clear message" "could not install the runtime packages libqrencode4" \
 	withenv STUB_FAIL=1 -- rdeps install_runtime_deps
+# ---- G4: tpm-lockout against stand-in tpm2-tools (the TPM itself: VM run) ----
+mkdir -p "$T/tpmbin"
+: > "$T/tpm-dev"
+cat > "$T/tpmbin/tpm2_getcap" <<'STUB'
+#!/bin/sh
+. "$TPM_STATE"
+printf 'TPM2_PT_PERMANENT:\n  ownerAuthSet:              0\n  lockoutAuthSet:            %s\n  disableClear:              %s\n' "$lockout" "$clear"
+STUB
+cat > "$T/tpmbin/tpm2_changeauth" <<'STUB'
+#!/bin/sh
+echo "changeauth $*" >> "$TPM_LOG"
+[ "$1" = -c ] && [ "$2" = lockout ] || exit 1
+case "$3" in file:*) pw=$(cat "${3#file:}") ;; *) exit 1 ;; esac
+printf 'lockout=1\nclear=0\npw=%s\n' "$pw" > "$TPM_STATE"
+STUB
+cat > "$T/tpmbin/tpm2_clearcontrol" <<'STUB'
+#!/bin/sh
+. "$TPM_STATE"
+echo "clearcontrol $*" >> "$TPM_LOG"
+[ "$4" = "file:${4#file:}" ] && [ "$(cat "${4#file:}")" = "$pw" ] || exit 1
+printf 'lockout=1\nclear=1\npw=%s\n' "$pw" > "$TPM_STATE"
+STUB
+chmod 0755 "$T"/tpmbin/*
+tpmL() { TPM_STATE="$T/tpm-state" TPM_LOG="$T/tpm.log" SS_TPM_DEV="$T/tpm-dev" \
+	PATH="$T/tpmbin:$PATH" SS_INSTALL_LIB=1 bash -c '. "$0"; "$@"' "$INST" "$@"; }
+if [ "$(id -u)" -eq 0 ]; then
+	printf 'lockout=0\nclear=0\n' > "$T/tpm-state"; : > "$T/tpm.log"
+	tpmL tpm_lockout > "$T/out" 2>&1; rc=$?
+	pw=$(sed -n '/shown ONCE/,/^$/d; s/^      \([A-Za-z0-9]\{24,\}\)$/\1/p' "$T/out" | head -1)
+	check "tpm-lockout sets a lockout password and disables clear" sh -c "[ $rc -eq 0 ] && grep -qx 'lockout=1' '$T/tpm-state' && grep -qx 'clear=1' '$T/tpm-state'"
+	check "... shows the password once, the same one the TPM got" sh -c "[ -n '$pw' ] && grep -qx 'pw=$pw' '$T/tpm-state' && [ \$(grep -c '$pw' '$T/out') -eq 1 ]"
+	refute "... and never puts it on a command line" grep -q "$pw" "$T/tpm.log"
+	refute "... nor leaves its temporary file" sh -c "ls /run/ss-tpm-lockout.* 2>/dev/null | grep -q ."
+	tpmL tpm_lockout > "$T/out" 2>&1
+	check "a TPM whose lockout password is set is left alone" sh -c "grep -q 'already set; left as it is' '$T/out' && [ \$(grep -c changeauth '$T/tpm.log') -eq 1 ]"
+	printf 'lockout=0\nclear=0\n' > "$T/tpm-state"
+	SS_TPM_LOCKOUT=0 tpmL tpm_lockout > "$T/out" 2>&1
+	check "SS_TPM_LOCKOUT=0 skips it" sh -c "grep -q 'skipped (SS_TPM_LOCKOUT=0)' '$T/out' && grep -qx 'lockout=0' '$T/tpm-state'"
+	SS_TPM_DEV="$T/no-tpm" TPM_STATE="$T/tpm-state" PATH="$T/tpmbin:$PATH" SS_INSTALL_LIB=1 \
+		bash -c '. "$0"; SS_TPM_DEV="$1"; tpm_lockout auto' "$INST" "$T/no-tpm" > "$T/out" 2>&1; rc=$?
+	check "no TPM: \`all\` skips it quietly" sh -c "[ $rc -eq 0 ] && grep -q 'no TPM' '$T/out'"
+else
+	skip "tpm-lockout checks (need root for /run)"
+fi
 tap_done

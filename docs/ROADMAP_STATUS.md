@@ -26,7 +26,7 @@ under UEFI or Secure Boot, or on real hardware.
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
 | P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
-| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60) and G3 (TPM-sealed OTP key, #61) are built and G4 is to build |
+| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; of the four promises it listed (TODO "Doc promises to build"), G1 (`node-scan`, #59), G2 (TimeVault Merkle root, #60), G3 (TPM-sealed OTP key, #61) and G4 (TPM clear through `/dev/tpm*`, #63) are built |
 | P1-6 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
@@ -122,7 +122,7 @@ without root):
 | `tests/userspace/test-evidence-export.sh` | 23 | checksum, secret exclusion, independent verification, path traversal and tampering rejection, external-key signature validation, TimeVault manifest against the collector's roots |
 | `tests/oscap/` | 39 | result parsing and the STIG gate's rule-by-rule comparison, release vs diagnostic mode, independent checks (OSB-19) |
 | `tests/provenance/` | 19 | P0-4 above |
-| `tests/install/test-install.sh` | 133 | P0-5 below |
+| `tests/install/test-install.sh` | 140 | P0-5 below |
 
 In-kernel tests (`tests/vm/ss-functest.c`, run as PID 1 of an initramfs by
 `tests/vm/boot-test.sh`): the CI `kernel-boot` job passed **135/135** on
@@ -512,7 +512,7 @@ Four doc promises the code does not keep yet are tracked as features to
 build in [TODO.md](../TODO.md) "Doc promises to build" (G1 Node SEA
 auto-detection, G2 TimeVault Merkle tree, G3 TPM2-sealed OTP secret, G4
 TPM clear through `/dev/tpm*`). Until each lands, its doc says "not built
-yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: the TimeVault manifest's Merkle root (SECURITY_REVIEW #60). G3 is built: the OTP master key sealed to the TPM (SECURITY_REVIEW #61).
+yet". G1 is built: `secure-sudo node-scan` (SECURITY_REVIEW #59). G2 is built: the TimeVault manifest's Merkle root (SECURITY_REVIEW #60). G3 is built: the OTP master key sealed to the TPM (SECURITY_REVIEW #61). G4 is built: `tpm_openers` and `install.sh tpm-lockout` (SECURITY_REVIEW #63).
 
 ## P1-6 through P1-8 — not started
 

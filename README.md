@@ -68,7 +68,7 @@ temporary/                        opt-in add-ons (below)
 | 2 | K | Command blacklist, matched by device + inode, path, and content (SHA-256 of each entry, so a renamed copy is refused too). |
 | 3 | K | Block non-sudo firmware/flash access: `/dev/mem`, `/dev/port`, `/dev/mtd*`, `/dev/mei*`, and `/sys/firmware` writes. |
 | 4 | K | Confine non-sudo writes to home + scratch/device trees + an allowlist. Opt-in (aggressive). Built on `file_open` + the `path_*` hooks; both source versions used a `path_permission` hook that does not exist. |
-| 5 | K | Block TPM clear (`ppi/request`) for everyone unless booted with `secure_sudo.tpm_maint=1`. |
+| 5 | K + U | Block TPM clear: `ppi/request` for everyone unless booted with `secure_sudo.tpm_maint=1`; once locked, only `tpm_openers` programs may open `/dev/tpm*`; the installer sets a TPM lockout password (shown once) and `disableClear`. |
 | 6 | K | Driver blacklist / anti-BYOVD: file SHA-256 + file name checked at load, and the module's own name checked before its init runs (catches renamed and compressed copies and `init_module(2)`). |
 | 7 | K | RAM-spike detection drops caches (`si_mem_available`, kernel worker). |
 | 8 | K + U | Sudo brute-force cooldown: PAM feeds failures, the kernel blocks, the daemon kills the offender. |
@@ -203,7 +203,7 @@ In short:
   GitHub for every push and pull request; the VM jobs run weekly and on
   demand.
 * Security review: [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md)
-  (findings #35–#47 came from v12's tests and boots, #48–#62 since).
+  (findings #35–#47 came from v12's tests and boots, #48–#63 since).
 * Threat model and supported profile: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
   (P1-5); promises the code does not keep yet are tracked as features to
   build in [TODO.md](TODO.md), "Doc promises to build".

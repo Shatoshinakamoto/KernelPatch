@@ -1092,6 +1092,29 @@ only calling `secure-sudo-otp` directly worked. Found while adding `otp
 seal`. Fixed like the PheonixBox hand-off, with two checks in
 `tests/userspace/test-cli.sh` against a stand-in helper.
 
+### 63. `TPM2_Clear` through `/dev/tpm*` was not blocked (v1–v12, built 2026-11-01, gap G4) — SC-12 / CM-7
+
+README #5 promised "block TPM clear"; only the sysfs PPI request was
+refused, while `tpm2_clear` sent the command straight to the chip with the
+lockout authorization, which is empty on most machines. An LSM cannot read
+TPM command bytes, so Pheonix chose both of the controls that do work.
+In the kernel, once the lock is engaged a TPM character device (misc
+10:224, and every minor of the TPM driver's major, so a `mknod` copy too)
+may be opened only by a program on `tpm_openers` that is root-owned and
+not group/world-writable; the list is frozen while locked and defaults to
+the systemd TPM helpers (systemd-creds unseals the OTP key, #61),
+cryptsetup and tpm2-abrmd; refusals are `tpm_guard` events. In the
+installer, `install.sh tpm-lockout` (run by `all` unless
+`SS_TPM_LOCKOUT=0`, skipped without a TPM or tpm2-tools) sets a random
+lockout password through a root-only file in `/run` (never on a command
+line), prints it once and stores it nowhere, then sets `disableClear`. A
+TPM whose lockout password is already set is left alone. Remaining: before
+the lock, root with the lockout password can still clear; with
+`CONFIG_TCG_TPM=m` the guard knows only `/dev/tpm0` (the installer builds
+it in, and the test kernel and a no-TPM build variant cover both). Tested
+by new in-kernel checks, `tests/install/test-install.sh` (+7) and the
+Ubuntu VM run with a software TPM.
+
 ---
 
 ## Residual notes / assumptions

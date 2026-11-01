@@ -155,13 +155,14 @@ sudo ./install/install.sh verify --commit    # make it the default
 
 | Command | What it does |
 |---|---|
-| `all` (default) | preflight → build deps → fetch + verify source → build the kernel package → `install-kernel` → `userspace` → `verify` |
+| `all` (default) | preflight → build deps → fetch + verify source → build the kernel package → `install-kernel` → `userspace` → `verify` → `tpm-lockout` (skipped with no TPM, no tpm2-tools, or `SS_TPM_LOCKOUT=0`) |
 | `preflight [all\|build-kernel\|install-kernel\|userspace [--prebuilt DIR]]` (`--dry-run`) | distro support, boot method, bootloader, Secure Boot state and keys, trial-boot availability, `/boot` and build space, DKMS modules, missing tools, PAM files that use the modules, the runtime packages it would install, and the list of changes. Changes nothing; non-zero exit on a blocking problem. `install-kernel` and `userspace` run their own preflight first |
 | `build-kernel` | verified source → graft the LSM → configure from the running kernel's config → `bindeb-pkg`/`binrpm-pkg` into `$BUILD_ROOT/out/<release>/` with `build-info.txt`, `kernel.config`, `kernel-source.txt`, an SPDX SBOM and `SHA256SUMS` |
 | `install-kernel [DIR\|PKG…]` | checks `SHA256SUMS`, installs the package next to the running kernel, signs the image when a MOK is given, regenerates the boot menu (failure stops the run), checks the menu has both kernels, arms the trial boot |
 | `userspace [--prebuilt DIR]` | preflight, then installs the CLI, daemon, PAM modules, OTP helper, PheonixBox and `scripts/` tools, recording each file with its hash; backs up anything it replaces; creates missing `/etc/secure_sudo/*.conf` (never overwrites them); installs runtime packages (libqrencode, nftables, zip, unzip; on Debian/Ubuntu it refreshes the package lists first when a package has no candidate, as on a fresh cloud image); checks every program finds its libraries; enables `secure-sudod` |
 | `stage-userspace DIR` | builds userspace into DIR, for `userspace --prebuilt` on other machines of the same distro release |
 | `verify [--commit]` | installed files unchanged; libraries resolve; per kernel: image, `CONFIG_SECURITY_SECURE_SUDO`, `CONFIG_LSM`, `MODULE_SIG_FORCE`, initramfs, signed modules, boot entry, image signature; the known-good kernel still in the menu; on the running secure_sudo kernel: active LSMs, `sig_enforce`, lockdown (`SS_EXPECT_LOCKDOWN`), `secure-sudod` and `secure-sudo lint` (when userspace is installed); the trial-boot state. `--commit` makes a trial-booted kernel the default when everything passed |
+| `tpm-lockout` | gap G4: sets a random TPM lockout password (printed **once**, never stored; keep it offline) and `disableClear`, so `TPM2_Clear` from the OS fails even for root. Leaves a TPM that already has a lockout password alone (warns if `disableClear` is off). Needs tpm2-tools |
 | `rollback [--default]` | boot the kernel that ran before secure_sudo: next boot only, or as the default |
 | `uninstall [--remove-pam-lines] [--keep-kernel] [--purge]` | refuses while PAM uses the modules or while the secure_sudo kernel is running; removes only recorded, unchanged files; restores what it replaced; clears the GRUB drop-in and entries; purges the kernel packages. `--purge` also deletes `/etc/secure_sudo` and `/var/log/secure_sudo`; TimeVault quarantine is always kept |
 
@@ -181,6 +182,8 @@ value per line; rewritten atomically after every change).
 | `SS_PANIC_TIMEOUT` | `10` | Seconds before a panicking secure_sudo kernel reboots (so a trial falls back). |
 | `SS_SB_KEY`, `SS_SB_CERT` | — | MOK key + PEM certificate: the image is signed with them; required when Secure Boot is on. |
 | `SS_EXPECT_LOCKDOWN` | — | `verify` fails unless the running lockdown mode matches (`none`, `integrity`, `confidentiality`). |
+| `SS_TPM_LOCKOUT` | `1` | `0` skips `tpm-lockout` in `all`. |
+| `SS_TPM_DEV` | `/dev/tpmrm0` | TPM device `tpm-lockout` uses. |
 | `STIG` | *(unset)* | `scan` / `remediate` after install ([STIG.md](STIG.md)). |
 
 What changed from 0.11: module signatures are enforced by the new kernel's
