@@ -6,11 +6,12 @@
  *       Print the attestation key's public part (base64 TPM2B_PUBLIC) and
  *       TPM name as JSON. The verifier enrolls these once.
  *   secure-sudo-attest ek
- *       Print the TPM's endorsement key (EK, the default RSA 2048 template
- *       of the TCG EK Credential Profile) and the manufacturer's EK
- *       certificate from NV, when the TPM has one. The verifier checks the
- *       certificate against the manufacturer's CA.
- *   secure-sudo-attest activate --credential B64 --secret B64
+ *       Print the TPM's endorsement keys (EKs) under the TCG EK Credential
+ *       Profile templates L-1 (RSA 2048), L-2 (ECC P-256) and H-3 (ECC
+ *       P-384), each with the manufacturer's EK certificate from NV when
+ *       the TPM has one. The verifier checks a certificate against the
+ *       manufacturer's CA.
+ *   secure-sudo-attest activate [--ek TEMPLATE] --credential B64 --secret B64
  *       TPM2_ActivateCredential: recover the verifier's secret from a
  *       challenge made for this EK and this AK. The TPM releases it only
  *       if the AK named in the challenge is loaded in the same TPM as that
@@ -184,44 +185,103 @@ static char *b64(const unsigned char *b, size_t n)
 	return o;
 }
 
-/* The EK from the TCG EK Credential Profile's default RSA template (L-1):
- * the key the manufacturer's EK certificate certifies. Its use needs
- * PolicySecret(TPM_RH_ENDORSEMENT), which is the authPolicy below. */
-static ESYS_TR make_ek(TPM2B_PUBLIC **pub)
+/*
+ * The EK templates of the TCG EK Credential Profile that this tool knows:
+ * each is the key a manufacturer's EK certificate in that NV index
+ * certifies. L-1 and L-2 ("low range") need PolicySecret(TPM_RH_ENDORSEMENT)
+ * to use; H-3 ("high range", ECC P-384) has userWithAuth and an empty auth.
+ */
+struct ek_tmpl {
+	const char *id;
+	TPM2_HANDLE cert_index;
+	TPMI_ALG_PUBLIC type;
+	TPMI_ALG_HASH name_alg;
+	TPMA_OBJECT attrs;
+	const BYTE *policy;
+	UINT16 policy_len;
+	UINT16 aes_bits;
+	TPMI_ECC_CURVE curve;	/* ECC only */
+	UINT16 unique_len;	/* RSA modulus or each ECC coordinate; 0 = empty */
+	int user_with_auth;
+};
+
+static const BYTE policy_a_sha256[32] = {
+	0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
+	0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
+	0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa,
+};
+static const BYTE policy_b_sha384[48] = {
+	0xb2, 0x6e, 0x7d, 0x28, 0xd1, 0x1a, 0x50, 0xbc, 0x53, 0xd8, 0x82, 0xbc,
+	0xf5, 0xfd, 0x3a, 0x1a, 0x07, 0x41, 0x48, 0xbb, 0x35, 0xd3, 0xb4, 0xe4,
+	0xcb, 0x1c, 0x0a, 0xd9, 0xbd, 0xe4, 0x19, 0xca, 0xcb, 0x47, 0xba, 0x09,
+	0x69, 0x96, 0x46, 0x15, 0x0f, 0x9f, 0xc0, 0x00, 0xf3, 0xf8, 0x0e, 0x12,
+};
+#define EK_LOW (TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT | \
+		TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_ADMINWITHPOLICY | \
+		TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_DECRYPT)
+
+static const struct ek_tmpl ek_tmpls[] = {
+	{ "rsa2048", 0x01C00002, TPM2_ALG_RSA, TPM2_ALG_SHA256, EK_LOW,
+	  policy_a_sha256, 32, 128, 0, 256, 0 },
+	{ "ecc-p256", 0x01C0000A, TPM2_ALG_ECC, TPM2_ALG_SHA256, EK_LOW,
+	  policy_a_sha256, 32, 128, TPM2_ECC_NIST_P256, 32, 0 },
+	{ "ecc-p384", 0x01C00016, TPM2_ALG_ECC, TPM2_ALG_SHA384,
+	  EK_LOW | TPMA_OBJECT_USERWITHAUTH, policy_b_sha384, 48, 256,
+	  TPM2_ECC_NIST_P384, 0, 1 },
+};
+
+static const struct ek_tmpl *ek_find(const char *id)
 {
-	static const BYTE policy[32] = {
-		0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc,
-		0x8d, 0x46, 0xa5, 0xd7, 0x24, 0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52,
-		0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa,
-	};
+	size_t i;
+
+	for (i = 0; i < sizeof(ek_tmpls) / sizeof(ek_tmpls[0]); i++)
+		if (!strcmp(ek_tmpls[i].id, id))
+			return &ek_tmpls[i];
+	return NULL;
+}
+
+/* Create the EK from a template; ESYS_TR_NONE if the TPM cannot (and !must). */
+static ESYS_TR make_ek(const struct ek_tmpl *k, TPM2B_PUBLIC **pub, int must)
+{
 	TPM2B_SENSITIVE_CREATE in = { 0 };
 	TPM2B_PUBLIC t = { 0 };
 	TPM2B_DATA outside = { 0 };
 	TPML_PCR_SELECTION none = { 0 };
+	TPMT_SYM_DEF_OBJECT *sym;
 	ESYS_TR key;
 	TSS2_RC rc;
 
-	t.publicArea.type = TPM2_ALG_RSA;
-	t.publicArea.nameAlg = TPM2_ALG_SHA256;
-	t.publicArea.objectAttributes = TPMA_OBJECT_FIXEDTPM |
-		TPMA_OBJECT_FIXEDPARENT | TPMA_OBJECT_SENSITIVEDATAORIGIN |
-		TPMA_OBJECT_ADMINWITHPOLICY | TPMA_OBJECT_RESTRICTED |
-		TPMA_OBJECT_DECRYPT;
-	t.publicArea.authPolicy.size = sizeof(policy);
-	memcpy(t.publicArea.authPolicy.buffer, policy, sizeof(policy));
-	t.publicArea.parameters.rsaDetail.symmetric.algorithm = TPM2_ALG_AES;
-	t.publicArea.parameters.rsaDetail.symmetric.keyBits.aes = 128;
-	t.publicArea.parameters.rsaDetail.symmetric.mode.aes = TPM2_ALG_CFB;
-	t.publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
-	t.publicArea.parameters.rsaDetail.keyBits = 2048;
-	t.publicArea.parameters.rsaDetail.exponent = 0;
-	t.publicArea.unique.rsa.size = 256;	/* 256 zero bytes */
+	t.publicArea.type = k->type;
+	t.publicArea.nameAlg = k->name_alg;
+	t.publicArea.objectAttributes = k->attrs;
+	t.publicArea.authPolicy.size = k->policy_len;
+	memcpy(t.publicArea.authPolicy.buffer, k->policy, k->policy_len);
+	if (k->type == TPM2_ALG_RSA) {
+		sym = &t.publicArea.parameters.rsaDetail.symmetric;
+		t.publicArea.parameters.rsaDetail.scheme.scheme = TPM2_ALG_NULL;
+		t.publicArea.parameters.rsaDetail.keyBits = 2048;
+		t.publicArea.parameters.rsaDetail.exponent = 0;
+		t.publicArea.unique.rsa.size = k->unique_len;	/* zero bytes */
+	} else {
+		sym = &t.publicArea.parameters.eccDetail.symmetric;
+		t.publicArea.parameters.eccDetail.scheme.scheme = TPM2_ALG_NULL;
+		t.publicArea.parameters.eccDetail.curveID = k->curve;
+		t.publicArea.parameters.eccDetail.kdf.scheme = TPM2_ALG_NULL;
+		t.publicArea.unique.ecc.x.size = k->unique_len;
+		t.publicArea.unique.ecc.y.size = k->unique_len;
+	}
+	sym->algorithm = TPM2_ALG_AES;
+	sym->keyBits.aes = k->aes_bits;
+	sym->mode.aes = TPM2_ALG_CFB;
 
 	rc = Esys_CreatePrimary(ctx, ESYS_TR_RH_ENDORSEMENT, ESYS_TR_PASSWORD,
 				ESYS_TR_NONE, ESYS_TR_NONE, &in, &t, &outside,
 				&none, &key, pub, NULL, NULL, NULL);
-	if (rc != TSS2_RC_SUCCESS)
-		die_rc("creating the endorsement key (endorsement hierarchy)", rc);
+	if (rc != TSS2_RC_SUCCESS) {
+		if (must)
+			die_rc("creating the endorsement key (endorsement hierarchy)", rc);
+		return ESYS_TR_NONE;
+	}
 	return track(key);
 }
 
@@ -468,36 +528,54 @@ static unsigned char *nv_read_all(TPM2_HANDLE index, size_t *len)
 	return out;
 }
 
+/* Every EK this TPM has under a known template, with its certificate. */
 static int cmd_ek(void)
 {
 	unsigned char buf[sizeof(TPM2B_PUBLIC)], *cert;
-	size_t off = 0, clen = 0;
-	TPM2B_PUBLIC *pub = NULL;
-	TSS2_RC rc;
+	size_t i, n = 0;
 	char *p;
 
 	tpm_open();
-	make_ek(&pub);
-	rc = Tss2_MU_TPM2B_PUBLIC_Marshal(pub, buf, sizeof(buf), &off);
-	if (rc != TSS2_RC_SUCCESS)
-		die_rc("marshal EK public", rc);
-	p = b64(buf, off);
-	printf("{\"ek_alg\":\"rsa2048\",\"ek_public\":\"%s\",\"ek_cert\":", p);
-	free(p);
-	/* TCG EK Credential Profile: the RSA 2048 EK certificate index */
-	cert = nv_read_all(0x01C00002, &clen);
-	if (cert && clen) {
-		p = b64(cert, clen);
-		printf("\"%s\"}\n", p);
+	printf("{\"eks\":[");
+	for (i = 0; i < sizeof(ek_tmpls) / sizeof(ek_tmpls[0]); i++) {
+		const struct ek_tmpl *k = &ek_tmpls[i];
+		TPM2B_PUBLIC *pub = NULL;
+		size_t off = 0, clen = 0;
+		ESYS_TR key;
+
+		cert = nv_read_all(k->cert_index, &clen);
+		/* the low-range RSA EK always (for --ek-no-cert); the
+		 * others only when the manufacturer certified them */
+		if (strcmp(k->id, "rsa2048") && !(cert && clen)) {
+			free(cert);
+			continue;
+		}
+		key = make_ek(k, &pub, 0);
+		if (key == ESYS_TR_NONE) {
+			free(cert);
+			continue;
+		}
+		if (Tss2_MU_TPM2B_PUBLIC_Marshal(pub, buf, sizeof(buf), &off) != TSS2_RC_SUCCESS)
+			die("marshal EK public");
+		p = b64(buf, off);
+		printf("%s{\"template\":\"%s\",\"public\":\"%s\",\"cert\":",
+		       n++ ? "," : "", k->id, p);
 		free(p);
-	} else {
-		printf("null}\n");
+		if (cert && clen) {
+			p = b64(cert, clen);
+			printf("\"%s\"}", p);
+			free(p);
+		} else {
+			printf("null}");
+		}
+		free(cert);
+		Esys_Free(pub);
+		Esys_FlushContext(ctx, key);
+		nlive--;
 	}
-	free(cert);
-	Esys_Free(pub);
-	flush_live();
+	printf("]}\n");
 	tpm_close();
-	return 0;
+	return n ? 0 : 1;
 }
 
 static size_t unb64(const char *s, unsigned char *out, size_t max)
@@ -517,8 +595,9 @@ static size_t unb64(const char *s, unsigned char *out, size_t max)
 	return (size_t)n;
 }
 
-static int cmd_activate(const char *cred_b64, const char *secret_b64)
+static int cmd_activate(const char *tmpl, const char *cred_b64, const char *secret_b64)
 {
+	const struct ek_tmpl *k = ek_find(tmpl);
 	unsigned char cb[sizeof(TPM2B_ID_OBJECT)], sb[sizeof(TPM2B_ENCRYPTED_SECRET)];
 	char h[2 * sizeof(((TPM2B_DIGEST *)0)->buffer) + 1];
 	TPM2B_ID_OBJECT cred = { 0 };
@@ -527,10 +606,12 @@ static int cmd_activate(const char *cred_b64, const char *secret_b64)
 	TPM2B_PUBLIC *akp = NULL, *ekp = NULL;
 	TPMT_SYM_DEF sym = { .algorithm = TPM2_ALG_NULL };
 	TPM2B_NONCE empty = { 0 };
-	ESYS_TR ak, ek, sess;
+	ESYS_TR ak, ek, sess = ESYS_TR_PASSWORD;
 	size_t cl, sl, off = 0;
 	TSS2_RC rc;
 
+	if (!k)
+		die("unknown EK template in the challenge");
 	cl = unb64(cred_b64, cb, sizeof(cb));
 	sl = unb64(secret_b64, sb, sizeof(sb));
 	if (Tss2_MU_TPM2B_ID_OBJECT_Unmarshal(cb, cl, &off, &cred) != TSS2_RC_SUCCESS || off != cl)
@@ -541,19 +622,21 @@ static int cmd_activate(const char *cred_b64, const char *secret_b64)
 
 	tpm_open();
 	ak = make_ak(&akp);
-	ek = make_ek(&ekp);
-	/* the EK's policy: PolicySecret(TPM_RH_ENDORSEMENT) */
-	rc = Esys_StartAuthSession(ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-				   ESYS_TR_NONE, ESYS_TR_NONE, NULL,
-				   TPM2_SE_POLICY, &sym, TPM2_ALG_SHA256, &sess);
-	if (rc != TSS2_RC_SUCCESS)
-		die_rc("StartAuthSession", rc);
-	track(sess);
-	rc = Esys_PolicySecret(ctx, ESYS_TR_RH_ENDORSEMENT, sess, ESYS_TR_PASSWORD,
-			       ESYS_TR_NONE, ESYS_TR_NONE, &empty, NULL, NULL, 0,
-			       NULL, NULL);
-	if (rc != TSS2_RC_SUCCESS)
-		die_rc("PolicySecret(endorsement)", rc);
+	ek = make_ek(k, &ekp, 1);
+	if (!k->user_with_auth) {
+		/* low range: the EK's policy is PolicySecret(TPM_RH_ENDORSEMENT) */
+		rc = Esys_StartAuthSession(ctx, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+					   ESYS_TR_NONE, ESYS_TR_NONE, NULL,
+					   TPM2_SE_POLICY, &sym, k->name_alg, &sess);
+		if (rc != TSS2_RC_SUCCESS)
+			die_rc("StartAuthSession", rc);
+		track(sess);
+		rc = Esys_PolicySecret(ctx, ESYS_TR_RH_ENDORSEMENT, sess, ESYS_TR_PASSWORD,
+				       ESYS_TR_NONE, ESYS_TR_NONE, &empty, NULL, NULL, 0,
+				       NULL, NULL);
+		if (rc != TSS2_RC_SUCCESS)
+			die_rc("PolicySecret(endorsement)", rc);
+	}
 	rc = Esys_ActivateCredential(ctx, ak, ek, ESYS_TR_PASSWORD, sess,
 				     ESYS_TR_NONE, &cred, &sec, &out);
 	if (rc != TSS2_RC_SUCCESS)
@@ -572,7 +655,7 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: secure-sudo-attest ak | ek\n"
-		"       secure-sudo-attest activate --credential B64 --secret B64\n"
+		"       secure-sudo-attest activate --ek TEMPLATE --credential B64 --secret B64\n"
 		"       secure-sudo-attest quote --nonce HEX --report FILE [--pcrs " DEFAULT_PCRS "]\n");
 	exit(2);
 }
@@ -594,7 +677,10 @@ int main(int argc, char **argv)
 		return cmd_ek();
 	if (!strcmp(argv[1], "activate") && argc == 6 &&
 	    !strcmp(argv[2], "--credential") && !strcmp(argv[4], "--secret"))
-		return cmd_activate(argv[3], argv[5]);
+		return cmd_activate("rsa2048", argv[3], argv[5]);
+	if (!strcmp(argv[1], "activate") && argc == 8 && !strcmp(argv[2], "--ek") &&
+	    !strcmp(argv[4], "--credential") && !strcmp(argv[6], "--secret"))
+		return cmd_activate(argv[3], argv[5], argv[7]);
 	if (strcmp(argv[1], "quote"))
 		usage();
 	for (i = 2; i < argc; i++) {

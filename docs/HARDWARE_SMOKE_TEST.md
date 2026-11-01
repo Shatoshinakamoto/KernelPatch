@@ -72,6 +72,17 @@ firmware write, no partition change. Keep a root session open throughout
       permitted`, and a `secure_sudo` event appears in today's
       `/var/log/secure_sudo/<date>.log`. If the file does not exist the
       platform has no PPI; note it.
+- [ ] Remote attestation against this machine's real TPM (docs/ATTESTATION.md),
+      with the verifier on another machine:
+      `secure-sudo attest ek` lists at least one EK with a certificate (note
+      which templates; if none, note the vendor and fetch the certificate as
+      described there for `--ek-cert`); `attest quote --nonce N --ek` →
+      `enroll --ek-ca VENDOR-ROOT.pem --require-lock` passes (note whether the
+      intermediate came from AIA) → `attest activate` → verifier `activate`
+      passes → `verify` passes, including "the firmware event log replays"
+      and, if IMA is on, "the IMA log replays". Note any FAIL line verbatim:
+      real firmware logs that do not replay are a known vendor issue
+      (`--ignore-eventlog`).
 
 ## 4. Firmware interfaces
 
@@ -138,7 +149,7 @@ Copy this table per machine into `docs/hardware/<vendor>-<model>.md`
 | 0. Out-of-tree modules and their plan | | |
 | 1. Install, trial boot, fallback, commit, menu | | |
 | 2. Secure Boot / MOK | | |
-| 3. TPM use, TPM unlock, clear refused | | |
+| 3. TPM use, TPM unlock, clear refused, remote attestation (EK, event log, IMA) | | |
 | 4. Firmware interfaces | | |
 | 5. Wi-Fi / Bluetooth on, off, on | | |
 | 6. Storage, network, net modes, suspend | | |
