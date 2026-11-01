@@ -193,7 +193,8 @@ while they are non-zero.
 
 The ring is 64 KiB and each complete JSON line is capped at 1024 bytes (the
 record is built in a static buffer under the ring lock, not on the hook's
-stack). It has no producer-side rate limit: on saturation it discards oldest
+stack; with `audit_events` on, the audit feed gets its own copy, made with
+GFP_ATOMIC, and a failed copy counts in `audit_events_dropped`). It has no producer-side rate limit: on saturation it discards oldest
 whole records, increments `events_dropped`, and preserves complete-line
 framing. At least 64 maximum-size records fit at once; typical records are
 400 to 600 bytes, so 100 to 160 fit. A read returns whole records only (up

@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/klog.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
@@ -1187,6 +1188,46 @@ static void t_events(void)
 			*strrchr(path, '/') = '\0';
 		}
 		rmdir(path);
+	}
+
+	/* The audit feed (audit_events=1) gets its own copy of each record:
+	 * the ring still gets every one, and the copy reaches the audit
+	 * subsystem (printed to the kernel log, as no auditd runs here) or is
+	 * counted in audit_events_dropped. */
+	{
+		unsigned long long a0 = 0, a1 = 0, got = 0;
+		int k, seen = 0;
+		char *l, *save;
+
+		if (rd(KNOB "audit_events_dropped", knobval, sizeof(knobval)) == 0)
+			a0 = strtoull(knobval, NULL, 10);
+		(void)drain_events(buf, sizeof(buf));
+		knob_set("audit_events", "1");
+		for (k = 0; k < 20; k++)
+			as(&NONSUDO, do_perf, NULL);
+		knob_set("audit_events", "0");
+		n = drain_events(buf, sizeof(buf));
+		for (l = strtok_r(buf, "\n", &save); l; l = strtok_r(NULL, "\n", &save))
+			got += line_is_event(l) && strstr(l, "\"event_type\":\"perf\"");
+		tap(got == 20, "#9 audit feed on: 20 denials still give 20 ring records (%llu)",
+		    got);
+		for (k = 0; k < 20 && !seen; k++) {
+			int len = klogctl(3 /* SYSLOG_ACTION_READ_ALL */, buf,
+					  (int)sizeof(buf) - 1);
+
+			if (len > 0) {
+				buf[len] = '\0';
+				seen = strstr(buf, "lsm=secure_sudo") != NULL;
+			}
+			if (!seen)
+				usleep(100000);
+		}
+		if (rd(KNOB "audit_events_dropped", knobval, sizeof(knobval)) == 0)
+			a1 = strtoull(knobval, NULL, 10);
+		tap(seen || a1 > a0,
+		    "#9 audit feed on: records reach the audit subsystem or are "
+		    "counted (%s, %llu dropped)", seen ? "seen in kernel log" : "not seen",
+		    a1 - a0);
 	}
 
 	/* P1-1 deferred work: a core-dump pipe handler is a process the kernel
