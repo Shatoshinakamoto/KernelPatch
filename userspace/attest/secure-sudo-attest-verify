@@ -16,6 +16,15 @@ no TPM and no secure_sudo install.
       attestation key must be the one already enrolled, so a re-enrollment
       cannot quietly swap the TPM.
 
+      With --ek-ca ROOT.pem [--ek-intermediate ICA.pem] (bundle from
+      `attest quote --ek`), the TPM's EK certificate must chain to that CA
+      and the AK is then bound to that EK by credential activation: enroll
+      writes HOST.json.challenge, the host answers it with
+      `secure-sudo attest activate`, and
+
+  secure-sudo-attest-verify activate HOST.json --response RESPONSE.json
+      finishes it. Until then, verify fails for that host.
+
   secure-sudo-attest-verify policy BUNDLE
       Show the policy the kernel measured (its log, replayed) and its digest,
       for --allow-policy. Informational: it does not check the signature.
@@ -742,6 +751,234 @@ def check_ima(bundle, pcrs, out, reference=None, unknown_fail=False):
     return recs
 
 
+# ---------------- P2-1: endorsement key and credential activation ----------------
+#
+# Trust on first use believes that the AK at enrollment lives in the host's
+# real TPM. With the EK, that becomes a check: the TPM manufacturer's EK
+# certificate (in TPM NV) says "this RSA key is the endorsement key of a
+# genuine TPM", and credential activation proves the AK is in that same TPM.
+# The verifier encrypts a random secret to the EK, bound to the AK's name
+# (TPM2_MakeCredential, done here in software); the TPM releases it through
+# TPM2_ActivateCredential only if an object with exactly that name is loaded
+# next to that EK. An AK that is restricted, fixedTPM and in the same TPM is
+# what the attestation trusts, so the binding is complete.
+
+ALG_RSA = 0x0001
+ALG_AES = 0x0006
+ALG_CFB = 0x0043
+ATTR_FIXEDPARENT = 0x00000010
+ATTR_SENSITIVEDATAORIGIN = 0x00000020
+ATTR_USERWITHAUTH = 0x00000040
+ATTR_ADMINWITHPOLICY = 0x00000080
+ATTR_DECRYPT = 0x00020000
+# PolicySecret(TPM_RH_ENDORSEMENT): the TCG EK Credential Profile's EK policy
+EK_POLICY = bytes.fromhex("837197674484b3f81a90cc8d46a5d724fd52d76e06520b64f2a1da1b331469aa")
+EK_ATTRS = (ATTR_FIXEDTPM | ATTR_FIXEDPARENT | ATTR_SENSITIVEDATAORIGIN |
+            ATTR_ADMINWITHPOLICY | ATTR_RESTRICTED | ATTR_DECRYPT)
+
+
+def parse_ek_public(b):
+    """TPM2B_PUBLIC of an RSA 2048 EK (default template) -> n, name."""
+    r = R(b)
+    tpmt = r.take(r.u16())
+    if r.o != len(b):
+        raise Bad("trailing bytes after the EK public area")
+    t = R(tpmt)
+    typ, name_alg, attrs = t.u16(), t.u16(), t.u32()
+    policy = t.tpm2b()
+    if typ != ALG_RSA or name_alg != ALG_SHA256:
+        raise Bad("the endorsement key is not an RSA key with a SHA-256 name")
+    if attrs != EK_ATTRS or policy != EK_POLICY:
+        raise Bad("the endorsement key does not use the standard EK template")
+    if (t.u16(), t.u16(), t.u16()) != (ALG_AES, 128, ALG_CFB):
+        raise Bad("the endorsement key's symmetric algorithm is not AES-128-CFB")
+    if t.u16() != ALG_NULL:
+        raise Bad("the endorsement key has a signing scheme")
+    bits, exp = t.u16(), t.u32()
+    n = t.tpm2b()
+    if bits != 2048 or len(n) != 256 or exp not in (0, 65537):
+        raise Bad("the endorsement key is not RSA 2048 with exponent 65537")
+    return {"n": n, "name": struct.pack(">H", ALG_SHA256) + hashlib.sha256(tpmt).digest()}
+
+
+def _der(tag, body):
+    n = len(body)
+    if n < 0x80:
+        ln = bytes([n])
+    else:
+        lb = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        ln = bytes([0x80 | len(lb)]) + lb
+    return bytes([tag]) + ln + body
+
+
+def _der_uint(v):
+    b = v.lstrip(b"\0") or b"\0"
+    return _der(0x02, (b"\0" + b) if b[0] & 0x80 else b)
+
+
+def rsa_spki_pem(n, e=65537):
+    rsa_oid = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010101")) + b"\x05\x00")
+    key = _der(0x30, _der_uint(n) + _der_uint(e.to_bytes(3, "big")))
+    der = _der(0x30, rsa_oid + _der(0x03, b"\0" + key))
+    b = base64.b64encode(der).decode()
+    return "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % "\n".join(
+        b[i:i + 64] for i in range(0, len(b), 64))
+
+
+def _openssl(args, data=None):
+    p = subprocess.run(["openssl"] + args, input=data, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+    return p.returncode, p.stdout, p.stderr
+
+
+def check_ek_cert(ek, cert_der, roots, intermediates, out):
+    """The certificate is for this EK and chains to one of the given CAs."""
+    with tempfile.TemporaryDirectory() as d:
+        cp = os.path.join(d, "ek.der")
+        with open(cp, "wb") as f:
+            f.write(cert_der)
+        rc, mo, _ = _openssl(["x509", "-inform", "DER", "-in", cp, "-noout", "-modulus"])
+        mod = mo.decode().strip().partition("=")[2].lower() if rc == 0 else ""
+        out.append((mod == ek["n"].hex(), "the EK certificate certifies this endorsement key"))
+        rc, pem, _ = _openssl(["x509", "-inform", "DER", "-in", cp])
+        pp = os.path.join(d, "ek.pem")
+        with open(pp, "wb") as f:
+            f.write(pem)
+
+        def cat(paths, name):
+            q = os.path.join(d, name)
+            with open(q, "wb") as f:
+                for x in paths:
+                    with open(x, "rb") as g:
+                        f.write(g.read() + b"\n")
+            return q
+        args = ["verify", "-CAfile", cat(roots, "roots.pem")]
+        if intermediates:
+            args += ["-untrusted", cat(intermediates, "inter.pem")]
+        rc, vo, ve = _openssl(args + [pp])
+        why = "" if rc == 0 else " (%s)" % (ve or vo).decode(errors="replace").strip().splitlines()[-1][:120]
+        out.append((rc == 0, "the EK certificate chains to a trusted TPM manufacturer CA" + why))
+        rc, so, _ = _openssl(["x509", "-in", pp, "-noout", "-issuer", "-serial"])
+        return so.decode(errors="replace").strip().replace("\n", "; ")
+
+
+def kdfa(key, label, ctx_u, ctx_v, bits):
+    """TPM 2.0 Part 1, 11.4.10.2: KDFa with HMAC-SHA256 in counter mode."""
+    import hmac as _hmac
+    lab = label.encode() + b"\0"
+    out, i = b"", 1
+    while len(out) * 8 < bits:
+        out += _hmac.new(key, struct.pack(">I", i) + lab + ctx_u + ctx_v +
+                         struct.pack(">I", bits), hashlib.sha256).digest()
+        i += 1
+    return out[:bits // 8]
+
+
+def make_credential(ek, ak_name, secret):
+    """TPM2_MakeCredential for an RSA EK, in software. -> (credential, secret)
+    blobs: TPM2B_ID_OBJECT and TPM2B_ENCRYPTED_SECRET."""
+    import hmac as _hmac
+    seed = secrets.token_bytes(16)         # the EK's AES-128 key size
+    with tempfile.TemporaryDirectory() as d:
+        kp = os.path.join(d, "ek.pem")
+        with open(kp, "w") as f:
+            f.write(rsa_spki_pem(ek["n"]))
+        rc, enc_seed, err = _openssl([
+            "pkeyutl", "-encrypt", "-pubin", "-inkey", kp,
+            "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256",
+            "-pkeyopt", "rsa_mgf1_md:sha256",
+            "-pkeyopt", "rsa_oaep_label:" + b"IDENTITY\0".hex()], seed)
+        if rc != 0 or len(enc_seed) != 256:
+            raise Bad("openssl could not encrypt to the EK: %s" % err.decode(errors="replace")[:200])
+        sym = kdfa(seed, "STORAGE", ak_name, b"", 128)
+        rc, enc_id, err = _openssl(["enc", "-aes-128-cfb", "-K", sym.hex(), "-iv", "00" * 16,
+                                    "-nosalt"], struct.pack(">H", len(secret)) + secret)
+        if rc != 0:
+            raise Bad("openssl aes-128-cfb failed: %s" % err.decode(errors="replace")[:200])
+    hk = kdfa(seed, "INTEGRITY", b"", b"", 256)
+    mac = _hmac.new(hk, enc_id + ak_name, hashlib.sha256).digest()
+    idobj = struct.pack(">H", len(mac)) + mac + enc_id
+    return (struct.pack(">H", len(idobj)) + idobj,
+            struct.pack(">H", len(enc_seed)) + enc_seed)
+
+
+def ek_enroll(a, b, akpub, prev, out):
+    """-> the host record's EK fields and the challenge to send, or ({}, None)."""
+    want = bool(a.ek_ca or a.ek_no_cert)
+    if not want:
+        if prev.get("ek_name") and prev.get("ak_name") == akpub["name"]:
+            keep = {k: v for k, v in prev.items() if k.startswith("ek_")}
+            return keep, None              # same AK: the old binding still holds
+        return {}, None
+    e = b.get("ek")
+    if not isinstance(e, dict) or not e.get("ek_public"):
+        out.append((False, "the bundle carries the TPM's endorsement key (attest quote --ek)"))
+        return {}, None
+    try:
+        ek = parse_ek_public(base64.b64decode(e["ek_public"], validate=True))
+    except (Bad, ValueError) as x:
+        out.append((False, "the endorsement key is a standard RSA 2048 EK (%s)" % x))
+        return {}, None
+    out.append((True, "the endorsement key is a standard RSA 2048 EK"))
+    if prev.get("ek_name"):
+        out.append((prev["ek_name"] == ek["name"].hex(),
+                    "the endorsement key is the one already enrolled (same TPM)"))
+    issuer = None
+    if a.ek_ca:
+        try:
+            cert = base64.b64decode(e.get("ek_cert") or "", validate=True)
+        except ValueError:
+            cert = b""
+        if not cert:
+            out.append((False, "the TPM has a manufacturer EK certificate (NV 0x01c00002)"))
+            return {}, None
+        issuer = check_ek_cert(ek, cert, a.ek_ca, a.ek_intermediate or [], out)
+    secret = secrets.token_bytes(32)
+    cred, sec = make_credential(ek, bytes.fromhex(akpub["name"]), secret)
+    rec = {
+        "ek_name": ek["name"].hex(),
+        "ek_public": e["ek_public"],
+        "ek_certificate": "verified: " + issuer if issuer else "none (--ek-no-cert)",
+        "ek_activation": "pending",
+        "ek_secret_sha256": hashlib.sha256(secret).hexdigest(),
+    }
+    challenge = {"challenge_version": 1, "host": None, "ak_name": akpub["name"],
+                 "ek_name": rec["ek_name"],
+                 "credential_b64": base64.b64encode(cred).decode(),
+                 "secret_b64": base64.b64encode(sec).decode()}
+    return rec, challenge
+
+
+def cmd_activate(a):
+    """Finish an EK enrollment with the host's answer to its challenge."""
+    with open(a.host) as f:
+        host = json.load(f)
+    with open(a.response) as f:
+        resp = json.load(f)
+    out = []
+    if host.get("ek_activation") != "pending" or not host.get("ek_secret_sha256"):
+        raise Bad("this host record has no pending credential activation")
+    try:
+        got = bytes.fromhex(resp.get("activated_secret", ""))
+    except ValueError:
+        got = b""
+    ok = bool(got) and secrets.compare_digest(hashlib.sha256(got).hexdigest(),
+                                               host["ek_secret_sha256"])
+    out.append((ok, "the host's TPM recovered the secret: the enrolled AK is in the TPM "
+                "with the enrolled EK"))
+    if ok:
+        host["ek_activation"] = "done"
+        host["ek_activated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        del host["ek_secret_sha256"]       # one use only
+        tmp = a.host + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(host, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, a.host)
+    report_lines(out, 0 if ok else 1)
+    return 0 if ok else 1
+
+
 def report_lines(out, failed):
     for ok, text in out:
         print("%s %s" % ("INFO" if ok is None else "PASS" if ok else "FAIL", text))
@@ -788,6 +1025,9 @@ def cmd_enroll(a):
     golden.pop(str(IMA_PCR), None)      # PCR 10 grows with every file IMA measures
     if not a.ignore_ima and (b.get("ima_log_b64") or prev.get("ima")):
         ima = check_ima(b, tpm["pcrs"], out)
+    if a.ek_ca and a.ek_no_cert:
+        raise Bad("--ek-ca and --ek-no-cert do not go together")
+    ekrec, challenge = ek_enroll(a, b, akpub, prev, out)
     failed = sum(1 for ok, _ in out if ok is False)
     if failed:
         report_lines(out, failed)
@@ -813,6 +1053,14 @@ def cmd_enroll(a):
         "accept_pcr_extenders": bool(a.accept_pcr_extenders),
         "reset_count": q["reset_count"],
     }
+    host.update(ekrec)
+    if challenge:
+        challenge["host"] = host["host"]
+        cpath = a.challenge or a.out + ".challenge"
+        with open(cpath + ".tmp", "w") as f:
+            json.dump(challenge, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(cpath + ".tmp", cpath)
     tmp = a.out + ".tmp"
     with open(tmp, "w") as f:
         json.dump(host, f, indent=1, sort_keys=True)
@@ -823,6 +1071,16 @@ def cmd_enroll(a):
         host["host"], host["kernel"], ",".join(sorted(golden, key=int)),
         policy[:16], host["policy_source"],
         "%d events" % len(el[0]) if el else "not checked"))
+    if challenge:
+        print("credential activation pending: copy %s to the host, run\n"
+              "  sudo secure-sudo attest activate %s > response.json\n"
+              "and then here\n"
+              "  secure-sudo-attest-verify activate %s --response response.json" % (
+                  cpath, os.path.basename(cpath), a.out))
+    elif host.get("ek_name"):
+        print("endorsement key: %s, activation %s" % (host["ek_certificate"], host["ek_activation"]))
+    else:
+        print("endorsement key: not checked (trust on first use; see --ek-ca)")
     return 0
 
 
@@ -923,6 +1181,10 @@ def cmd_verify(a):
             ref = load_ima_reference(a.ima_reference) if a.ima_reference else None
             check_ima(b, pcrs, out, ref, a.ima_unknown == "fail")
         out.append((report.get("secure_sudo_lsm") is True, "the secure_sudo LSM is active"))
+        if host.get("ek_name"):
+            out.append((host.get("ek_activation") == "done",
+                        "the attestation key is bound to the enrolled TPM's endorsement key "
+                        "(credential activation %s)" % host.get("ek_activation")))
         if host.get("policy_source") == "measured":
             m = None
             if report.get("policy_source") != "measured" or \
@@ -975,6 +1237,10 @@ def main():
     e.add_argument("--accept-pcr-extenders", action="store_true")
     e.add_argument("--ignore-eventlog", action="store_true")
     e.add_argument("--ignore-ima", action="store_true")
+    e.add_argument("--ek-ca", action="append", metavar="PEM")
+    e.add_argument("--ek-intermediate", action="append", metavar="PEM")
+    e.add_argument("--ek-no-cert", action="store_true")
+    e.add_argument("--challenge", metavar="FILE")
     e.set_defaults(fn=cmd_enroll)
     pp = s.add_parser("policy")
     pp.add_argument("bundle")
@@ -982,6 +1248,10 @@ def main():
     el = s.add_parser("eventlog")
     el.add_argument("file")
     el.set_defaults(fn=cmd_eventlog)
+    ac = s.add_parser("activate")
+    ac.add_argument("host")
+    ac.add_argument("--response", required=True)
+    ac.set_defaults(fn=cmd_activate)
     im = s.add_parser("ima")
     im.add_argument("bundle")
     im.add_argument("--ima-reference", metavar="FILE")

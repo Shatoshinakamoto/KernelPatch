@@ -530,4 +530,92 @@ check "'ima --list' shows the records up to the quote" sh -c \
 	"[ $rc -eq 0 ] && grep -qF -- '- sha256:$SH /usr/bin/sh' '$T/ima.out' && [ \$(grep -c ' sha256:' '$T/ima.out') -le 2001 ]"
 rm -f "$IMAL" "$ELOG"
 
+# ---- P2-1: the endorsement key and credential activation ----
+# swtpm_setup makes a TPM the way a manufacturer does: an EK, and an EK
+# certificate in NV signed by a CA (here a throwaway one, via swtpm_localca).
+if command -v swtpm_setup >/dev/null 2>&1 && command -v swtpm_localca >/dev/null 2>&1; then
+	mkdir -p "$T/ca" "$T/tpm-k"
+	printf 'statedir = %s\nsigningkey = %s/signkey.pem\nissuercert = %s/issuercert.pem\ncertserial = %s/certserial\n' \
+		"$T/ca" "$T/ca" "$T/ca" "$T/ca" > "$T/localca.conf"
+	printf -- '--platform-manufacturer test\n--platform-version 1\n--platform-model test\n' > "$T/localca.options"
+	printf 'create_certs_tool = %s\ncreate_certs_tool_config = %s\ncreate_certs_tool_options = %s\nactive_pcr_banks = sha256\n' \
+		"$(command -v swtpm_localca)" "$T/localca.conf" "$T/localca.options" > "$T/setup.conf"
+	if swtpm_setup --tpm2 --tpmstate "$T/tpm-k" --config "$T/setup.conf" --create-ek-cert \
+		--overwrite > "$T/setup.out" 2>&1; then
+		ok "a software TPM with a manufacturer-style EK certificate is made"
+	else
+		not_ok "a software TPM with a manufacturer-style EK certificate is made ($(tail -1 "$T/setup.out"))"
+	fi
+	ROOTCA="$T/ca/swtpm-localca-rootca-cert.pem"; INTCA="$T/ca/issuercert.pem"
+	K="$(start_swtpm k)"
+	echo "policy_sha256=$POL_A locked=1" > "$T/policy"
+	kq() { quote "$K" "$@"; }
+	kenroll() { python3 "$VERIFY" enroll "$1" --nonce "$2" --out "$T/khost.json" "${@:3}" > "$T/e.out" 2>&1; }
+	act() { # tcti challenge -> response on stdout
+		SS_ATTEST_TCTI="$1" SS_ATTEST_BIN="$T/secure-sudo-attest" sh "$A_DIR/attest-report.sh" activate "$2"
+	}
+	SS_ATTEST_TCTI="$K" "$T/secure-sudo-attest" ek > "$T/ek.json"
+	check "'attest ek' prints the EK and its NV certificate" python3 -c "
+import json; j=json.load(open('$T/ek.json')); assert j['ek_alg']=='rsa2048' and j['ek_public'] and j['ek_cert']"
+	N="$(nonce)"; kq "$N" "$T/k0" --ek
+	kenroll "$T/k0" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA"; rc=$?
+	check "enroll with --ek-ca: the certificate chains and a challenge is written" sh -c "
+	[ $rc -eq 0 ] && grep -qF 'PASS the EK certificate chains to a trusted TPM manufacturer CA' '$T/e.out' &&
+	grep -qF 'PASS the EK certificate certifies this endorsement key' '$T/e.out' && [ -s '$T/khost.json.challenge' ] &&
+	python3 -c \"import json; h=json.load(open('$T/khost.json')); assert h['ek_activation']=='pending' and 'ek_secret_sha256' in h\""
+	N="$(nonce)"; kq "$N" "$T/k1"
+	python3 "$VERIFY" verify "$T/k1" --host "$T/khost.json" --nonce "$N" > "$T/v.out" 2>&1; VRC=$?
+	check "verify fails until the credential is activated" sh -c \
+		"[ $VRC -eq 1 ] && grep -qF 'FAIL the attestation key is bound to the enrolled TPM' '$T/v.out'"
+	act "$B" "$T/khost.json.challenge" > "$T/resp.b" 2>/dev/null; brc=$?
+	check "another TPM cannot answer the challenge" test "$brc" -ne 0
+	echo '{"activated_secret":"'"$(printf 'ab%.0s' $(seq 32))"'"}' > "$T/resp.fake"
+	python3 "$VERIFY" activate "$T/khost.json" --response "$T/resp.fake" > "$T/a.out" 2>&1; frc=$?
+	check "a made-up answer is refused" sh -c "[ $frc -eq 1 ] && grep -qF 'FAIL the host' '$T/a.out'"
+	act "$K" "$T/khost.json.challenge" > "$T/resp.k"; krc=$?
+	python3 "$VERIFY" activate "$T/khost.json" --response "$T/resp.k" > "$T/a.out" 2>&1; arc=$?
+	check "the host's TPM answers it and the verifier accepts the answer" sh -c "
+	[ $krc -eq 0 ] && [ $arc -eq 0 ] &&
+	python3 -c \"import json; h=json.load(open('$T/khost.json')); assert h['ek_activation']=='done' and 'ek_secret_sha256' not in h\""
+	python3 "$VERIFY" activate "$T/khost.json" --response "$T/resp.k" > "$T/a.out" 2>&1; rrc=$?
+	check "... once only (the same answer cannot be used again)" test "$rrc" -eq 1
+	python3 "$VERIFY" verify "$T/k1" --host "$T/khost.json" --nonce "$N" > "$T/v.out" 2>&1; VRC=$?
+	check "verify: the attestation key is bound to the certified TPM" sh -c \
+		"[ $VRC -eq 0 ] && grep -qF 'PASS the attestation key is bound to the enrolled TPM' '$T/v.out'"
+	cp "$T/khost.json" "$T/khost.prev"
+	N="$(nonce)"; kq "$N" "$T/k2"
+	python3 "$VERIFY" enroll "$T/k2" --nonce "$N" --out "$T/khost.json" --previous "$T/khost.prev" > "$T/e.out" 2>&1; rc=$?
+	check "re-enrollment with --previous (same AK) keeps the activation" sh -c "[ $rc -eq 0 ] &&
+	python3 -c \"import json; h=json.load(open('$T/khost.json')); assert h['ek_activation']=='done'\""
+	openssl req -x509 -newkey rsa:2048 -nodes -keyout "$T/other.key" -out "$T/other.pem" \
+		-subj /CN=other-ca -days 2 >/dev/null 2>&1
+	N="$(nonce)"; kq "$N" "$T/k3" --ek
+	kenroll "$T/k3" "$N" --ek-ca "$T/other.pem"; rc=$?
+	check "an EK certificate from a CA that is not trusted fails" sh -c \
+		"[ $rc -eq 1 ] && grep -qF 'FAIL the EK certificate chains to a trusted TPM manufacturer CA' '$T/e.out'"
+	SS_ATTEST_TCTI="$B" "$T/secure-sudo-attest" ek > "$T/ekb.json"
+	python3 - "$T/k3" "$T/ekb.json" "$T/k-splice" <<'SPLICE'
+import json, sys
+b = json.load(open(sys.argv[1])); other = json.load(open(sys.argv[2]))
+b["ek"]["ek_public"] = other["ek_public"]       # another TPM's EK, this TPM's certificate
+json.dump(b, open(sys.argv[3], "w"))
+SPLICE
+	kenroll "$T/k-splice" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA"; rc=$?
+	check "another TPM's EK with this TPM's certificate fails" sh -c \
+		"[ $rc -eq 1 ] && grep -qF 'FAIL the EK certificate certifies this endorsement key' '$T/e.out'"
+	kenroll "$T/k-splice" "$N" --ek-no-cert --challenge "$T/splice.ch"; rc=$?
+	act "$K" "$T/splice.ch" > /dev/null 2>&1; s1=$?
+	act "$B" "$T/splice.ch" > /dev/null 2>&1; s2=$?
+	check "... and with --ek-no-cert neither TPM can complete it (AK and EK not in one TPM)" \
+		sh -c "[ $rc -eq 0 ] && [ $s1 -ne 0 ] && [ $s2 -ne 0 ]"
+	N="$(nonce)"; quote "$B" "$N" "$T/k4" --ek
+	python3 "$VERIFY" enroll "$T/k4" --nonce "$N" --out "$T/khost.b" --ek-ca "$ROOTCA" > "$T/e.out" 2>&1; rc=$?
+	check "--ek-ca on a TPM without an EK certificate fails" sh -c \
+		"[ $rc -eq 1 ] && grep -qF 'FAIL the TPM has a manufacturer EK certificate' '$T/e.out'"
+elif [ "${SS_REQUIRE_SWTPM:-0}" = 1 ]; then
+	not_ok "EK tests need swtpm_setup and swtpm_localca (swtpm-tools; SS_REQUIRE_SWTPM=1)"
+else
+	skip "EK tests need swtpm_setup and swtpm_localca (swtpm-tools)"
+fi
+
 tap_done

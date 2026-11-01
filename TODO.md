@@ -287,7 +287,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     checks the measured Secure Boot state and command line) and the IMA log
     (PCR 10, `boot_aggregate`, optional reference list), tested against
     logs from a real OVMF + GRUB + Ubuntu 24.04 boot on a software TPM.
-    Still to build: EK certificate checks / credential activation.
+    The EK certificate check and credential activation are built too
+    (`enroll --ek-ca`, `attest activate`, `secure-sudo-attest-verify
+    activate`), for RSA 2048 EKs, tested against a software TPM with a
+    manufacturer-style EK certificate. Still to build: activation for
+    ECC-only EKs, and fetching intermediate CAs from the certificate's AIA
+    URL.
 
 - [ ] **P2-2: Promote add-ons through an explicit maturity gate.**
   - Keep `temporary/` features opt-in until each has automated tests,

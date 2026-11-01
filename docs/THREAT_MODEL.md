@@ -633,13 +633,17 @@ Do not rely on them until they have tests.
   PCRs that signs the verifier's nonce together with a host report.
   `secure-sudo-attest-verify` on a trusted machine checks it against a host
   record enrolled on a trusted boot ([ATTESTATION.md](ATTESTATION.md)).
-* **Needs:** a TPM 2.0, and an enrollment done at a time and place the
-  operator controls (trust on first use: EK certificate checks are not built
-  yet).
+* **Needs:** a TPM 2.0. Enrollment is trust on first use unless the
+  verifier checks the TPM's EK certificate against the manufacturer CA and
+  runs credential activation (`--ek-ca`), which binds the attestation key to
+  a certified TPM. That needs an RSA 2048 EK, which most TPMs ship.
 * **Also (part 2):** the LSM measures every policy change it accepts
   (knobs, lists, the lock) into PCR 13 with a securityfs log, and marks any
   extend it did not make. The verifier replays the log, so the policy and
-  lock state are measured, not reported (SECURITY_REVIEW #68).
+  lock state are measured, not reported (SECURITY_REVIEW #68). The verifier
+  also replays the firmware event log (it names the boot event that changed,
+  and checks the measured Secure Boot state and command line) and the IMA
+  log against PCR 10 (optionally against a reference list of file hashes).
 * **Limits:** the boot chain is proven, because root cannot forge a quote
   or set a PCR. The measured policy is proven only once locked, and only if
   nothing on `tpm_openers` can extend arbitrary PCR values (the defaults
@@ -650,7 +654,8 @@ Do not rely on them until they have tests.
 * **Tested by:** `tests/userspace/test-attest.sh` (software TPMs:
   enroll, verify, wrong and replayed nonces, edited reports and PCR values,
   another TPM, a PCR change, re-enrollment with `--previous`, the CLI
-  digest, and every way to falsify the measured log), and the in-kernel
+  digest, every way to falsify the measured log, real OVMF/GRUB/IMA logs,
+  and an EK-certified software TPM for credential activation), and the in-kernel
   `ss-functest` P2-1 checks against a software TPM in the guest.
 
 ## 6. What names and compliance mappings do not mean
