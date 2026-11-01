@@ -53,6 +53,8 @@ others. On enrollment the verifier records whatever set was quoted.
 | 7 | firmware | **Secure Boot state and policy**: PK/KEK/db/dbx, and which db entries authorised the boot. |
 | 8 | GRUB / sd-boot | Kernel command line and GRUB commands. |
 | 9 | GRUB / sd-boot / kernel | Kernel and initramfs images that were read. |
+| 6 | firmware | Host platform events (usually just a separator). Quoted only with an IMA log, for the `boot_aggregate` check. |
+| 10 | IMA | One record per file IMA measured ("The IMA log" below). Quoted automatically when IMA is measuring; not part of the golden boot chain. |
 | 11 | systemd-stub | UKI sections (kernel, initrd, cmdline) on a measured UKI boot. Add it with `--pcrs` if you boot UKIs. |
 | 15 | systemd | Machine id and the root filesystem volume key, on systems that use it. |
 | 13 | secure_sudo LSM | Every policy change the kernel accepted ("Policy measurement" below). Quoted automatically; not part of the golden boot chain. |
@@ -115,13 +117,21 @@ them pass. Use `--json` for machine output. The checks are:
 4. The PCR digest in the quote equals the sha256 of the reported PCR values,
    so the values shown are the values that were signed.
 5. The boot chain matches the enrolled one. On a mismatch the failing PCRs
-   are named.
+   are named and, when the host was enrolled with its firmware event log,
+   so is the first event that changed in each.
 6. The report says the secure_sudo LSM is active.
 7. The policy digest is one of the allowed ones: measured by the kernel
    (the policy-log checks below) or, on an older kernel, reported.
 8. The policy is locked, if the record requires it (the lock event in the
    measured log, or the reported lock state).
 9. The report is no older than `--max-age` seconds, if `--max-age` is given.
+10. The firmware event log replays to the quoted PCRs, and the reported
+    Secure Boot state and command line are the measured ones ("The firmware
+    event log" below).
+11. The IMA log replays to the quoted PCR 10, and, with a reference list,
+    every measured file has a known hash ("The IMA log" below).
+
+Lines marked `INFO` are shown for the operator and do not fail the result.
 
 **What a pass proves.** This TPM, with the enrolled key, signed PCR values
 equal to the enrolled boot chain, for your nonce, together with this exact
@@ -215,6 +225,97 @@ if root has no way to extend that PCR once the policy is locked:
   extensions on a UKI boot. If the very first event already shows
   `foreign`, pick another PCR in the kernel config.
 
+## The firmware event log
+
+The firmware, shim, GRUB and the kernel's EFI stub log every measurement
+they make in `/sys/kernel/security/tpm0/binary_bios_measurements` (the TCG
+"crypto agile" TPM 2.0 log). The report carries the whole log
+(`tpm_eventlog_b64`) next to its sha256. The file is only root-readable and
+root could rewrite it, but it could not make a rewritten log replay to the
+PCR values the TPM signed. So a log that replays is the log of this boot.
+
+The verifier parses the log, replays its SHA-256 bank (honouring a
+`StartupLocality` event for PCR 0, skipping `EV_NO_ACTION`), and checks:
+
+* the log is well formed, declares a SHA-256 bank, and is the one the
+  report hashed;
+* it replays to every quoted PCR in 0-9 and 14 (shim's MokList), apart from
+  the policy PCR;
+* the reported Secure Boot state equals the one the firmware measured. That
+  is the `SecureBoot` variable event in PCR 7, accepted only if its digest
+  is the sha256 of the variable data shown;
+* the reported kernel command line is the one GRUB measured (the
+  `kernel_cmdline:` event in PCR 8, again only if the digest matches).
+
+Enrollment stores every event (PCR, type, SHA-256, description) and the
+Secure Boot state as measured (`"secure_boot_source": "measured"`). When the
+boot chain later differs, the verifier names the first event that changed in
+each changed PCR, for example:
+
+```
+FAIL the boot chain matches the enrolled one (PCR 4 differs) - PCR 4: EV_EFI_BOOT_SERVICES_APPLICATION EFI\ubuntu\grubx64.efi changed
+```
+
+That tells an expected update (a new `grubx64.efi` or `vmlinuz`) from an
+unexpected one (a new boot option, a changed `db`) without guessing from PCR
+numbers. A host enrolled with a log must always send one, so root cannot
+hide it later. `secure-sudo-attest-verify eventlog FILE` prints a log (raw
+`binary_bios_measurements`, or the one in a bundle) event by event, with the
+PCR values it replays to, and marks any that differ from a bundle's quote.
+
+Some firmware writes logs that do not replay (vendor bugs). Such a host
+fails enrollment with the PCRs that disagree. Enroll it with
+`--ignore-eventlog` to fall back to comparing PCR values only.
+
+The parser was checked against a real boot: Ubuntu 24.04 under OVMF with a
+software TPM (`VM_UEFI=1 VM_TPM=1 tests/vm/distro/vm.sh`). All of PCRs 0-9
+and 14 match what that TPM held, and match `tpm2_eventlog` from tpm2-tools.
+The captured logs are the test fixtures in
+`tests/userspace/fixtures/eventlog/`.
+
+## The IMA log
+
+With IMA measuring (for example `ima_policy=tcb ima_hash=sha256
+ima_template=ima-ng` on the kernel command line, or a custom policy), the
+kernel hashes each program, library and root-read file before it is used,
+and extends PCR 10 with a record of it. When
+`/sys/kernel/security/ima/binary_runtime_measurements` is not empty, `attest
+quote` adds PCRs 10 and 6 to the quote. PCR 6 is there so all of 0-9 are
+quoted for the `boot_aggregate` check below. The host reads the log
+**after** the quote, so the log holds every record the quoted PCR 10
+covers, plus whatever IMA measured in between. The log goes in the bundle
+(`ima_log_b64`) outside the signed report, because what makes it
+trustworthy is PCR 10, not the signature.
+
+The verifier replays the records (SHA-256 bank: `SHA256(template data)`
+per record, `0xff..ff` for a violation) and finds the record at which the
+value equals the quoted PCR 10. Records after that point came after the
+quote and are ignored. It checks:
+
+* the log is well formed and has a supported template (`ima-ng`,
+  `ima-sig`, `ima-buf`, `ima-modsig`, `evm-sig`);
+* the replay reaches the quoted PCR 10, so root cannot drop, edit or
+  reorder a record;
+* IMA's first record, `boot_aggregate`, is the sha256 of this boot's
+  quoted PCRs 0-9 (when IMA uses SHA-256), which ties the IMA log to the
+  boot chain above;
+* with `--ima-reference FILE`: every measured file listed in FILE has a
+  listed hash. FILE is in `sha256sum` format, so `sha256sum` output from a
+  known-good host or from package contents works. Files that are not in
+  FILE are shown as `INFO`, or fail with `--ima-unknown fail`.
+
+It also prints, as `INFO`, how many files were measured and how many
+violations IMA recorded (a file changed, or opened for write, while being
+measured or run). PCR 10 is never part of the golden boot chain, because it
+grows with every new file. A host enrolled with an IMA log must keep sending
+one (no downgrade); `--ignore-ima` at enrollment opts out. `secure-sudo-
+attest-verify ima BUNDLE [--ima-reference FILE] [--list]` shows the same
+checks and, with `--list`, every record up to the quote.
+
+The replay was checked against the same Ubuntu guest booted with
+`ima_policy=tcb`: its 2099 records replay to the PCR 10 its TPM held, and
+its `boot_aggregate` matches its PCRs 0-9.
+
 ## Revocation
 
 To revoke a host, delete its record (`hosts/web1.json`) from the verifier.
@@ -251,11 +352,11 @@ reimplemented in each userspace monitor.
 
 - **IMA measurement** (`ima_policy=tcb`) extends a hash of every executed
   file into PCR 10 and keeps a log in
-  `/sys/kernel/security/ima/ascii_runtime_measurements`. It can be added to
-  a quote with `--pcrs 0,...,10`. The verifier does not replay the IMA log
-  yet, so PCR 10 can only be compared against a golden value. That rarely
-  works, because PCR 10 changes with every new program run. Log replay is
-  listed under "Not done yet".
+  `/sys/kernel/security/ima/ascii_runtime_measurements`. The verifier
+  replays that log against the quoted PCR 10 and can check every file
+  against a reference list ("The IMA log" above). **Recommendation:** turn
+  it on (`ima_policy=tcb` or a narrower custom policy) on hosts you attest;
+  secure_sudo does not do it for you, since it changes boot parameters.
 - **IMA appraisal + EVM** refuse to run files whose signature or hash xattr
   is wrong. This is the right tool for "only signed executables run", and it
   overlaps with ProcGuard's allowlist (temporary/), which is a userspace
@@ -284,7 +385,6 @@ missing work, not as permanent limits:
 
 - **EK certificate and credential activation**, to replace trust on first
   use at enrollment.
-- **IMA log replay** in the verifier, so PCR 10 can be checked event by
-  event.
-- **A TPM event-log parser** in the verifier. Today the report carries only
-  the event log's sha256 (`tpm_eventlog_sha256`), not a replay of it.
+
+The firmware event-log parser and the IMA log replay that used to be listed
+here are built (sections above).

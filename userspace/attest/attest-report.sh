@@ -107,27 +107,47 @@ if [ -r "$plog" ]; then
 		topen="\"$(base64 -w0 < "$R/sys/kernel/security/secure_sudo/tpm_openers" 2>/dev/null)\""
 	fi
 fi
-ev=null
+# The firmware event log (what firmware, shim, GRUB and the EFI stub
+# measured into PCRs 0-9): the verifier replays it against the quote and can
+# then name the event that changed, and read the measured Secure Boot state.
+ev=null; elb=""
 if [ -r "$R/sys/kernel/security/tpm0/binary_bios_measurements" ]; then
-	ev="\"$(sha256sum < "$R/sys/kernel/security/tpm0/binary_bios_measurements" | cut -d' ' -f1)\""
+	cat "$R/sys/kernel/security/tpm0/binary_bios_measurements" > "$T/eventlog"
+	ev="\"$(sha256sum < "$T/eventlog" | cut -d' ' -f1)\""
+	elb="$(base64 -w0 < "$T/eventlog")"
 fi
 
-printf '{"report_version":1,"time":"%s","host":"%s","kernel":"%s","boot_id":"%s","cmdline":"%s","secure_sudo_lsm":%s,"policy_sha256":"%s","policy_locked":%s,"policy_source":"%s","policy_pcr":%s,"policy_log_b64":"%s","tpm_openers_b64":%s,"secure_boot":"%s","tpm_eventlog_sha256":%s}' \
+printf '{"report_version":1,"time":"%s","host":"%s","kernel":"%s","boot_id":"%s","cmdline":"%s","secure_sudo_lsm":%s,"policy_sha256":"%s","policy_locked":%s,"policy_source":"%s","policy_pcr":%s,"policy_log_b64":"%s","tpm_openers_b64":%s,"secure_boot":"%s","tpm_eventlog_sha256":%s,"tpm_eventlog_b64":"%s"}' \
 	"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(js "$host")" "$(js "$kernel")" \
 	"$(js "$boot_id")" "$(js "$cmdline")" "$lsm" "${psha:-}" "${plock:--1}" \
-	"$psrc" "${ppcr:-null}" "$plb" "$topen" "$sb" "$ev" > "$T/report"
+	"$psrc" "${ppcr:-null}" "$plb" "$topen" "$sb" "$ev" "$elb" > "$T/report"
 
-# the policy PCR is always quoted with the boot chain
-if [ -n "$ppcr" ]; then
+# the policy PCR is always quoted with the boot chain; with an IMA log, so
+# are PCR 10 (IMA) and PCR 6 (IMA's boot_aggregate covers PCRs 0-9)
+ima="$R/sys/kernel/security/ima/binary_runtime_measurements"
+addpcr() {
 	case ",${PCRS:-0,1,2,3,4,5,7,8,9}," in
-	  *",$ppcr,"*) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9}" ;;
-	  *) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9},$ppcr" ;;
+	  *",$1,"*) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9}" ;;
+	  *) PCRS="${PCRS:-0,1,2,3,4,5,7,8,9},$1" ;;
 	esac
-fi
+}
+[ -n "$ppcr" ] && addpcr "$ppcr"
+if [ -s "$ima" ]; then addpcr 6; addpcr 10; fi
 if [ -n "$PCRS" ]; then
 	"$BIN" quote --nonce "$NONCE" --report "$T/report" --pcrs "$PCRS" > "$T/tpm"
 else
 	"$BIN" quote --nonce "$NONCE" --report "$T/report" > "$T/tpm"
 fi
-printf '{"bundle_version":1,"report_b64":"%s","tpm":%s}\n' \
-	"$(base64 -w0 < "$T/report")" "$(cat "$T/tpm")"
+# The IMA log is read after the quote, so it holds at least every record in
+# the quoted PCR 10 (the verifier finds where the two meet). It is outside
+# the signed report on purpose: PCR 10 is what makes it trustworthy.
+printf '{"bundle_version":1,"report_b64":"'
+base64 -w0 < "$T/report"
+printf '","tpm":'
+cat "$T/tpm"
+if [ -s "$ima" ]; then
+	printf ',"ima_log_b64":"'
+	base64 -w0 < "$ima"
+	printf '"'
+fi
+printf '}\n'

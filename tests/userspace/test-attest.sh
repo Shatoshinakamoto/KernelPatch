@@ -353,4 +353,181 @@ check "an extend the kernel did not make is marked foreign and refused" sh -c \
 	"[ $rc -eq 0 ] && [ $erc -eq 1 ] && grep -qF 'FAIL nothing but the kernel extended PCR 13' '$T/e.out' && grep -qF 'PASS the kernel policy log replays' '$T/e.out'"
 rm -f "$PLOG"
 
+# ---- P2-1: the firmware event log ----
+# A real log: OVMF + shim + GRUB + Ubuntu 24.04 on swtpm (VM_UEFI=1 VM_TPM=1
+# tests/vm/distro/vm.sh), with the PCR values that guest's TPM held.
+FX="$ROOT/tests/userspace/fixtures/eventlog"
+cat > "$T/fw.py" <<'FWPY'
+# fw.py VERIFIER replay PORT LOG | ima PORT LOG N | imaref LOG N |
+#        digest LOG PATTERN | swap LOG OUT OLDHEX NEWHEX
+import importlib.machinery, importlib.util, socket, struct, sys
+ld = importlib.machinery.SourceFileLoader("v", sys.argv[1])
+spec = importlib.util.spec_from_loader("v", ld); v = importlib.util.module_from_spec(spec); ld.exec_module(v)
+op = sys.argv[2]
+def extend_all(port, items):
+    s = socket.create_connection(("127.0.0.1", port))
+    auth = struct.pack(">IHBH", 0x40000009, 0, 0, 0)
+    for pcr, dg in items:
+        body = struct.pack(">I", pcr) + struct.pack(">I", len(auth)) + auth + struct.pack(">IH", 1, 0x000B) + dg
+        s.sendall(struct.pack(">HII", 0x8002, 10 + len(body), 0x00000182) + body)
+        hdr = b""
+        while len(hdr) < 10:
+            hdr += s.recv(10 - len(hdr))
+        size, rc = struct.unpack(">HII", hdr)[1:]
+        if size > 10:
+            s.recv(size - 10)
+        assert rc == 0
+if op == "replay":     # what the firmware did: extend each event's SHA-256
+    evs, _ = v.parse_eventlog(open(sys.argv[4], "rb").read())
+    extend_all(int(sys.argv[3]), [(e["pcr"], e["sha256"]) for e in evs])
+elif op == "ima":      # what IMA did for its first N records
+    recs = v.parse_ima(open(sys.argv[4], "rb").read())[:int(sys.argv[5])]
+    extend_all(int(sys.argv[3]), [(r["pcr"], r["sha256"]) for r in recs])
+elif op == "imaref":   # a sha256sum-style reference list of the first N records
+    for r in v.parse_ima(open(sys.argv[3], "rb").read())[:int(sys.argv[4])]:
+        if not r["violation"] and r["name"] != "boot_aggregate":
+            print("%s  %s" % (r["digest"], r["name"]))
+elif op == "digest":   # the SHA-256 of the first event whose description has PATTERN
+    evs, _ = v.parse_eventlog(open(sys.argv[3], "rb").read())
+    print(next(r[2] for r in v.event_rows(evs) if sys.argv[4] in r[3]))
+elif op == "swap":
+    b = open(sys.argv[3], "rb").read()
+    old, new = bytes.fromhex(sys.argv[5]), bytes.fromhex(sys.argv[6])
+    assert b.count(old) >= 1
+    open(sys.argv[4], "wb").write(b.replace(old, new, 1))
+FWPY
+fw() { python3 -B "$T/fw.py" "$VERIFY" "$@"; }
+python3 "$VERIFY" eventlog "$FX/ovmf-noble.bin" > "$T/el.out" 2>&1
+check "the event log parser replays a real OVMF/GRUB log to that TPM's PCRs" sh -c "
+while read -r i v; do grep -qx \"pcr \$(printf '%-2d' \$i) sha256 \$v\" '$T/el.out' || exit 1; done < '$FX/ovmf-noble.pcrs'"
+check "... and reads the measured Secure Boot state and kernel command line" sh -c "
+grep -qx 'measured secure_boot: disabled' '$T/el.out' &&
+grep -qx \"measured cmdline: \$(sed 's/^BOOT_IMAGE=//' '$FX/ovmf-noble.cmdline')\" '$T/el.out'"
+if command -v tpm2_eventlog >/dev/null 2>&1; then
+	tpm2_eventlog "$FX/ovmf-noble.bin" 2>/dev/null | sed -n '/^  sha256:/,/^  sha384:/p' > "$T/ref.out"
+	check "... the same values tpm2_eventlog (tpm2-tools) computes" sh -c "
+	while read -r i v; do grep -q \"^ *\$i *: 0x\$v\$\" '$T/ref.out' || exit 1; done < '$FX/ovmf-noble.pcrs'"
+fi
+mkdir -p "$H/sys/kernel/security/tpm0"
+ELOG="$H/sys/kernel/security/tpm0/binary_bios_measurements"
+cp "$FX/ovmf-noble.bin" "$ELOG"
+cp "$FX/ovmf-noble.cmdline" "$H/proc/cmdline"
+E="$(start_swtpm e)"
+fw replay "${E##*port=}" "$ELOG"
+evq() { quote "$E" "$@"; }
+everify() { python3 "$VERIFY" verify "$1" --host "$T/ehost.json" --nonce "$2" > "$T/v.out" 2>&1; VRC=$?; }
+N="$(nonce)"; evq "$N" "$T/e0"
+python3 "$VERIFY" enroll "$T/e0" --nonce "$N" --out "$T/ehost.json" > "$T/e.out" 2>&1; rc=$?
+eq "enroll with a firmware event log that replays" "$rc" 0
+check "... records its events and the measured Secure Boot state" python3 -c "
+import json; h=json.load(open('$T/ehost.json'))
+assert h['eventlog'] is True and len(h['golden_events'])==117
+assert h['secure_boot']=='disabled' and h['secure_boot_source']=='measured'"
+N="$(nonce)"; evq "$N" "$T/e1"; everify "$T/e1" "$N"
+check "verify: the log replays to the quoted PCRs 0-9" sh -c \
+	"[ $VRC -eq 0 ] && grep -qF 'PASS the firmware event log replays to the quoted PCRs 0,1,2,3,4,5,7,8,9' '$T/v.out' && grep -qF 'PASS the reported kernel command line is the one GRUB measured' '$T/v.out'"
+GRUBD="$(fw digest "$ELOG" 'grubx64.efi')"
+fw swap "$FX/ovmf-noble.bin" "$ELOG" "$GRUBD" "$(printf '5%.0s' $(seq 64))"
+N="$(nonce)"; evq "$N" "$T/e2"; everify "$T/e2" "$N"
+check "a log edited by root (another GRUB hash) does not replay, naming PCR 4" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the firmware event log replays to the quoted PCRs 0,1,2,3,4,5,7,8,9 (PCR 4 differs)' '$T/v.out'"
+head -c 20000 "$FX/ovmf-noble.bin" > "$ELOG"
+N="$(nonce)"; evq "$N" "$T/e3"; everify "$T/e3" "$N"
+check "a truncated log fails as not well formed" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the firmware event log is well formed (the firmware event log is truncated' '$T/v.out'"
+rm -f "$ELOG"
+N="$(nonce)"; evq "$N" "$T/e4"; everify "$T/e4" "$N"
+check "hiding the log from a host enrolled with one fails" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the report carries the firmware event log' '$T/v.out'"
+cp "$FX/ovmf-noble.bin" "$ELOG"
+echo "BOOT_IMAGE=/vmlinuz-6.8.0-147-generic root=LABEL=cloudimg-rootfs ro init=/bin/sh" > "$H/proc/cmdline"
+N="$(nonce)"; evq "$N" "$T/e5"; everify "$T/e5" "$N"
+check "a reported command line that GRUB did not measure fails" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the reported kernel command line is the one GRUB measured' '$T/v.out'"
+cp "$FX/ovmf-noble.cmdline" "$H/proc/cmdline"
+mkdir -p "$H/sys/firmware/efi/efivars"
+printf '\006\000\000\000\001' > "$H/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+N="$(nonce)"; evq "$N" "$T/e6"; everify "$T/e6" "$N"
+check "a reported Secure Boot 'enabled' that the firmware measured as off fails" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the reported Secure Boot state matches the measured one (disabled)' '$T/v.out'"
+rm -rf "${H:?}/sys/firmware"
+# the next boot runs another GRUB: same TPM (restarted, so PCRs reset)
+kill "$(cat "$T/tpm-e/pid")"; sleep 1
+E="$(start_swtpm e)"
+fw swap "$FX/ovmf-noble.bin" "$ELOG" "$GRUBD" "$(printf '6%.0s' $(seq 64))"
+fw replay "${E##*port=}" "$ELOG"
+N="$(nonce)"; evq "$N" "$T/e7"; everify "$T/e7" "$N"
+check "a changed boot chain names the event: PCR 4, grubx64.efi changed" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'PCR 4 differs) - PCR 4: EV_EFI_BOOT_SERVICES_APPLICATION EFI\\ubuntu\\grubx64.efi changed' '$T/v.out' &&
+	grep -qF 'PASS the firmware event log replays' '$T/v.out' && grep -qF 'PASS the quote is signed by the enrolled attestation key' '$T/v.out'"
+fw swap "$FX/ovmf-noble.bin" "$T/bad.bin" "$GRUBD" "$(printf '7%.0s' $(seq 64))"
+cp "$T/bad.bin" "$ELOG"
+N="$(nonce)"; evq "$N" "$T/e8"
+python3 "$VERIFY" enroll "$T/e8" --nonce "$N" --out "$T/ehost.bad" > "$T/e.out" 2>&1; erc=$?
+python3 "$VERIFY" enroll "$T/e8" --nonce "$N" --out "$T/ehost.bad" --ignore-eventlog > "$T/e.out" 2>&1; irc=$?
+check "a log that does not replay is refused at enroll, unless --ignore-eventlog" sh -c "
+[ $erc -eq 1 ] && [ $irc -eq 0 ] && python3 -c \"import json; assert json.load(open('$T/ehost.bad'))['eventlog'] is False\""
+rm -f "$ELOG"
+
+# ---- P2-1: the IMA measurement log ----
+# The same guest booted with ima_policy=tcb: its firmware log and IMA log.
+# The software TPM gets IMA's first 2000 records, the host's log has all
+# 2099 (IMA kept measuring after the quote).
+gunzip -c "$FX/ima-noble.bin.gz" > "$T/ima.bin"
+mkdir -p "$H/sys/kernel/security/ima"
+IMAL="$H/sys/kernel/security/ima/binary_runtime_measurements"
+cp "$T/ima.bin" "$IMAL"
+cp "$FX/ovmf-noble-ima.bin" "$ELOG"; cp "$FX/ovmf-noble-ima.cmdline" "$H/proc/cmdline"
+G="$(start_swtpm g)"
+fw replay "${G##*port=}" "$ELOG"
+fw ima "${G##*port=}" "$T/ima.bin" 2000
+iverify() { python3 "$VERIFY" verify "$1" --host "$T/ihost.json" --nonce "$2" "${@:3}" > "$T/v.out" 2>&1; VRC=$?; }
+check "the IMA parser replays the real log to that guest's PCR 10" sh -c "
+python3 -B '$T/fw.py' '$VERIFY' imaref '$T/ima.bin' 1 >/dev/null &&
+python3 -B -c \"
+import importlib.machinery as m, importlib.util as u, hashlib
+ld=m.SourceFileLoader('v','$VERIFY'); s=u.spec_from_loader('v',ld); v=u.module_from_spec(s); ld.exec_module(v)
+r=v.parse_ima(open('$T/ima.bin','rb').read())
+want=[l.split()[1] for l in open('$FX/ovmf-noble-ima.pcrs') if l.split()[0]=='10'][0]
+assert v.ima_prefix(r, want)==len(r)==2099\""
+N="$(nonce)"; quote "$G" "$N" "$T/i0"
+python3 "$VERIFY" enroll "$T/i0" --nonce "$N" --out "$T/ihost.json" > "$T/e.out" 2>&1; rc=$?
+check "enroll with an IMA log: PCR 10 is quoted but not part of the boot chain" sh -c "[ $rc -eq 0 ] && python3 -c \"
+import json; h=json.load(open('$T/ihost.json'))
+assert h['ima'] is True and '10' not in h['golden_pcrs'] and '6' in h['golden_pcrs']\""
+N="$(nonce)"; quote "$G" "$N" "$T/i1"; iverify "$T/i1" "$N"
+check "verify: the IMA log meets the quoted PCR 10 at record 2000 of 2099" sh -c \
+	"[ $VRC -eq 0 ] && grep -qF 'PASS the IMA log replays to the quoted PCR 10 (2000 of 2099 records; the rest came after the quote)' '$T/v.out'"
+check "... IMA's boot_aggregate is this boot's PCRs 0-9, and the count is shown" sh -c \
+	"grep -qF \"PASS IMA's boot_aggregate is this boot's PCRs 0-9\" '$T/v.out' && grep -qF 'INFO IMA measured 2000 files' '$T/v.out'"
+fw imaref "$T/ima.bin" 2000 > "$T/imaref"
+iverify "$T/i1" "$N" --ima-reference "$T/imaref" --ima-unknown fail
+check "every measured file matches a reference list from a known-good host" sh -c \
+	"[ $VRC -eq 0 ] && grep -qF 'PASS every measured file is on the reference list' '$T/v.out'"
+SH="$(grep -m1 ' /usr/bin/sh$' "$T/imaref" | cut -d' ' -f1)"
+sed "s#^$SH  /usr/bin/sh\$#$(printf '0%.0s' $(seq 64))  /usr/bin/sh#" "$T/imaref" > "$T/imaref.sh"
+iverify "$T/i1" "$N" --ima-reference "$T/imaref.sh"
+check "a program whose hash is not the reference one fails, by name" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL every measured file on the reference list has its reference hash (differs: /usr/bin/sh' '$T/v.out'"
+grep -v ' /usr/sbin/sshd$' "$T/imaref" > "$T/imaref.nosshd"
+iverify "$T/i1" "$N" --ima-reference "$T/imaref.nosshd"
+check "a file not on the list is shown (INFO), and fails with --ima-unknown fail" sh -c "
+[ $VRC -eq 0 ] && grep -qF 'INFO every measured file is on the reference list (1 not: /usr/sbin/sshd)' '$T/v.out' &&
+python3 '$VERIFY' verify '$T/i1' --host '$T/ihost.json' --nonce '$N' --ima-reference '$T/imaref.nosshd' --ima-unknown fail > '$T/v2.out' 2>&1
+[ \$? -eq 1 ] && grep -qF 'FAIL every measured file is on the reference list' '$T/v2.out'"
+fw swap "$T/ima.bin" "$IMAL" "$SH" "$(printf '0%.0s' $(seq 64))"
+N="$(nonce)"; quote "$G" "$N" "$T/i2"; iverify "$T/i2" "$N"
+check "an IMA log edited by root (another hash for /usr/bin/sh) does not replay" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the IMA log replays to the quoted PCR 10' '$T/v.out'"
+rm -f "$IMAL"
+N="$(nonce)"; quote "$G" "$N" "$T/i3"; iverify "$T/i3" "$N"
+check "hiding the IMA log from a host enrolled with one fails" sh -c \
+	"[ $VRC -eq 1 ] && grep -qF 'FAIL the bundle carries the IMA measurement log' '$T/v.out'"
+cp "$T/ima.bin" "$IMAL"
+N="$(nonce)"; quote "$G" "$N" "$T/i4"
+python3 "$VERIFY" ima "$T/i4" --list > "$T/ima.out" 2>&1; rc=$?
+check "'ima --list' shows the records up to the quote" sh -c \
+	"[ $rc -eq 0 ] && grep -qF -- '- sha256:$SH /usr/bin/sh' '$T/ima.out' && [ \$(grep -c ' sha256:' '$T/ima.out') -le 2001 ]"
+rm -f "$IMAL" "$ELOG"
+
 tap_done

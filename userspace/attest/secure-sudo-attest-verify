@@ -20,10 +20,23 @@ no TPM and no secure_sudo install.
       Show the policy the kernel measured (its log, replayed) and its digest,
       for --allow-policy. Informational: it does not check the signature.
 
+  secure-sudo-attest-verify eventlog FILE
+      Show a firmware TPM event log (a raw binary_bios_measurements file, or
+      the one in a bundle) and the PCR values it replays to.
+
+  secure-sudo-attest-verify ima BUNDLE [--ima-reference SHA256SUMS] [--list]
+      Show where a bundle's IMA log meets the quoted PCR 10, and which
+      measured files differ from (or are missing in) a reference list.
+
   secure-sudo-attest-verify verify BUNDLE --host HOST.json --nonce NONCE
                                    [--max-age SECONDS] [--json]
+                                   [--ima-reference FILE] [--ima-unknown fail]
       Check a bundle against the enrolled host. Exit 0 only when every check
-      passes; each check is printed.
+      passes; each check is printed (INFO lines never fail).
+
+Enrollment also replays the firmware event log and the IMA log when the
+bundle has them (--ignore-eventlog / --ignore-ima to opt out); a host
+enrolled with one must keep sending it.
 
 What a pass means: this TPM (enrolled key) signed, for this nonce, PCR
 values equal to the enrolled boot chain, together with this exact report;
@@ -313,9 +326,425 @@ def replay_policy(report, pcrs, out):
     return hashlib.sha256(canon.encode()).hexdigest(), locked, kv
 
 
+# ---------------- P2-1: the firmware (TCG2) event log ----------------
+#
+# binary_bios_measurements is what the firmware, shim, GRUB and the kernel's
+# EFI stub measured into PCRs 0-9, one event per extend. It is root-readable
+# and root-forgeable as a file, but not as PCR values: replaying it must give
+# the quoted PCRs, so a log that replays is the log of this boot. Format: TCG
+# PC Client Platform Firmware Profile, "crypto agile" (TPM 2.0): a first event
+# in the old SHA-1 layout carrying "Spec ID Event03" (the digest sizes), then
+# TCG_PCR_EVENT2 records. Little-endian throughout.
+
+EV_NO_ACTION = 0x00000003
+EV_NAMES = {
+    0x00000000: "EV_PREBOOT_CERT", 0x00000001: "EV_POST_CODE", 0x00000003: "EV_NO_ACTION",
+    0x00000004: "EV_SEPARATOR", 0x00000005: "EV_ACTION", 0x00000006: "EV_EVENT_TAG",
+    0x00000007: "EV_S_CRTM_CONTENTS", 0x00000008: "EV_S_CRTM_VERSION",
+    0x00000009: "EV_CPU_MICROCODE", 0x0000000A: "EV_PLATFORM_CONFIG_FLAGS",
+    0x0000000B: "EV_TABLE_OF_DEVICES", 0x0000000C: "EV_COMPACT_HASH", 0x0000000D: "EV_IPL",
+    0x0000000E: "EV_IPL_PARTITION_DATA", 0x0000000F: "EV_NONHOST_CODE",
+    0x00000010: "EV_NONHOST_CONFIG", 0x00000011: "EV_NONHOST_INFO",
+    0x00000012: "EV_OMIT_BOOT_DEVICE_EVENTS",
+    0x80000001: "EV_EFI_VARIABLE_DRIVER_CONFIG", 0x80000002: "EV_EFI_VARIABLE_BOOT",
+    0x80000003: "EV_EFI_BOOT_SERVICES_APPLICATION", 0x80000004: "EV_EFI_BOOT_SERVICES_DRIVER",
+    0x80000005: "EV_EFI_RUNTIME_SERVICES_DRIVER", 0x80000006: "EV_EFI_GPT_EVENT",
+    0x80000007: "EV_EFI_ACTION", 0x80000008: "EV_EFI_PLATFORM_FIRMWARE_BLOB",
+    0x80000009: "EV_EFI_HANDOFF_TABLES", 0x8000000A: "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+    0x8000000B: "EV_EFI_HANDOFF_TABLES2", 0x8000000C: "EV_EFI_VARIABLE_BOOT2",
+    0x800000E0: "EV_EFI_VARIABLE_AUTHORITY", 0x800000E1: "EV_EFI_SPDM_FIRMWARE_BLOB",
+    0x800000E2: "EV_EFI_SPDM_FIRMWARE_CONFIG",
+}
+TPM_ALG_SIZES = {0x0004: 20, 0x000B: 32, 0x000C: 48, 0x000D: 64, 0x0012: 32}
+EFI_GLOBAL_GUID = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+# what firmware, GRUB and the EFI stub extend (0-9) and shim (14, MokList)
+ELOG_PCRS = frozenset(list(range(0, 10)) + [14])
+ELOG_MAX_EVENTS = 20000
+
+
+class LE:
+    def __init__(self, b):
+        self.b, self.o = b, 0
+
+    def take(self, n):
+        if n < 0 or self.o + n > len(self.b):
+            raise Bad("the firmware event log is truncated (at byte %d)" % self.o)
+        v = self.b[self.o:self.o + n]
+        self.o += n
+        return v
+
+    def u8(self):
+        return self.take(1)[0]
+
+    def u16(self):
+        return struct.unpack("<H", self.take(2))[0]
+
+    def u32(self):
+        return struct.unpack("<I", self.take(4))[0]
+
+    def u64(self):
+        return struct.unpack("<Q", self.take(8))[0]
+
+    def left(self):
+        return len(self.b) - self.o
+
+
+def efi_guid(b):
+    a, b2, c = struct.unpack("<IHH", b[:8])
+    return "%08x-%04x-%04x-%s-%s" % (a, b2, c, b[8:10].hex(), b[10:16].hex())
+
+
+def _ucs2(b):
+    try:
+        return b.decode("utf-16-le").split("\0", 1)[0]
+    except UnicodeDecodeError:
+        return ""
+
+
+def _printable(b, n=120):
+    s = b.split(b"\0", 1)[0].decode("ascii", "replace")
+    s = "".join(c if 0x20 <= ord(c) < 0x7f else "?" for c in s)
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+
+def _devpath_file(b):
+    """The last file-path node of an EFI device path, or '' (best effort)."""
+    names, o = [], 0
+    while o + 4 <= len(b):
+        t, st, ln = b[o], b[o + 1], struct.unpack("<H", b[o + 2:o + 4])[0]
+        if ln < 4 or o + ln > len(b):
+            break
+        if t == 0x04 and st == 0x04:
+            names.append(_ucs2(b[o + 4:o + ln]))
+        if t == 0x7f and st == 0xff:
+            break
+        o += ln
+    return "\\".join(n.strip("\\") for n in names if n)
+
+
+def describe_event(etype, data):
+    """A short human description; the variable name and value where it is one."""
+    info = {}
+    try:
+        if etype in (0x80000001, 0x80000002, 0x8000000C, 0x800000E0) and len(data) >= 32:
+            r = LE(data)
+            guid = efi_guid(r.take(16))
+            nlen, dlen = r.u64(), r.u64()
+            name = _ucs2(r.take(2 * nlen))
+            info.update(var=name, guid=guid, value=r.take(dlen))
+            return "%s" % name, info
+        if etype in (0x80000003, 0x80000004, 0x80000005) and len(data) >= 32:
+            r = LE(data)
+            r.u64(); r.u64(); r.u64()
+            dp = r.take(r.u64())
+            return _devpath_file(dp) or "(%d-byte device path)" % len(dp), info
+        if etype in (0x0000000D, 0x80000007, 0x00000005, 0x00000001, 0x00000006):
+            return _printable(data), info
+        if etype == 0x00000008:
+            return _ucs2(data) or data.hex()[:40], info
+        if etype == EV_NO_ACTION:
+            return _printable(data[:24]), info
+        if etype == 0x00000004:
+            return data.hex()[:16], info
+    except Bad:
+        pass
+    return "(%d bytes)" % len(data), info
+
+
+def parse_eventlog(raw):
+    """-> (events, start): events are dicts (pcr, type, sha256, data);
+    start maps a PCR to its value before the first extend."""
+    r = LE(raw)
+    pcr0, et0 = r.u32(), r.u32()
+    r.take(20)
+    spec = r.take(r.u32())
+    if et0 != EV_NO_ACTION or pcr0 != 0 or not spec.startswith(b"Spec ID Event03\0"):
+        raise Bad("the firmware event log is not a TPM 2.0 (crypto agile) log")
+    s = LE(spec[16:])
+    s.u32(); s.u8(); s.u8(); s.u8(); s.u8()
+    nalg = s.u32()
+    if not 0 < nalg <= 16:
+        raise Bad("the firmware event log names %d digest algorithms" % nalg)
+    sizes = {}
+    for _ in range(nalg):
+        alg, sz = s.u16(), s.u16()
+        sizes[alg] = sz
+    if ALG_SHA256 not in sizes or sizes[ALG_SHA256] != 32:
+        raise Bad("the firmware event log has no SHA-256 bank")
+    events, start = [], {}
+    while r.left() >= 8:
+        pcr, et = r.u32(), r.u32()
+        if pcr == 0xffffffff and et == 0xffffffff:
+            break               # some firmware pads the area
+        n = r.u32()
+        if n > len(sizes):
+            raise Bad("a firmware event has %d digests" % n)
+        dg = None
+        for _ in range(n):
+            alg = r.u16()
+            if alg not in sizes:
+                raise Bad("a firmware event uses an algorithm the log did not declare")
+            d = r.take(sizes[alg])
+            if alg == ALG_SHA256:
+                dg = d
+        data = r.take(r.u32())
+        if pcr > 23:
+            raise Bad("a firmware event names PCR %d" % pcr)
+        if et == EV_NO_ACTION:
+            # not extended; StartupLocality sets PCR 0's starting value
+            if pcr == 0 and data.startswith(b"StartupLocality\0") and len(data) >= 17:
+                start[0] = bytes(31) + data[16:17]
+            continue
+        if dg is None:
+            raise Bad("a firmware event has no SHA-256 digest")
+        events.append({"pcr": pcr, "type": et, "sha256": dg, "data": data})
+        if len(events) > ELOG_MAX_EVENTS:
+            raise Bad("the firmware event log has more than %d events" % ELOG_MAX_EVENTS)
+    if r.left() and any(r.b[r.o:]) and set(r.b[r.o:]) != {0xff}:
+        raise Bad("the firmware event log has %d stray bytes at its end" % r.left())
+    return events, start
+
+
+def replay_eventlog(events, start):
+    pcrs = {}
+    for e in events:
+        v = pcrs.get(e["pcr"], start.get(e["pcr"], bytes(32)))
+        pcrs[e["pcr"]] = hashlib.sha256(v + e["sha256"]).digest()
+    return pcrs
+
+
+def eventlog_facts(events):
+    """Facts the log proves once it replays: the Secure Boot state (PCR 7,
+    the SecureBoot variable as the firmware measured it) and the kernel
+    command line GRUB measured (PCR 8)."""
+    facts = {}
+    for e in events:
+        if e["type"] == 0x80000001 and e["pcr"] == 7:
+            _, info = describe_event(e["type"], e["data"])
+            # the digest covers the whole UEFI_VARIABLE_DATA, so the value
+            # shown is the value measured
+            if info.get("var") == "SecureBoot" and info.get("guid") == EFI_GLOBAL_GUID and \
+                    hashlib.sha256(e["data"]).digest() == e["sha256"]:
+                v = info.get("value") or b"\0"
+                facts["secure_boot"] = "enabled" if v[:1] == b"\x01" else "disabled"
+        if e["type"] == 0x0000000D and e["pcr"] == 8:
+            t = e["data"].split(b"\0", 1)[0]
+            if t.startswith(b"kernel_cmdline: "):
+                cmd = t[len(b"kernel_cmdline: "):]
+                # GRUB measures the string it logs (without the NUL)
+                if hashlib.sha256(cmd).digest() == e["sha256"]:
+                    facts["cmdline"] = cmd.decode("ascii", "replace")
+    return facts
+
+
+def event_rows(events):
+    """[pcr, type name, sha256 hex, description] per event, for the host record."""
+    rows = []
+    for e in events:
+        desc, _ = describe_event(e["type"], e["data"])
+        rows.append([e["pcr"], EV_NAMES.get(e["type"], "0x%08x" % e["type"]),
+                     e["sha256"].hex(), desc])
+    return rows
+
+
+def eventlog_diff(old_rows, new_rows, pcr):
+    """Name the first event of PCR that differs from the enrolled boot."""
+    a = [r for r in old_rows if r[0] == pcr]
+    b = [r for r in new_rows if r[0] == pcr]
+    for i in range(max(len(a), len(b))):
+        if i >= len(a):
+            return "new event %s %s" % (b[i][1], b[i][3])
+        if i >= len(b):
+            return "event %s %s is gone" % (a[i][1], a[i][3])
+        if a[i][1:3] != b[i][1:3]:
+            if a[i][1] == b[i][1] and a[i][3] == b[i][3]:
+                return "%s %s changed" % (b[i][1], b[i][3])
+            return "%s %s, was %s %s" % (b[i][1], b[i][3], a[i][1], a[i][3])
+    return "same events"
+
+
+def check_eventlog(report, pcrs, policy_pcr, out):
+    """Replay the reported firmware log against the quoted PCRs. Returns
+    (rows, facts) when it replays, else None."""
+    try:
+        raw = base64.b64decode(report.get("tpm_eventlog_b64") or "", validate=True)
+    except ValueError:
+        raw = b""
+    if not raw:
+        out.append((False, "the report carries the firmware event log"))
+        return None
+    out.append((hashlib.sha256(raw).hexdigest() == report.get("tpm_eventlog_sha256"),
+                "the firmware event log is the one the report hashed"))
+    try:
+        events, start = parse_eventlog(raw)
+    except Bad as e:
+        out.append((False, "the firmware event log is well formed (%s)" % e))
+        return None
+    out.append((True, "the firmware event log is well formed (%d events)" % len(events)))
+    got = replay_eventlog(events, start)
+    quoted = sorted(int(k) for k in pcrs if int(k) in ELOG_PCRS and int(k) != policy_pcr)
+    bad = [i for i in quoted
+           if got.get(i, start.get(i, bytes(32))).hex() != pcrs[str(i)]]
+    out.append((not bad, "the firmware event log replays to the quoted PCRs %s%s" % (
+        ",".join(map(str, quoted)),
+        "" if not bad else " (PCR %s differ%s)" % (",".join(map(str, bad)),
+                                                   "s" if len(bad) == 1 else ""))))
+    if bad:
+        return None
+    facts = eventlog_facts(events)
+    rsb = report.get("secure_boot")
+    if "secure_boot" in facts and rsb in ("enabled", "disabled"):
+        out.append((rsb == facts["secure_boot"],
+                    "the reported Secure Boot state matches the measured one (%s)" %
+                    facts["secure_boot"]))
+    if "cmdline" in facts and report.get("cmdline"):
+        # GRUB measures "PATH ARGS"; the kernel shows it as "BOOT_IMAGE=PATH ARGS"
+        rc = report["cmdline"].strip()
+        out.append((rc in (facts["cmdline"], "BOOT_IMAGE=" + facts["cmdline"]),
+                    "the reported kernel command line is the one GRUB measured"))
+    return event_rows(events), facts
+
+
+# ---------------- P2-1: the IMA measurement log ----------------
+#
+# With an IMA policy (ima_policy=tcb, or a custom one), the kernel hashes
+# every program, library and root-read file before it runs or is read, and
+# extends PCR 10 with each record. binary_runtime_measurements is that list.
+# The host reads it after the quote, so it can hold records measured after
+# the quote was signed: the verifier looks for the entry at which the replay
+# equals the quoted PCR 10 and checks the records up to there.
+#
+# Record: pcr u32, template hash (SHA-1, 20 bytes), template name, template
+# data (both u32-length-prefixed, little endian). The SHA-256 bank is extended
+# with SHA256(template data); a violation (a file changed while measured, or
+# open for write while being run) has an all-zero template hash and extends
+# 0xff..ff. ima-ng/ima-sig/ima-buf data is: d-ng ("ALG:\0" + digest), n-ng
+# (name, NUL), then sig/buf, each u32-length-prefixed.
+
+IMA_PCR = 10
+IMA_TEMPLATES = ("ima-ng", "ima-sig", "ima-buf", "ima-modsig", "evm-sig")
+IMA_MAX_RECORDS = 2000000
+
+
+def parse_ima(raw):
+    """-> list of dicts: pcr, template, sha256 (what the bank was extended
+    with), alg, digest (the file's), name, violation."""
+    r = LE(raw)
+    recs = []
+    while r.left():
+        pcr = r.u32()
+        th = r.take(20)
+        tname = r.take(r.u32()).decode("ascii", "replace")
+        td = r.take(r.u32())
+        if tname not in IMA_TEMPLATES:
+            raise Bad("IMA template %s is not supported (boot with ima_template=ima-ng)" % tname)
+        f = LE(td)
+        dng = f.take(f.u32())
+        name = f.take(f.u32()).split(b"\0", 1)[0].decode("utf-8", "replace")
+        alg, _, dig = dng.partition(b":\0")
+        viol = th == bytes(20)
+        recs.append({"pcr": pcr, "template": tname, "name": name,
+                     "alg": alg.decode("ascii", "replace"), "digest": dig.hex(),
+                     "sha256": b"\xff" * 32 if viol else hashlib.sha256(td).digest(),
+                     "violation": viol})
+        if len(recs) > IMA_MAX_RECORDS:
+            raise Bad("the IMA log has more than %d records" % IMA_MAX_RECORDS)
+    return recs
+
+
+def ima_prefix(recs, want_hex):
+    """The number of records whose replay equals the quoted PCR 10, or None."""
+    v = bytes(32)
+    if v.hex() == want_hex:
+        return 0
+    n = 0
+    for i, rec in enumerate(recs):
+        if rec["pcr"] != IMA_PCR:
+            continue
+        v = hashlib.sha256(v + rec["sha256"]).digest()
+        n = i + 1
+        if v.hex() == want_hex:
+            return n
+    return None
+
+
+def load_ima_reference(path):
+    """sha256sum-style lines ("HEX  PATH", "HEX *PATH") -> {path: {hex}}."""
+    ref = {}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for ln in f:
+            ln = ln.rstrip("\n")
+            if not ln or ln.startswith("#"):
+                continue
+            h, _, p = ln.partition(" ")
+            p = p.lstrip(" *")
+            if len(h) != 64 or not p:
+                raise Bad("bad IMA reference line: %s" % ln[:80])
+            ref.setdefault(p, set()).add(h.lower())
+    return ref
+
+
+def check_ima(bundle, pcrs, out, reference=None, unknown_fail=False):
+    """Replay the bundle's IMA log against the quoted PCR 10. Returns the
+    records it covers, or None."""
+    try:
+        raw = base64.b64decode(bundle.get("ima_log_b64") or "", validate=True)
+    except ValueError:
+        raw = b""
+    if not raw:
+        out.append((False, "the bundle carries the IMA measurement log"))
+        return None
+    if str(IMA_PCR) not in pcrs:
+        out.append((False, "PCR 10 (IMA) is in the quote"))
+        return None
+    try:
+        recs = parse_ima(raw)
+    except Bad as e:
+        out.append((False, "the IMA log is well formed (%s)" % e))
+        return None
+    n = ima_prefix(recs, pcrs[str(IMA_PCR)])
+    if n is None:
+        note = ""
+    elif n < len(recs):
+        note = " (%d of %d records; the rest came after the quote)" % (n, len(recs))
+    else:
+        note = " (%d records)" % n
+    out.append((n is not None, "the IMA log replays to the quoted PCR 10" + note))
+    if n is None:
+        return None
+    recs = recs[:n]
+    if recs and recs[0]["name"] == "boot_aggregate" and recs[0]["alg"] == "sha256" and \
+            all(str(i) in pcrs for i in range(10)):
+        agg = hashlib.sha256(b"".join(bytes.fromhex(pcrs[str(i)]) for i in range(10))).hexdigest()
+        out.append((recs[0]["digest"] == agg,
+                    "IMA's boot_aggregate is this boot's PCRs 0-9"))
+    viol = sum(1 for r in recs if r["violation"])
+    out.append((None, "IMA measured %d files, %d violation(s) (a file changed or open "
+                "for write while measured)" % (len(recs), viol)))
+    if reference is not None:
+        bad, unknown = [], []
+        for r in recs:
+            if r["violation"] or r["name"] == "boot_aggregate" or r["template"] == "ima-buf":
+                continue
+            want = reference.get(r["name"])
+            if want is None:
+                unknown.append(r["name"])
+            elif r["alg"] != "sha256" or r["digest"] not in want:
+                bad.append(r["name"])
+        out.append((not bad, "every measured file on the reference list has its reference "
+                    "hash%s" % ("" if not bad else " (differs: %s%s)" % (
+                        ", ".join(bad[:5]), " and %d more" % (len(bad) - 5) if len(bad) > 5 else ""))))
+        out.append((False if (unknown and unknown_fail) else None if unknown else True,
+                    "every measured file is on the reference list%s" % (
+                        "" if not unknown else " (%d not: %s%s)" % (
+                            len(unknown), ", ".join(unknown[:5]),
+                            " ..." if len(unknown) > 5 else ""))))
+    return recs
+
+
 def report_lines(out, failed):
     for ok, text in out:
-        print("%s %s" % ("PASS" if ok else "FAIL", text))
+        print("%s %s" % ("INFO" if ok is None else "PASS" if ok else "FAIL", text))
     print("RESULT: %s" % ("FAIL (%d check(s))" % failed if failed else "PASS"))
 
 
@@ -351,7 +780,15 @@ def cmd_enroll(a):
         out.append((bool(policy), "the report carries a policy digest"))
     if a.previous and prev.get("policy_source") == "measured":
         out.append((measured, "the kernel still measures the policy (no downgrade to reported)"))
-    failed = sum(1 for ok, _ in out if not ok)
+    el = None
+    if not a.ignore_eventlog and (report.get("tpm_eventlog_b64") or prev.get("eventlog")):
+        el = check_eventlog(report, tpm["pcrs"], report.get("policy_pcr") if measured else None, out)
+    facts = el[1] if el else {}
+    ima = None
+    golden.pop(str(IMA_PCR), None)      # PCR 10 grows with every file IMA measures
+    if not a.ignore_ima and (b.get("ima_log_b64") or prev.get("ima")):
+        ima = check_ima(b, tpm["pcrs"], out)
+    failed = sum(1 for ok, _ in out if ok is False)
     if failed:
         report_lines(out, failed)
         print("not enrolled", file=sys.stderr)
@@ -366,7 +803,11 @@ def cmd_enroll(a):
         "policy_source": "measured" if measured else "reported",
         "policy_pcr": report.get("policy_pcr") if measured else None,
         "kernel": report.get("kernel"),
-        "secure_boot": report.get("secure_boot"),
+        "secure_boot": facts.get("secure_boot", report.get("secure_boot")),
+        "secure_boot_source": "measured" if "secure_boot" in facts else "reported",
+        "eventlog": bool(el),
+        "golden_events": el[0] if el else None,
+        "ima": ima is not None,
         "allowed_policy_sha256": sorted(set([policy] + list(a.allow_policy or []))),
         "require_lock": bool(a.require_lock),
         "accept_pcr_extenders": bool(a.accept_pcr_extenders),
@@ -378,9 +819,10 @@ def cmd_enroll(a):
         f.write("\n")
     os.replace(tmp, a.out)
     report_lines(out, 0)
-    print("enrolled %s: kernel %s, boot PCRs %s, policy %s (%s)" % (
+    print("enrolled %s: kernel %s, boot PCRs %s, policy %s (%s), firmware event log %s" % (
         host["host"], host["kernel"], ",".join(sorted(golden, key=int)),
-        policy[:16], host["policy_source"]))
+        policy[:16], host["policy_source"],
+        "%d events" % len(el[0]) if el else "not checked"))
     return 0
 
 
@@ -404,6 +846,54 @@ def cmd_policy(a):
     return 0 if all(ok for ok, _ in out) else 1
 
 
+def cmd_eventlog(a):
+    """Show a firmware event log (a bundle's, or a raw binary_bios_measurements
+    file) and the PCR values it replays to. Informational: no signature check."""
+    with open(a.file, "rb") as f:
+        raw = f.read()
+    quoted = {}
+    if raw[:1] == b"{":
+        _, _, report, tpm, _ = load_bundle(a.file)
+        quoted = tpm.get("pcrs", {})
+        try:
+            raw = base64.b64decode(report.get("tpm_eventlog_b64") or "", validate=True)
+        except ValueError:
+            raw = b""
+        if not raw:
+            print("this bundle has no firmware event log")
+            return 1
+    events, start = parse_eventlog(raw)
+    for i, (pcr, name, dg, desc) in enumerate(event_rows(events)):
+        print("%4d PCR %-2d %-34s %s %s" % (i, pcr, name, dg[:16], desc))
+    got = replay_eventlog(events, start)
+    rc = 0
+    for i in sorted(set(got) | {int(k) for k in quoted if int(k) in ELOG_PCRS}):
+        v = got.get(i, start.get(i, bytes(32))).hex()
+        mark = ""
+        if str(i) in quoted:
+            mark = "  (quoted: same)" if quoted[str(i)] == v else "  (quoted: DIFFERENT)"
+            rc |= quoted[str(i)] != v
+        print("pcr %-2d sha256 %s%s" % (i, v, mark))
+    for k, v in sorted(eventlog_facts(events).items()):
+        print("measured %s: %s" % (k, v))
+    return rc
+
+
+def cmd_ima(a):
+    """Show the IMA log in a bundle: where it meets the quoted PCR 10, and with
+    --ima-reference, which files differ or are unknown. No signature check."""
+    b, _, _, tpm, _ = load_bundle(a.bundle)
+    out = []
+    ref = load_ima_reference(a.ima_reference) if a.ima_reference else None
+    recs = check_ima(b, tpm.get("pcrs", {}), out, ref, a.ima_unknown == "fail")
+    if a.list and recs:
+        for r in recs:
+            print("%s %s:%s %s" % ("V" if r["violation"] else "-", r["alg"], r["digest"], r["name"]))
+    for ok, text in out:
+        print("%s %s" % ("info" if ok is None else "ok  " if ok else "BAD ", text))
+    return 0 if all(ok is not False for ok, _ in out) else 1
+
+
 def cmd_verify(a):
     with open(a.host) as f:
         host = json.load(f)
@@ -417,9 +907,21 @@ def cmd_verify(a):
         pcrs = tpm.get("pcrs", {})
         bad = [k for k, v in sorted(host["golden_pcrs"].items(), key=lambda kv: int(kv[0]))
                if pcrs.get(k) != v]
+        eout, el = [], None
+        if host.get("eventlog"):
+            el = check_eventlog(report, pcrs, host.get("policy_pcr"), eout)
+        why = ""
+        if bad and el and host.get("golden_events"):
+            why = "; ".join("PCR %s: %s" % (k, eventlog_diff(host["golden_events"], el[0], int(k)))
+                            for k in bad if int(k) in ELOG_PCRS)
         out.append((not bad, "the boot chain matches the enrolled one" +
                     ("" if not bad else " (PCR %s differ%s)" % (
-                        ",".join(bad), "s" if len(bad) == 1 else ""))))
+                        ",".join(bad), "s" if len(bad) == 1 else "")) +
+                    (" - " + why if why else "")))
+        out.extend(eout)
+        if host.get("ima") or b.get("ima_log_b64"):
+            ref = load_ima_reference(a.ima_reference) if a.ima_reference else None
+            check_ima(b, pcrs, out, ref, a.ima_unknown == "fail")
         out.append((report.get("secure_sudo_lsm") is True, "the secure_sudo LSM is active"))
         if host.get("policy_source") == "measured":
             m = None
@@ -449,7 +951,7 @@ def cmd_verify(a):
                 out.append((False, "the report has a readable time"))
     except Bad as e:
         out.append((False, str(e)))
-    failed = sum(1 for ok, _ in out if not ok)
+    failed = sum(1 for ok, _ in out if ok is False)
     if a.json:
         print(json.dumps({"result": "fail" if failed else "pass",
                           "checks": [{"ok": ok, "check": t} for ok, t in out]}))
@@ -471,16 +973,29 @@ def main():
     e.add_argument("--require-lock", action="store_true")
     e.add_argument("--allow-policy", action="append", metavar="SHA256")
     e.add_argument("--accept-pcr-extenders", action="store_true")
+    e.add_argument("--ignore-eventlog", action="store_true")
+    e.add_argument("--ignore-ima", action="store_true")
     e.set_defaults(fn=cmd_enroll)
     pp = s.add_parser("policy")
     pp.add_argument("bundle")
     pp.set_defaults(fn=cmd_policy)
+    el = s.add_parser("eventlog")
+    el.add_argument("file")
+    el.set_defaults(fn=cmd_eventlog)
+    im = s.add_parser("ima")
+    im.add_argument("bundle")
+    im.add_argument("--ima-reference", metavar="FILE")
+    im.add_argument("--ima-unknown", choices=("report", "fail"), default="report")
+    im.add_argument("--list", action="store_true")
+    im.set_defaults(fn=cmd_ima)
     v = s.add_parser("verify")
     v.add_argument("bundle")
     v.add_argument("--host", required=True)
     v.add_argument("--nonce", required=True)
     v.add_argument("--max-age", type=int, default=0)
     v.add_argument("--json", action="store_true")
+    v.add_argument("--ima-reference", metavar="FILE")
+    v.add_argument("--ima-unknown", choices=("report", "fail"), default="report")
     v.set_defaults(fn=cmd_verify)
     a = p.parse_args()
     try:

@@ -27,6 +27,9 @@
 #      VM_BOOT_TIMEOUT (seconds, 1200)
 #      VM_TPM=1: give the guest a TPM 2.0 (swtpm; its state lives in
 #      WORKDIR/tpm, so it is the same TPM across reboots) - gap G3.
+#      VM_UEFI=1: boot through OVMF (UEFI firmware, its variables in
+#      WORKDIR/OVMF_VARS.fd). With VM_TPM=1 the firmware and GRUB then
+#      measure the boot and leave a TPM event log (P2-1).
 set -uo pipefail
 
 cmd="${1:?usage: vm.sh up|boot|ssh|put|get|reboot|wait|stop|down WORKDIR ...}"
@@ -56,7 +59,7 @@ wait_ssh() {
 start_qemu() {
 	local n; n=$(find "$W" -maxdepth 1 -name 'console*.log' | wc -l)
 	[ -f "$W/console.log" ] && mv "$W/console.log" "$W/console.$n.log"
-	local accel="tcg,thread=multi" cpu=max tpm=()
+	local accel="tcg,thread=multi" cpu=max tpm=() fw=()
 	if [ -w /dev/kvm ]; then accel=kvm; cpu=host; fi
 	if [ "${VM_TPM:-0}" = 1 ]; then
 		mkdir -p "$W/tpm"
@@ -68,8 +71,15 @@ start_qemu() {
 		tpm=(-chardev "socket,id=chrtpm,path=$W/tpm/sock"
 			-tpmdev "emulator,id=tpm0,chardev=chrtpm" -device "tpm-tis,tpmdev=tpm0")
 	fi
+	if [ "${VM_UEFI:-0}" = 1 ]; then
+		local code=/usr/share/OVMF/OVMF_CODE_4M.fd vars=/usr/share/OVMF/OVMF_VARS_4M.fd
+		[ -r "$code" ] || { log "VM_UEFI=1 needs OVMF ($code)"; return 2; }
+		[ -f "$W/OVMF_VARS.fd" ] || cp "$vars" "$W/OVMF_VARS.fd"
+		fw=(-drive "if=pflash,format=raw,readonly=on,file=$code"
+			-drive "if=pflash,format=raw,file=$W/OVMF_VARS.fd")
+	fi
 	qemu-system-x86_64 -name ss-distro-vm -machine q35 -accel "$accel" \
-		-cpu "$cpu" -smp "$CPUS" -m "$MEM" "${tpm[@]}" \
+		-cpu "$cpu" -smp "$CPUS" -m "$MEM" "${fw[@]}" "${tpm[@]}" \
 		-drive file="$W/disk.qcow2",if=virtio,format=qcow2 \
 		-drive file="$W/seed.img",if=virtio,format=raw,readonly=on \
 		-netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$PORT"-:22 \

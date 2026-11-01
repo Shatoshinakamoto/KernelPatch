@@ -282,9 +282,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     extends it did not make. The verifier replays the log, so the policy is
     measured, not reported, once locked and with no PCR-extending program
     on `tpm_openers`. Tested by `test-attest.sh` and in-kernel
-    `ss-functest` checks against a software TPM. Still to build: EK
-    certificate checks / credential activation, and replay of the IMA and
-    TPM event logs in the verifier.
+    `ss-functest` checks against a software TPM. The verifier also replays
+    the firmware TPM event log (PCRs 0-9 and 14; names the changed event,
+    checks the measured Secure Boot state and command line) and the IMA log
+    (PCR 10, `boot_aggregate`, optional reference list), tested against
+    logs from a real OVMF + GRUB + Ubuntu 24.04 boot on a software TPM.
+    Still to build: EK certificate checks / credential activation.
 
 - [ ] **P2-2: Promote add-ons through an explicit maturity gate.**
   - Keep `temporary/` features opt-in until each has automated tests,
