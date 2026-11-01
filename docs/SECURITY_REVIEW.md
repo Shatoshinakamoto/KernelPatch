@@ -976,8 +976,11 @@ newline or other control character are also skipped now: the manifest is
 one line per file, and a newline would have started a forged line.
 `pheonixbox on` also failed outright when `/var/lib/secure_sudo` did not
 exist yet; it creates it now. Host test: `tests/userspace/test-pheonixbox.sh`
-(ROOT-ONLY, private mount namespace), 26 checks including the crafted
-names.
+(ROOT-ONLY, private mount namespace), 28 checks including the crafted
+names. CI then found that `pheonixbox add` failed silently on a machine
+without `/etc/secure_sudo`: it made its temporary file there before
+creating the directory. It creates the directory first now and reports
+any failure, and the test starts without that directory.
 
 ### 56. Promised matches the code did not make: blacklist copies and module names (v1–v12, built 2026-11-01, P1-5)
 

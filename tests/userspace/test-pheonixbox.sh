@@ -51,6 +51,10 @@ for _ in $(seq 50); do
 	sleep 0.1
 done
 in_ns() { nsenter -t "$NS" -m -- "$@"; }
+if [ "$(readlink "/proc/$NS/ns/mnt" 2>/dev/null)" = "$(readlink /proc/self/ns/mnt)" ]; then
+	skip "snapshot, tamper, repair (no private mount namespace)"
+	tap_done; exit $?
+fi
 mkdir -p "$T"/{etc.u,etc.w,lib.u,lib.w,cwd}
 if ! in_ns mount -t overlay overlay -o "lowerdir=/etc,upperdir=$T/etc.u,workdir=$T/etc.w" /etc ||
    ! in_ns mount -t overlay overlay -o "lowerdir=/var/lib,upperdir=$T/lib.u,workdir=$T/lib.w" /var/lib; then
@@ -58,6 +62,13 @@ if ! in_ns mount -t overlay overlay -o "lowerdir=/etc,upperdir=$T/etc.u,workdir=
 	tap_done; exit $?
 fi
 pb() { (cd "$T/cwd" && in_ns "$T/pb" "$@"); }
+# Start as a machine where nothing has made /etc/secure_sudo yet (a CI runner
+# is one; this box may not be). The move happens in the overlay's upper layer.
+if in_ns test -e /etc/secure_sudo; then
+	in_ns mv /etc/secure_sudo /etc/secure_sudo.pbtest-hidden
+fi
+check "the test starts without /etc/secure_sudo (inside the namespace)" in_ns test ! -e /etc/secure_sudo
+check "... and the host still has its own" sh -c "[ ! -e /etc/secure_sudo.pbtest-hidden ]"
 STORE=/var/lib/secure_sudo/pheonixbox
 
 D="$T/data"
