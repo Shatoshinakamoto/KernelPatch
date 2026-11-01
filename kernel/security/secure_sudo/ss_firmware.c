@@ -85,6 +85,11 @@ int ss_firmware_file_open(struct file *file)
 	if (is_dev && is_raw_mem_dev(mode, imajor(inode), iminor(inode))) {
 		pr_warn_ratelimited("non-sudo UID %u denied raw-memory device open\n",
 				    from_kuid(&init_user_ns, current_uid()));
+		ss_event_typed_self("firmware_guard", "current_user", "open",
+				    "raw_memory_device", "deny", "raw_memory_device",
+				    "firmware: UID %u denied raw-memory device %u:%u",
+				    from_kuid(&init_user_ns, current_uid()),
+				    imajor(inode), iminor(inode));
 		return -EPERM;
 	}
 
@@ -98,11 +103,21 @@ int ss_firmware_file_open(struct file *file)
 		 * of the fixed raw-memory nodes (handled above); otherwise a
 		 * non-resolvable firmware-sysfs write is denied, not waved. */
 		ret = fw_write ? -EPERM : 0;
+		if (ret)
+			ss_event_typed_self("firmware_guard", "current_user", "write",
+					    "(unresolvable path)", "deny",
+					    "path_unresolvable",
+					    "firmware: UID %u denied unresolvable firmware write",
+					    from_kuid(&init_user_ns, current_uid()));
 		goto out;
 	}
 
 	if (is_dev && is_blocked_dev_path(p)) {
 		pr_warn_ratelimited("non-sudo UID %u denied firmware/flash device %s\n",
+				    from_kuid(&init_user_ns, current_uid()), p);
+		ss_event_typed_self("firmware_guard", "current_user", "open", p,
+				    "deny", "firmware_device",
+				    "firmware: UID %u denied firmware/flash device %s",
 				    from_kuid(&init_user_ns, current_uid()), p);
 		ret = -EPERM;
 		goto out;
@@ -110,6 +125,10 @@ int ss_firmware_file_open(struct file *file)
 
 	if (fw_write && str_has_prefix(p, "/sys/firmware/")) {
 		pr_warn_ratelimited("non-sudo UID %u denied firmware sysfs write %s\n",
+				    from_kuid(&init_user_ns, current_uid()), p);
+		ss_event_typed_self("firmware_guard", "current_user", "write", p,
+				    "deny", "firmware_sysfs",
+				    "firmware: UID %u denied firmware sysfs write %s",
 				    from_kuid(&init_user_ns, current_uid()), p);
 		ret = -EPERM;
 		goto out;

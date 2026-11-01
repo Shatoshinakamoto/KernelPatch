@@ -396,6 +396,8 @@ int  ss_binvault_secfs(struct dentry *dir);
 
 /* #19 RadioGuard: module-load/socket/file handlers (shared); knobs late. */
 int  ss_radio_sysfs(struct kobject *kobj);
+/* #19 + #6: refuse a module by its own name (called from the module notifier). */
+int  ss_radio_module_coming(const char *modname);
 
 /* #20 Process Runtime Guard: ptrace/mprotect/mmap hooks early; knob + list late. */
 void ss_prguard_init(void);

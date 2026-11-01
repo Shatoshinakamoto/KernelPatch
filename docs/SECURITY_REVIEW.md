@@ -293,8 +293,10 @@ lockdown is usually defeated:
   (`file_open` FMODE_WRITE) so a soft-blocked radio cannot be un-blocked.
 * **Module-name evasion (CWE-41).** The load check resolves the module's path
   with the chroot-safe `ss_file_path()` and matches the basename with the
-  `.ko`/`.ko.zst` suffix stripped and `-`→`_` normalised, so `cfg-80211.ko`,
-  `cfg80211.ko.zst` and a path-games copy all match the same core name.
+  `.ko`/`.ko.zst` suffix stripped and `-`→`_` normalised, so
+  `mac80211-hwsim.ko`, `cfg80211.ko.zst` and a path-games copy all match the
+  same core name. A copy saved under an unrelated name was **not** caught
+  until #56 added the module-name check.
 * **rfkill match precision.** The `/dev/rfkill` deny matches the fully resolved
   absolute path exactly (not a substring), so an attacker cannot dodge it with
   a look-alike name, and cannot satisfy it with a chrooted `/dev/rfkill` (the
@@ -944,6 +946,65 @@ and a garbled line reached the log. Reads now return records only up to the
 last whole one that fits (a buffer smaller than one record still gets
 bytes). In-kernel test: 20,000 denials read in 4 KiB chunks, every read ends
 at a record boundary and every record is read or counted.
+
+### 54. Five controls' denials never reached the event log (v1–v12, fixed 2026-11-01, P1-5) — AU-2 / AU-12 / SI-4
+
+Writing the threat model meant naming a test and a record for every
+control. The command blacklist (#2), the firmware block (#3), the TPM-clear
+block (#5), network host mode (#10) and the scratch-tree exec block (#12)
+denied correctly but only wrote a rate-limited line to the kernel log. None
+of them raised an event, so their denials never reached the ring,
+`secure-sudod`'s logs, off-box forwarding, auditd or evidence bundles, and
+the hardware smoke test's expected TPM event could never appear. Each now
+raises a typed event (`command_blacklist`, `firmware_guard`, `tpm_guard`,
+`network_guard`, `tmp_exec`) with the object and reason, and the RAM worker
+(#7) logs each cache drop as `ram_guard`. The daemon acts only on
+`sudo_cooldown` and `time_vault` records, so the new types change no
+action. In-kernel tests: each denial is checked for its record.
+
+### 55. A file name in a PheonixBox-protected directory could run a root command (v7–v12, fixed 2026-11-01) — SI-10 / AC-6 / CWE-78
+
+PheonixBox (#21) captured and restored POSIX ACLs by pasting each protected
+file's path into a quoted `system()` line for `getfacl`/`setfacl`. Paths with
+spaces were skipped, but a quote was not, so a file named
+`x';touch${IFS}pwned;'` in a protected directory ran `touch pwned` as root
+when PheonixBox was enabled or snapshotted (reproduced with the v12
+helper). Anyone who can create files in a directory you protect, for
+example a web root owned by a service account, got root. The tools now run
+through `fork`/`execvp` with an argument vector and no shell. Names with a
+newline or other control character are also skipped now: the manifest is
+one line per file, and a newline would have started a forged line.
+`pheonixbox on` also failed outright when `/var/lib/secure_sudo` did not
+exist yet; it creates it now. Host test: `tests/userspace/test-pheonixbox.sh`
+(ROOT-ONLY, private mount namespace), 26 checks including the crafted
+names.
+
+### 56. Promised matches the code did not make: blacklist copies and module names (v1–v12, built 2026-11-01, P1-5)
+
+FEATURE_MAP said a copy of a blacklisted program would not get around #2;
+the code matched only the path and the inode, so a copy at a new path ran.
+Each blacklist entry is now fingerprinted (SHA-256 and size) when the list is
+loaded, and a non-sudo exec of a file with the same size is hashed and
+compared, so an exact copy is refused (`blacklisted_content`). Only
+same-size files are hashed, so other execs cost nothing. This review's #16
+said a renamed RadioGuard module was caught; it was not, because the check
+read the file name, and `init_module(2)` has no file name at all. The same
+was true of #6's name entries. A module notifier now checks the module's own
+name just before its init code runs, for every load path (renamed file,
+compressed module, `init_module`), for both RadioGuard and the driver
+blacklist. In-kernel tests: an exact copy refused and a changed copy run;
+a renamed `test_module` refused by its blacklisted name through both load
+calls; a renamed `mac80211_hwsim` refused by RadioGuard through both.
+
+### 57. Built binaries were committed and could be installed instead of a fresh build (found 2026-11-01)
+
+`secure-sudo-otp`, `secure-sudo-pheonixbox` and both PAM modules were in the
+repository as compiled files. `install.sh` runs `make install` in each
+directory, and make skips the build when the binary is not older than its
+source, which after a fresh clone depends on checkout order. A stale
+binary, such as the PheonixBox helper with #55, could have been installed
+over the fixed source. They are removed from the repository and listed in
+`.gitignore`; the gate already cleans and rebuilds every component.
 
 ---
 

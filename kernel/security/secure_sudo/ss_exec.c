@@ -8,11 +8,16 @@
  * enforcement point but moves the policy in from userspace through securityfs,
  * and matches by (device, inode) and canonical path instead of basename:
  *
- *   - inode match  catches renaming the blacklisted binary (same inode).
- *   - path  match  catches dropping a different binary at the blacklisted path.
- *
- * (A copy to a fresh path is a new inode at a new name and is out of scope
- * here - that is what the hash-based driver blacklist and TimeVault are for.)
+ *   - inode match    catches renaming the blacklisted binary (same inode).
+ *   - path  match    catches dropping a different binary at the blacklisted
+ *                    path.
+ *   - content match  catches a copy at a new path (a new inode at a new
+ *                    name): each entry's SHA-256 and size are taken when the
+ *                    list is loaded, and an exec whose file has the same size
+ *                    is hashed and compared. Only same-size files are hashed,
+ *                    so ordinary execs pay nothing. A copy that was changed
+ *                    (even by one byte) is a different program and is not
+ *                    matched; TimeVault (#13) is the allowlist for that.
  *
  * The root-only CLI writes the resolved absolute paths, newline-separated, to
  * /sys/kernel/security/secure_sudo/blacklist. Each write replaces the list.
@@ -22,6 +27,7 @@
 #include <linux/sched.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/namei.h>
 #include <linux/path.h>
 #include <linux/dcache.h>
@@ -40,6 +46,7 @@
 #include "secure_sudo.h"
 
 #define SS_BL_MAX_ENTRIES   1024
+#define SS_BL_HEX           64		/* SHA-256 as lowercase hex */
 #define SS_BL_MAX_TEXT      (256 * 1024)	/* 256 KiB of policy text */
 
 struct bl_entry {
@@ -47,6 +54,9 @@ struct bl_entry {
 	unsigned long	ino;	/* 0 if the path did not resolve at load time */
 	u32		gen;	/* i_generation: guards against inode reuse */
 	char		*path;	/* canonical path string as configured */
+	loff_t		size;	/* content match: file size at load time */
+	bool		hashed;	/* content match: hash below is valid */
+	char		hash[SS_BL_HEX + 1];
 };
 
 /* Protects bl_list/bl_count and bl_text/bl_text_len below. */
@@ -111,6 +121,19 @@ static struct bl_entry *bl_parse(char *text, int *out_count)
 				list[n].ino = inode->i_ino;
 				list[n].gen = inode->i_generation;
 			}
+			/* Content match: fingerprint the program as it is now,
+			 * so a copy at another path is caught too. */
+			if (inode && S_ISREG(inode->i_mode)) {
+				struct file *f = dentry_open(&path, O_RDONLY,
+							     current_cred());
+
+				if (!IS_ERR(f)) {
+					list[n].size = i_size_read(file_inode(f));
+					list[n].hashed =
+						ss_sha256_file(f, list[n].hash) == 0;
+					fput(f);
+				}
+			}
 			path_put(&path);
 		}
 		n++;
@@ -128,7 +151,9 @@ int ss_exec_bprm(struct linux_binprm *bprm)
 	dev_t dev;
 	unsigned long ino;
 	u32 gen;
-	char *buf, *exec_path;
+	loff_t size;
+	char *buf, *exec_path, hash[SS_BL_HEX + 1];
+	bool size_hit = false;
 	int i, ret = 0;
 
 	/* Step 1: sudo users may run anything - the blacklist targets non-sudo. */
@@ -151,6 +176,7 @@ int ss_exec_bprm(struct linux_binprm *bprm)
 	 * generation differs and the inode match correctly fails. Must be read
 	 * here - comparing an uninitialised value would break every inode match. */
 	gen = inode->i_generation;
+	size = i_size_read(inode);
 
 	/*
 	 * Fail closed: if the path cannot be built (OOM, or a deliberately
@@ -165,6 +191,10 @@ int ss_exec_bprm(struct linux_binprm *bprm)
 	if (IS_ERR(exec_path)) {
 		kfree(buf);
 		pr_warn_ratelimited("non-sudo UID %u exec denied: path unresolvable\n",
+				    from_kuid(&init_user_ns, current_uid()));
+		ss_event_typed_self("command_blacklist", "current_user", "execute",
+				    "(unresolvable path)", "deny", "path_unresolvable",
+				    "blacklist: UID %u exec denied: path unresolvable",
 				    from_kuid(&init_user_ns, current_uid()));
 		return -EPERM;
 	}
@@ -186,11 +216,56 @@ int ss_exec_bprm(struct linux_binprm *bprm)
 					    from_kuid(&init_user_ns,
 						      current_uid()),
 					    bl_list[i].path);
+			ss_event_typed_self("command_blacklist", "current_user",
+					    "execute", bl_list[i].path, "deny",
+					    path_hit ? "blacklisted_path" :
+						       "blacklisted_inode",
+					    "blacklist: UID %u denied exec %s",
+					    from_kuid(&init_user_ns, current_uid()),
+					    bl_list[i].path);
 			ret = -EPERM;
 			break;
 		}
+		if (bl_list[i].hashed && bl_list[i].size == size)
+			size_hit = true;
 	}
 	mutex_unlock(&bl_lock);
+
+	/* Step 4: content match, only when some entry has this exact size. The
+	 * file is hashed outside the lock (it can be large); the kernel holds
+	 * off writers to a file being exec'd, so the bytes cannot change
+	 * between the hash and the exec. A read error is a deny (fail closed). */
+	if (!ret && size_hit) {
+		if (ss_sha256_file(bprm->file, hash) != 0) {
+			ret = -EPERM;
+			ss_event_typed_self("command_blacklist", "current_user",
+					    "execute", exec_path ? exec_path : "(unlinked file)",
+					    "deny", "hash_unreadable",
+					    "blacklist: UID %u exec denied: could not hash %s",
+					    from_kuid(&init_user_ns, current_uid()),
+					    exec_path ? exec_path : "(unlinked file)");
+		} else {
+			mutex_lock(&bl_lock);
+			for (i = 0; i < bl_count; i++) {
+				if (!bl_list[i].hashed || bl_list[i].size != size ||
+				    strcmp(bl_list[i].hash, hash))
+					continue;
+				pr_warn_ratelimited("non-sudo UID %u denied a copy of blacklisted %s\n",
+						    from_kuid(&init_user_ns, current_uid()),
+						    bl_list[i].path);
+				ss_event_typed_self("command_blacklist", "current_user",
+						    "execute", bl_list[i].path, "deny",
+						    "blacklisted_content",
+						    "blacklist: UID %u denied exec of %s, a copy of %s",
+						    from_kuid(&init_user_ns, current_uid()),
+						    exec_path ? exec_path : "(unlinked file)",
+						    bl_list[i].path);
+				ret = -EPERM;
+				break;
+			}
+			mutex_unlock(&bl_lock);
+		}
+	}
 
 	kfree(buf);
 	return ret;

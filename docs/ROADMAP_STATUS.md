@@ -6,21 +6,13 @@ Status of every item in [TODO.md](../TODO.md) for release **0.12.0**
 and can be re-run; anything short of that is "partly" or "not started", with
 the reason.
 
-Two limits of the build environment shape this release and are named
-wherever they matter:
-
-* **kernel.org, GitHub and the Debian archive were not reachable.** The
-  installer's default kernel (6.12.114) was therefore compiled only against
-  its headers here, never built as a whole tree or booted. Every boot test
-  used **upstream 6.14** (Ubuntu's unpatched `.orig` tarball, fetched through
-  the signed Ubuntu archive).
-* **No KVM.** All VMs ran under TCG emulation with BIOS firmware (SeaBIOS),
-  so nothing was tested under UEFI or Secure Boot, and nothing ran on real
-  hardware.
-
-The GitHub workflow (`.github/workflows/build-gate.yml`) is written and
-syntax-checked but has **never run on GitHub**: per the project rule,
-nothing is pushed from here.
+When release 0.12.0 was built (2026-10-26), kernel.org and GitHub were not
+reachable and there was no KVM, so every boot test then ran on upstream
+**6.14** under TCG with BIOS firmware. Since 2026-10-31 the project runs on
+GitHub: `ci/build-gate.sh` runs for every push and pull request, and the VM
+jobs (6.12.114 under KVM, the Ubuntu 24.04 install run, the STIG run) run
+weekly and on demand (`.github/workflows/build-gate.yml`). Nothing has run
+under UEFI or Secure Boot, or on real hardware.
 
 | Item | Status | One line |
 |---|---|---|
@@ -34,7 +26,8 @@ nothing is pushed from here.
 | P1-2 | done | authenticated RFC 5425 TLS, bounded persistent queue, batched flush with backoff, clean TLS close; 10-check integration suite (delivery, wrong host, untrusted CA, missing CA, CA rotation, outage, queue exhaustion, batching, backoff) passes in CI. A TLS write is reported as `tls_sent_unconfirmed`, never as collector persistence |
 | P1-3 | partly (active) | root-only export with checksums and per-log chains, optional external Ed25519 signing, `log_checkpoint` records forwarded off-host every 5 min and checked by `evidence-verify --checkpoints`, `log_modified` on outside changes. Remaining: a completed tabletop (people) and a redaction review |
 | P1-4 | done | `secure-sudo health [--json]`: LSM, daemon heartbeat (atomic), audit feed, configured vs live knobs, last load with rejected names, ring/audit loss and daemon-seen gaps, local log failures, remote queue/errors, add-on units, scan results/age and baselines. Collector-side receipt is outside the host's view; the forwarded checkpoints let the collector alert on silence |
-| P1-5 … P1-8 | not started | see remaining-work notes below |
+| P1-5 | done | [THREAT_MODEL.md](THREAT_MODEL.md): trust assumptions, attackers in scope, the supported profile (roles, admin groups, LSM order, boot path, logging, distro tooling), and every control with its threat, preconditions, limits and test; §6 says what names and compliance mappings do not mean. Writing it found and fixed SECURITY_REVIEW #54–#57; four promises still to build (TODO "Doc promises to build", G1–G4) |
+| P1-6 … P1-8 | not started | see remaining-work notes below |
 | P2-1 … P2-5 | not started | |
 | P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
 
@@ -118,6 +111,7 @@ without root):
 
 | Suite | Checks | Covers |
 |---|---|---|
+| `tests/userspace/test-pheonixbox.sh` | 26 | the real PheonixBox helper: refuses unprivileged; snapshot, lock, tamper, repair, re-lock, permission restore, hostile file names (root, private mount namespace with overlays) |
 | `tests/userspace/test-otp.sh` | 66 | RFC 4226/6238 vectors, secret at rest, prefix, replay refusal |
 | `tests/userspace/test-pam.sh` | 50 | both PAM modules through libpam, the documented stacks, real `pam_unix` + `pam_faillock` (root, private mount namespace) |
 | `tests/userspace/test-helpers.sh` | 74 | `apply-net.sh` with real `nft` in network namespaces (all four modes, IPv4 + IPv6, DHCP/DNS), `quarantine.sh` (archive before delete) |
@@ -484,13 +478,41 @@ while enabled inactive units or missing/stale baselines degrade health.
 
 ### Other P1 items still deferred
 
-P1-5 through P1-8 remain unstarted: threat model/support profile; policy
+P1-6 through P1-8 remain unstarted: policy
 snapshots and change history; incident runbooks and containment guardrails;
 and broader network-policy/failure-mode validation. The earlier overview's
 "groundwork" below is historical; it does not mean these requirements are
 complete.
 
-## P1-5 through P1-8 — not started
+## P1-5 — done (2026-11-01)
+
+[THREAT_MODEL.md](THREAT_MODEL.md) maps each control (#1–#23, the install
+and boot path, and the `temporary/` add-ons) to the threat it answers, what
+it needs, its known limits and bypasses, and the test that checks it. Where
+a control had no test, one was written:
+
+* `tests/vm/ss-functest.c` gained home-write confinement, the RAM guard,
+  the sudo cooldown, the Node guard, BinaryVault, RadioGuard and TimeVault
+  (prepare, engage, allowlist, hash mismatch, package manager, memfd,
+  write-open, disengage refused), plus an event check for every denial
+  that logs one. 233/233 pass on 6.14 locally under TCG.
+* `tests/userspace/test-pheonixbox.sh` (new) runs the real PheonixBox
+  helper in a private mount namespace: snapshot, lock, tamper, repair,
+  re-lock, permission restore. 26/26 locally.
+
+Writing it found four real faults, all fixed (SECURITY_REVIEW #54–#57):
+five controls whose denials never reached the event log; a PheonixBox file
+name that ran a root command; a blacklist that a renamed copy got past and
+module checks that a renamed file got past; and committed binaries that
+could be installed instead of a fresh build.
+
+Four doc promises the code does not keep yet are tracked as features to
+build in [TODO.md](../TODO.md) "Doc promises to build" (G1 Node SEA
+auto-detection, G2 TimeVault Merkle tree, G3 TPM2-sealed OTP secret, G4
+TPM clear through `/dev/tpm*`). Until each lands, its doc says "not built
+yet".
+
+## P1-6 through P1-8 — not started
 
 Pre-existing groundwork (not completion):
 

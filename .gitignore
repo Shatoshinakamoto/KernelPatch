@@ -1,0 +1,9 @@
+# Build outputs: always built from source by install.sh and ci/build-gate.sh,
+# never committed (a committed binary can be newer than its source and get
+# installed instead of a fresh build).
+userspace/cli/secure-sudo
+userspace/daemon/secure-sudod
+userspace/otp/secure-sudo-otp
+userspace/pam/*.so
+userspace/pheonixbox/secure-sudo-pheonixbox
+*.o
