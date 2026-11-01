@@ -108,7 +108,7 @@ build_dirs() { # stage dir...
 }
 if stage_on userspace; then
 	say "userspace"
-	build_dirs userspace userspace/cli userspace/daemon userspace/pam userspace/otp userspace/pheonixbox
+	build_dirs userspace userspace/cli userspace/daemon userspace/pam userspace/otp userspace/pheonixbox userspace/attest
 fi
 if stage_on addons; then
 	say "addons"

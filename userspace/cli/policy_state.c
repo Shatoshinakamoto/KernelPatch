@@ -752,6 +752,46 @@ static void who(char *user, size_t n, unsigned long *loginuid)
  * Take a snapshot of /etc/secure_sudo and the live kernel state. Writes the
  * new id (and the SHA-256 of its SHA256SUMS) to @id/@sums. 0 or -1.
  */
+/*
+ * P2-1: one digest of the policy the kernel is enforcing now: every
+ * setting and every list, read back from the kernel (not from disk), in a
+ * fixed order and framing, so two machines with the same live policy get
+ * the same digest. Used in the attestation report.
+ */
+int policy_live_digest(char out[65])
+{
+	char *k = NULL, p[1024], val[512];
+	size_t klen = 0, i, len;
+	FILE *mf = open_memstream(&k, &klen);
+
+	if (!mf)
+		return -1;
+	fprintf(mf, "secure_sudo-policy-v1\nsettings\n");
+	for (i = 0; i < ss_nknobs; i++) {
+		snprintf(p, sizeof(p), SYSFS "/%s", ss_knobs[i].sysfs);
+		read_trimmed(p, val, sizeof(val));
+		fprintf(mf, "%s = %s\n", ss_knobs[i].cfg_key, val[0] ? val : "?unreadable");
+	}
+	for (i = 0; i < ss_nlists; i++) {
+		char *b;
+
+		snprintf(p, sizeof(p), SECFS "/%s", ss_lists[i].secfs);
+		b = slurp(p, &len);
+		fprintf(mf, "list %s %zu\n", ss_lists[i].secfs, b ? len : (size_t)0);
+		if (b) {
+			fwrite(b, 1, len, mf);
+			free(b);
+		}
+	}
+	if (fclose(mf) != 0 || !k) {
+		free(k);
+		return -1;
+	}
+	sha256_hex(k, klen, out);
+	free(k);
+	return 0;
+}
+
 int policy_snapshot(const char *reason, char *id, size_t idlen, char *sums,
 		    size_t sumslen)
 {

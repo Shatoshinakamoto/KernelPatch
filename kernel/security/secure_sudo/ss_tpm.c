@@ -93,7 +93,8 @@ static const char to_default[] =
 	"/usr/lib/systemd/systemd-pcrlock\n"
 	"/usr/lib/systemd/systemd-tpm2-setup\n"
 	"/usr/lib/systemd/systemd-measure\n"
-	"/usr/sbin/tpm2-abrmd\n";
+	"/usr/sbin/tpm2-abrmd\n"
+	"/usr/libexec/secure-sudo/secure-sudo-attest\n";
 
 static DEFINE_MUTEX(to_lock);
 static char **to_list;
