@@ -1102,8 +1102,8 @@ In the kernel, once the lock is engaged a TPM character device (misc
 10:224, and every minor of the TPM driver's major, so a `mknod` copy too)
 may be opened only by a program on `tpm_openers` that is root-owned and
 not group/world-writable; the list is frozen while locked and defaults to
-the systemd TPM helpers (systemd-creds unseals the OTP key, #61),
-cryptsetup and tpm2-abrmd; refusals are `tpm_guard` events. In the
+the systemd TPM helpers (systemd-creds unseals the OTP key, #61) and
+cryptsetup (systemd-pcrextend and tpm2-abrmd were dropped by #68); refusals are `tpm_guard` events. In the
 installer, `install.sh tpm-lockout` (run by `all` unless
 `SS_TPM_LOCKOUT=0`, skipped without a TPM or tpm2-tools) sets a random
 lockout password through a root-only file in `/run` (never on a command
@@ -1190,12 +1190,12 @@ still lie, and each is now handled.
    any line with no matching extend.
 2. A forged event appended after the kernel's last one cannot be detected
    from the log. It needs TPM access after the lock, and the default
-   `tpm_openers` grants that through systemd-pcrextend (writes any string
-   into any PCR) and tpm2-abrmd. The verifier checks the reported
+   `tpm_openers` granted that through systemd-pcrextend (writes any string
+   into any PCR) and tpm2-abrmd. Pheonix chose to drop both from the
+   defaults (kernel and shipped file). The verifier checks the reported
    `tpm_openers` against its measured hash, and fails if anything on it can
    extend arbitrary values, unless the host is enrolled with
-   `--accept-pcr-extenders`. ATTESTATION.md says to remove those two
-   before locking. The G4 defaults stay as Pheonix chose them.
+   `--accept-pcr-extenders`.
 3. A lock latched from a knob store was logged before that knob's write,
    which made the verifier's "nothing after the lock" rule reject real
    locks. The kernel now logs the lock after the knob that caused it.

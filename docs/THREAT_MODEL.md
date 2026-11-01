@@ -265,7 +265,7 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
 * **Also (gap G4, built):** `TPM2_Clear` sent straight to `/dev/tpm0` or
   `/dev/tpmrm0`. secure_sudo cannot read the command bytes, so two controls
   cover it. Once the lock is engaged only programs on `tpm_openers`
-  (systemd-creds, the systemd TPM helpers, cryptsetup, tpm2-abrmd) may open
+  (systemd-creds, the systemd TPM helpers, cryptsetup) may open
   a TPM device, root's `tpm2_clear` included, matched by device number so
   a node made with `mknod` is caught too. And `install.sh tpm-lockout` (run
   by `install.sh all`) sets a lockout password, shown once and never stored,
@@ -642,9 +642,9 @@ Do not rely on them until they have tests.
   lock state are measured, not reported (SECURITY_REVIEW #68).
 * **Limits:** the boot chain is proven, because root cannot forge a quote
   or set a PCR. The measured policy is proven only once locked, and only if
-  nothing on `tpm_openers` can extend arbitrary PCR values. The shipped
-  defaults include systemd-pcrextend and tpm2-abrmd, which the verifier
-  rejects unless told to accept them. A process that opened the TPM before
+  nothing on `tpm_openers` can extend arbitrary PCR values (the defaults
+  leave out systemd-pcrextend and tpm2-abrmd for this; a host that adds
+  them back needs `--accept-pcr-extenders`). A process that opened the TPM before
   the lock could append events after the kernel's last one. A
   firmware-menu TPM clear changes the key, and the verifier reports it.
 * **Tested by:** `tests/userspace/test-attest.sh` (software TPMs:

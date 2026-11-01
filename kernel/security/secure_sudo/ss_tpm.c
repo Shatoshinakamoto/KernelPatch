@@ -24,8 +24,10 @@
  * The other route (gap G4) is TPM2_Clear sent straight to the chip through
  * /dev/tpm0 or /dev/tpmrm0. An LSM cannot see the command bytes, so once the
  * config lock (#16) is engaged only the programs on tpm_openers may open a
- * TPM character device at all: systemd-creds, the systemd TPM helpers,
- * cryptsetup and tpm2-abrmd by default. root running tpm2_clear (or any
+ * TPM character device at all: systemd-creds, the systemd TPM helpers and
+ * cryptsetup by default. systemd-pcrextend and tpm2-abrmd are left out on
+ * purpose (P2-1, Pheonix's choice): either lets root extend any PCR, so
+ * after the lock root could forge policy-measurement events. root running tpm2_clear (or any
  * other program) is refused. The device is matched by its device number,
  * not its name, so a node made elsewhere with mknod is caught too; that
  * needs CONFIG_TCG_TPM=y (install.sh builds it in) to know the TPM major,
@@ -89,11 +91,9 @@ static const char to_default[] =
 	"/usr/bin/systemd-creds\n"
 	"/usr/bin/systemd-cryptenroll\n"
 	"/usr/lib/systemd/systemd-cryptsetup\n"
-	"/usr/lib/systemd/systemd-pcrextend\n"
 	"/usr/lib/systemd/systemd-pcrlock\n"
 	"/usr/lib/systemd/systemd-tpm2-setup\n"
 	"/usr/lib/systemd/systemd-measure\n"
-	"/usr/sbin/tpm2-abrmd\n"
 	"/usr/libexec/secure-sudo/secure-sudo-attest\n";
 
 static DEFINE_MUTEX(to_lock);

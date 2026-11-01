@@ -306,9 +306,9 @@ TPM's owner seed, so nothing is stored. While locked, the tool may still
 open the TPM because it is in the default `tpm_openers` list. The quote
 proves the boot chain. On a kernel with policy measurement, the bundle also
 carries the kernel's `policy_log` and quotes its PCR (13 by default), so the
-verifier proves the policy too (`"policy_source": "measured"`). For a proven
-locked policy, remove systemd-pcrextend and tpm2-abrmd from `tpm_openers`
-before locking (ATTESTATION.md, "What this proves").
+verifier proves the policy too (`"policy_source": "measured"`). That needs
+a locked policy whose `tpm_openers` holds nothing that can extend any PCR;
+the defaults qualify (ATTESTATION.md, "What this proves").
 
 ```sh
 N=$(secure-sudo-attest-verify nonce)                         # verifier

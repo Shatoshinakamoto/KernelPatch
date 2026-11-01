@@ -1968,6 +1968,8 @@ static void t_tpm_prepare(void)
 	tap(rd(SECFS "tpm_openers", buf, sizeof(buf)) == 0 &&
 	    strstr(buf, "/usr/bin/systemd-creds\n"),
 	    "G4 tpm_openers starts with the defaults (systemd-creds, ...)");
+	tap(!strstr(buf, "systemd-pcrextend") && !strstr(buf, "tpm2-abrmd"),
+	    "P2-1 the defaults leave out PCR extenders (systemd-pcrextend, tpm2-abrmd)");
 	tap(maj > 0, "G4 the TPM driver core registered its major (%d)", maj);
 	unlink(TPMRM_NODE);
 	unlink(TPM0_NODE);

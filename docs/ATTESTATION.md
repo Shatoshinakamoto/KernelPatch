@@ -192,14 +192,19 @@ if root has no way to extend that PCR once the policy is locked:
   verifier fails if any of them can extend arbitrary values: everything
   except systemd-creds, systemd-cryptenroll, systemd-cryptsetup,
   systemd-pcrlock, systemd-tpm2-setup, systemd-measure, and
-  secure-sudo-attest. **The shipped defaults include
-  `/usr/lib/systemd/systemd-pcrextend` and `/usr/sbin/tpm2-abrmd`.**
-  systemd-pcrextend writes any string into any PCR, and abrmd brokers every
-  tpm2-tools client. Remove both from `/etc/secure_sudo/tpm_openers.conf`
-  before `secure-sudo lock` if you want a proven policy. On measured-UKI
-  systems, systemd-pcrphase uses systemd-pcrextend at shutdown. If you keep
-  them, enroll with `--accept-pcr-extenders`, and treat the policy as "the
-  host claims" again.
+  secure-sudo-attest. That is why the defaults (kernel and shipped
+  `tpm_openers.conf`) leave out `/usr/lib/systemd/systemd-pcrextend` and
+  `/usr/sbin/tpm2-abrmd`: systemd-pcrextend writes any string into any
+  PCR, and abrmd brokers every tpm2-tools client. On measured-UKI systems
+  systemd-pcrphase runs systemd-pcrextend at shutdown, and tpm2-tools users
+  go through abrmd. If you need either after the lock, add it to
+  `/etc/secure_sudo/tpm_openers.conf` before `secure-sudo lock`, enroll
+  with `--accept-pcr-extenders`, and treat the policy as "the host claims"
+  again.
+  An upgrade keeps an existing `/etc/secure_sudo/tpm_openers.conf` (the
+  installer never overwrites config), so a host installed before this
+  change still lists both until you remove them and `secure-sudo load`;
+  the verifier names them until you do.
 * A program that opened the TPM before the lock keeps its file descriptor.
   The kernel's `foreign` check catches its extends at the next policy
   event, and the replay catches any extend that has no log line. What it
