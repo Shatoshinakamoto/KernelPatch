@@ -431,6 +431,7 @@ int ss_timevault_bprm(struct linux_binprm *bprm);
 
 int ss_firmware_file_open(struct file *file);
 int ss_tpm_file_open(struct file *file);
+int ss_tpm_secfs(struct dentry *dir);	/* G4 tpm_openers */
 int ss_timevault_file_open(struct file *file);
 int ss_home_file_open(struct file *file);
 int ss_binvault_file_open(struct file *file);

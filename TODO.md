@@ -388,7 +388,10 @@ that is a missing feature to build, not a sentence to delete. Each doc says
   the TPM when one is present, root-only key file as the fallback.
   **Done when:** the OTP verifies with a sealed key in a swtpm VM and falls
   back cleanly without a TPM.
-- [ ] **G4: TPM clear through `/dev/tpm*`** (README #5). Only the PPI route
+- [x] **G4: TPM clear through `/dev/tpm*`** (README #5). Built 2026-11-01
+  (SECURITY_REVIEW #63), both halves as Pheonix chose: the `tpm_openers`
+  guard once locked (in-kernel tests) and `install.sh tpm-lockout`
+  (test-install, Ubuntu VM with a software TPM). Only the PPI route
   is blocked; an LSM cannot read TPM command bytes. Needs Pheonix's call on
   the approach (lockout authorization at install, an opener allowlist for
   `/dev/tpm*`, or both).

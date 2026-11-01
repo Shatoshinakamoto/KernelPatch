@@ -262,14 +262,30 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   wiping TPM-sealed disk keys at the next boot.
 * **Needs:** a TPM whose PPI is in sysfs; normal boots without
   `secure_sudo.tpm_maint=1`.
-* **Limits:** only the PPI route is blocked. A `TPM2_Clear` command sent
-  through `/dev/tpm0` or `/dev/tpmrm0` with the lockout authorization (empty
-  by default on many machines) is **not** blocked: secure_sudo cannot see the
-  bytes written to the device. Set a lockout password (`tpm2_changeauth -c
-  lockout`). The firmware setup menu can always clear the TPM. Listed as gap
-  G4 in §7.
-* **Tested by:** no automated test (no TPM in the CI guest).
-  HARDWARE_SMOKE_TEST.md §3 (harmless request `0` as root is refused and
+* **Also (gap G4, built):** `TPM2_Clear` sent straight to `/dev/tpm0` or
+  `/dev/tpmrm0`. secure_sudo cannot read the command bytes, so two controls
+  cover it. Once the lock is engaged only programs on `tpm_openers`
+  (systemd-creds, the systemd TPM helpers, cryptsetup, tpm2-abrmd) may open
+  a TPM device, root's `tpm2_clear` included, matched by device number so
+  a node made with `mknod` is caught too. And `install.sh tpm-lockout` (run
+  by `install.sh all`) sets a lockout password, shown once and never stored,
+  and sets `disableClear`, so the TPM itself refuses `TPM2_Clear` from the
+  OS.
+* **Limits:** before the lock, root can open the device and, if the lockout
+  password was never set (or root knows it), clear the TPM. A program on
+  `tpm_openers` can send any command, clear included, if it has the
+  lockout password. The guard knows the TPM major only with
+  `CONFIG_TCG_TPM=y` (the installer builds it in); with `=m` only
+  `/dev/tpm0` is guarded. A TPM whose lockout password was already set is
+  left alone. The firmware setup menu can always clear the TPM.
+* **Tested by:** the in-kernel tests (`t_tpm_prepare`, `t_tpm_locked`: TPM
+  device nodes made with `mknod`; unlocked any program reaches the driver,
+  locked an unlisted one is refused for both tpmrm and tpm0 while a listed
+  one is not, the list is frozen, the refusal is logged);
+  `tests/install/test-install.sh` (`tpm-lockout` with stand-in tpm2-tools);
+  the Ubuntu VM run with a software TPM (lockout password and
+  `disableClear` set, `tpm2_clear` refused with and without the password).
+  The PPI route: HARDWARE_SMOKE_TEST.md §3 (harmless request `0` as root is refused and
   logged). The denial is logged as a `tpm_guard` event since P1-5.
 
 ### #6 Driver blacklist, anti-BYOVD (kernel)
@@ -632,7 +648,7 @@ writing this document. Each is tracked in [TODO.md](../TODO.md) under
 | G1 | FEATURE_MAP #11 | "The daemon finds SEA binaries by their fuse marker and registers them." Nothing did. | **Built 2026-11-01:** `secure-sudo node-scan`, run by the daemon at start and every `node_sea_scan_interval` minutes; `load` sends its finds after the hand-written list. |
 | G2 | FEATURE_MAP #13 | "The daemon keeps the Merkle tree over watched trees." It kept a flat SHA-256 manifest. | **Built 2026-11-01:** the manifest is a baseline taken when the vault engages; its Merkle root is logged and forwarded (baseline, load, findings, every checkpoint); the daemon puts back a rewritten manifest and `evidence-verify --timevault` flags one (SECURITY_REVIEW #60). |
 | G3 | FEATURE_MAP #15 | "Sealed with TPM2 when there is one, with a root-only key file as the fallback." Only the key file existed. | **Built 2026-11-01:** `otp setup` seals the master key with `systemd-creds` when the TPM works and falls back to the key file; `otp key-store`, `seal`, `unseal`; tested against software TPMs in CI and in the Ubuntu VM (SECURITY_REVIEW #61). |
-| G4 | README #5 "Block TPM clear" | Only the PPI route is blocked; `TPM2_Clear` through `/dev/tpm*` is not, and an LSM cannot read the command bytes. | Needs a decision: set a TPM lockout password at install, and/or restrict which programs may open `/dev/tpm*`. |
+| G4 | README #5 "Block TPM clear" | Only the PPI route was blocked; `TPM2_Clear` through `/dev/tpm*` was not, and an LSM cannot read the command bytes. | **Built 2026-11-01** (Pheonix chose both): `tpm_openers` limits who may open `/dev/tpm*` once locked, and `install.sh tpm-lockout` sets a lockout password (shown once) and `disableClear` (SECURITY_REVIEW #63). |
 
 Built during P1-5 because the docs already promised them:
 

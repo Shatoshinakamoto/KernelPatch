@@ -31,6 +31,9 @@
 #                               next boot only, or from now on
 #   install.sh uninstall [--remove-pam-lines] [--keep-kernel] [--purge]
 #                               remove only what this script installed
+#   install.sh tpm-lockout      set a TPM lockout password (shown once) and
+#                               disable TPM2_Clear (G4); `all` does it too
+#                               unless SS_TPM_LOCKOUT=0
 #
 # Safety rules this script keeps:
 #   * kernel source is verified against its kernel.org signature before it is
@@ -1017,6 +1020,79 @@ install_userspace() { # [prebuilt-dir]
 	return 0
 }
 
+# ---------------------------------------------------------------------------
+# G4 (README #5): a TPM lockout password, and TPM2_Clear disabled.
+#
+# The kernel blocks the sysfs PPI clear request and, once locked, any program
+# not on tpm_openers opening /dev/tpm*. The rest is the TPM's own access
+# control: with a lockout password set, TPM2_Clear (and resetting the
+# dictionary-attack lockout) needs that password, which only the admin who
+# read it here holds; disableClear then refuses TPM2_Clear from the OS
+# altogether, until the firmware's own clear (physical presence) is used.
+# The password is shown once and never stored. A TPM whose lockout password
+# is already set is left alone.
+SS_TPM_DEV="${SS_TPM_DEV:-/dev/tpmrm0}"
+tpm_prop() { # NAME -> its value from `tpm2_getcap properties-variable`, or ""
+	tpm2_getcap properties-variable 2>/dev/null |
+		sed -n "s/^[[:space:]]*$1:[[:space:]]*\\([0-9]*\\).*/\\1/p" | head -1
+}
+tpm_lockout() { # [auto]: from `all`, where no TPM or no tools only means skip
+	local mode="${1:-}" pw f t
+	[ -z "$SS_ROOT" ] || { log "TPM lockout: not done for an alternate root (SS_ROOT)"; return 0; }
+	if [ "${SS_TPM_LOCKOUT:-1}" = 0 ]; then
+		log "TPM lockout: skipped (SS_TPM_LOCKOUT=0)"; return 0
+	fi
+	if [ ! -e "$SS_TPM_DEV" ]; then
+		[ "$mode" = auto ] && { log "TPM lockout: no TPM ($SS_TPM_DEV), nothing to do"; return 0; }
+		die "TPM lockout: no TPM at $SS_TPM_DEV"
+	fi
+	for t in tpm2_getcap tpm2_changeauth tpm2_clearcontrol; do
+		command -v "$t" > /dev/null && continue
+		[ "$mode" = auto ] && { warn "TPM lockout: $t not found; install tpm2-tools, then run: install.sh tpm-lockout"; return 0; }
+		die "TPM lockout: $t not found (install tpm2-tools)"
+	done
+	case "$(tpm_prop lockoutAuthSet)" in
+	1)
+		log "TPM lockout: a lockout password is already set; left as it is"
+		[ "$(tpm_prop disableClear)" = 1 ] ||
+			warn "TPM lockout: TPM2_Clear is still allowed; with your lockout password: tpm2_clearcontrol -C l -P <password> s"
+		return 0 ;;
+	0) ;;
+	*) [ "$mode" = auto ] && { warn "TPM lockout: cannot read the TPM's state; skipped"; return 0; }
+	   die "TPM lockout: cannot read the TPM's state (tpm2_getcap)" ;;
+	esac
+	pw="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n' | head -c 32)"
+	[ "${#pw}" -ge 24 ] || die "TPM lockout: could not make a password"
+	# On the command line the password would show in ps; a root-only file
+	# in /run (tmpfs) holds it for the two commands instead.
+	f="$(umask 077; mktemp /run/ss-tpm-lockout.XXXXXX)" || die "TPM lockout: mktemp failed"
+	printf '%s' "$pw" > "$f"
+	if ! tpm2_changeauth -c lockout "file:$f" > /dev/null; then
+		shred -u "$f" 2>/dev/null || rm -f "$f"
+		die "TPM lockout: tpm2_changeauth failed; nothing was changed"
+	fi
+	if ! tpm2_clearcontrol -C l -P "file:$f" s > /dev/null; then
+		warn "TPM lockout: the password is set but disableClear failed; retry with: tpm2_clearcontrol -C l -P <password> s"
+	fi
+	shred -u "$f" 2>/dev/null || rm -f "$f"
+	[ "$(tpm_prop lockoutAuthSet)" = 1 ] || die "TPM lockout: the TPM does not report a lockout password after setting one"
+	cat <<MSG
+
+  TPM lockout password (shown ONCE, not stored anywhere - write it down
+  and keep it offline, e.g. with your disk-encryption recovery keys):
+
+      $pw
+
+  It is needed to clear the TPM from the OS, to undo disableClear's effect
+  (tpm2_clearcontrol needs platform authorization; the firmware's TPM clear
+  resets it), or to reset the dictionary-attack lockout
+  (tpm2_dictionarylockout -c -p <password>). disableClear: $(tpm_prop disableClear)
+
+MSG
+	pw=""
+	log "TPM lockout: password set; TPM2_Clear from the OS is disabled"
+}
+
 print_pam_guidance() {
 	cat <<EOF
 
@@ -1371,7 +1447,7 @@ main() {
 	[ $# -gt 0 ] && shift
 	case "$cmd" in
 	--dry-run|-n) cmd=preflight; set -- all ;;
-	-h|--help|help) sed -n '3,52p' "$0"; return 0 ;;
+	-h|--help|help) sed -n '3,55p' "$0"; return 0 ;;
 	esac
 	case "$cmd" in
 	preflight)
@@ -1394,6 +1470,7 @@ main() {
 			run_stig_hardening
 			print_pam_guidance
 			verify || true
+			tpm_lockout auto
 			log "DONE. Reboot to try the secure_sudo kernel once, then: install.sh verify --commit" ;;
 		build-kernel)
 			need_distro
@@ -1413,6 +1490,8 @@ main() {
 			detect_distro || true; uninstall "$@" ;;
 		rollback)
 			detect_distro || true; rollback "$@" ;;
+		tpm-lockout)
+			tpm_lockout ;;
 		*) die "unknown command '$cmd' (install.sh --help)" ;;
 		esac ;;
 	esac

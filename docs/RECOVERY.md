@@ -155,6 +155,24 @@ is refused. The configuration file can still be edited by root. Fix the file,
 then reboot; `secure-sudo load` runs at boot (in `secure-sudod.service`) and
 applies the fixed configuration.
 
+### 4f. TPM: lockout password, `disableClear`, `tpm_openers`
+
+`install.sh tpm-lockout` (part of `all`) printed a TPM lockout password once.
+It is not stored on the box; keep it offline. It is only needed to change the
+TPM's lockout settings (`tpm2_clearcontrol -C l -P <pw> c` re-enables
+`TPM2_Clear`) or to reset dictionary-attack lockout. Lost it: the TPM can
+still be cleared from the firmware setup (physical presence), which wipes
+every key sealed to it: the OTP master key (`secure-sudo otp setup` again)
+and any TPM-bound disk keys (keep their recovery keys).
+
+Once locked, only programs on `tpm_openers` may open `/dev/tpm0` and
+`/dev/tpmrm0`. A TPM user that is not listed (clevis, a custom agent) fails
+with `Operation not permitted` and a `tpm_guard` event. The list is frozen
+while locked: add the path to `/etc/secure_sudo/tpm_openers.conf`, reboot,
+`secure-sudo load`, then lock again. For one boot without the guard (and
+with PPI clear allowed), add `secure_sudo.tpm_maint=1` to the kernel command
+line.
+
 ### 4e. No root session left at all
 
 1. Boot the previous kernel (section 1): no secure_sudo LSM, so nothing is

@@ -38,6 +38,7 @@
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <sys/uio.h>
@@ -1899,6 +1900,120 @@ static void t_events(void)
 	knob_set("perf_guard", "0");
 }
 
+
+/* ------------------------------ G4 (#5) ---------------------------------- */
+/* TPM character devices made with mknod: there is no TPM in the test VM, so
+ * a permitted open fails with ENXIO (no chip behind the number) and a
+ * refused one with EPERM, before the driver is reached. */
+#define TPMRM_NODE "/dev/ss-tpmrm"
+#define TPM0_NODE  "/dev/ss-tpm0"
+
+static int do_tpm_open(void *a)
+{
+	int fd = open((const char *)a, O_RDWR);
+
+	if (fd < 0)
+		return errno;
+	close(fd);
+	return 0;
+}
+
+/* Open @a from /bin/tpmprobe, a copy of this program under another name. */
+static int do_tpm_probe(void *a)
+{
+	pid_t pid = fork();
+	int st;
+
+	if (pid == 0) {
+		char *argv[] = { "tpmprobe", "--tpm-open", a, NULL };
+		char *envp[] = { NULL };
+
+		execve("/bin/tpmprobe", argv, envp);
+		_exit(errno & 0xff);
+	}
+	if (pid < 0 || waitpid(pid, &st, 0) < 0 || !WIFEXITED(st))
+		return 255;
+	return WEXITSTATUS(st);
+}
+
+static int tpm_major(void)
+{
+	FILE *f = fopen("/proc/devices", "r");
+	char line[128], name[64];
+	int maj, found = -1, chr = 0;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (!strncmp(line, "Character devices:", 18))
+			chr = 1;
+		else if (!strncmp(line, "Block devices:", 14))
+			chr = 0;
+		else if (chr && sscanf(line, "%d %63s", &maj, name) == 2 &&
+			 !strcmp(name, "tpm"))
+			found = maj;
+	}
+	fclose(f);
+	return found;
+}
+
+static int tpm_nodes;
+
+static void t_tpm_prepare(void)
+{
+	char buf[1024];
+	int maj = tpm_major(), r;
+
+	tap(rd(SECFS "tpm_openers", buf, sizeof(buf)) == 0 &&
+	    strstr(buf, "/usr/bin/systemd-creds\n"),
+	    "G4 tpm_openers starts with the defaults (systemd-creds, ...)");
+	tap(maj > 0, "G4 the TPM driver core registered its major (%d)", maj);
+	unlink(TPMRM_NODE);
+	unlink(TPM0_NODE);
+	/* tpmrm0 is minor TPM_NUM_DEVICES (65536) of the tpm major */
+	tpm_nodes = maj > 0 &&
+		    mknod(TPMRM_NODE, S_IFCHR | 0600, makedev(maj, 65536)) == 0 &&
+		    mknod(TPM0_NODE, S_IFCHR | 0600, makedev(10, 224)) == 0;
+	tap(tpm_nodes, "G4 TPM device nodes made with mknod");
+	copy_file("/ss-functest", "/bin/tpmprobe", 0755);
+	tap(wr(SECFS "tpm_openers", "# test\n/ss-functest\nnot-absolute\n") == 0,
+	    "G4 tpm_openers set to /ss-functest (relative entries ignored)");
+	tap(rd(SECFS "tpm_openers", buf, sizeof(buf)) == 0 &&
+	    strstr(buf, "/ss-functest"), "G4 tpm_openers reads back");
+	r = as(&ROOT, do_tpm_probe, TPMRM_NODE);
+	tap(r == ENXIO || r == ENODEV,
+	    "G4 unlocked: any root program reaches the TPM driver (got %d)", r);
+}
+
+static void t_tpm_locked(void)
+{
+	int r;
+
+	if (!tpm_nodes) {
+		tap(0, "G4 locked TPM checks need the device nodes");
+		return;
+	}
+	events_reset();
+	r = as(&ROOT, do_tpm_probe, TPMRM_NODE);
+	tap(r == EPERM, "G4 locked: root's unlisted program cannot open tpmrm (got %d)", r);
+	r = as(&ROOT, do_tpm_probe, TPM0_NODE);
+	tap(r == EPERM, "G4 locked: ... nor tpm0, misc 10:224 (got %d)", r);
+	r = as(&ROOT, do_tpm_open, TPMRM_NODE);
+	tap(r == ENXIO || r == ENODEV,
+	    "G4 locked: a program on tpm_openers still reaches the driver (got %d)", r);
+	r = as(&NONSUDO, do_tpm_probe, TPMRM_NODE);
+	tap(DENIED(r), "G4 locked: non-root unlisted program refused too (got %d)", r);
+	tap(wr(SECFS "tpm_openers", "/bin/tpmprobe\n") == -EPERM,
+	    "G4 locked: tpm_openers cannot be changed");
+	r = as(&ROOT, do_tpm_probe, TPMRM_NODE);
+	tap(r == EPERM, "G4 locked: ... so the probe stays refused (got %d)", r);
+	tap(saw_deny("tpm_guard", "\"reason\":\"tpm_opener_not_allowed\""),
+	    "G4 a refused TPM open is logged (tpm_guard / tpm_opener_not_allowed)");
+	unlink(TPMRM_NODE);
+	unlink(TPM0_NODE);
+	unlink("/bin/tpmprobe");
+}
+
 static void t_lock(void)
 {
 	int r;
@@ -1934,6 +2049,10 @@ int main(int argc, char **argv)
 	 * the kernel started, then let the core go unread. */
 	if (argc > 1 && !strcmp(argv[1], "--core-helper"))
 		return wr("/proc/sys/kernel/kptr_restrict", "2") ? 0 : 1;
+	/* Run as /bin/tpmprobe (t_tpm): a program that is not on tpm_openers
+	 * opening a TPM device; exits with the errno (0 if it opened). */
+	if (argc > 2 && !strcmp(argv[1], "--tpm-open"))
+		return do_tpm_open(argv[2]);
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	uname(&u);
 	diag("ss-functest on %s %s", u.sysname, u.release);
@@ -1965,7 +2084,9 @@ int main(int argc, char **argv)
 	t_concurrency();
 	t_events();
 	t_timevault_prepare();	/* the allowlist must be in before the lock */
+	t_tpm_prepare();	/* tpm_openers, likewise */
 	t_lock();		/* irreversible from here on */
+	t_tpm_locked();
 	t_timevault();		/* engages TimeVault: keep last */
 
 	printf("1..%d\n", n_test);

@@ -98,7 +98,7 @@ fresh() {
 	echo 0 > "$SYS/lock"
 	for l in blacklist setid_exec_allow tmp_exec_allow node_allowed_children \
 		node_sea_binaries driver_blacklist timevault_allow home_map \
-		home_write_allow binvault_allow prguard_allow; do
+		home_write_allow binvault_allow prguard_allow tpm_openers; do
 		echo old > "$SEC/$l"
 	done
 }
