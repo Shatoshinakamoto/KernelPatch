@@ -65,6 +65,9 @@ cat > "$T/otp-stub" <<STUB
 printf '%s|' "\$@" > "$T/otp-args"
 STUB
 chmod 0755 "$T/otp-stub"
+# Stands in for contain.sh: exits with $CONTAIN_RC.
+printf '#!/bin/sh\nexit "${CONTAIN_RC:-0}"\n' > "$T/contain-stub"
+chmod 0755 "$T/contain-stub"
 if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DSYSFS="\"$SYS\"" -DSECFS="\"$SEC\"" -DCONFIG_DIR="\"$CFG\"" \
 	-DHEALTH_FILE="\"$HEALTH\"" \
@@ -75,6 +78,7 @@ if ! (cd "$ROOT/userspace/cli" && gcc -O2 -Wall -Wextra -Werror \
 	-DADDON_STATE_DIR="\"$ADDON_STATE\"" \
 	-DSS_STATE_DIR="\"$T/state\"" \
 	-DOTP_HELPER="\"$T/otp-stub\"" \
+	-DCONTAIN_HELPER="\"$T/contain-stub\"" \
 	-DSS_TESTING \
 	-o "$CLI" secure-sudo.c policy.c policy_state.c vault_allow.c detect_admins.c node_scan.c -lcrypto); then
 	not_ok "CLI builds with test paths"; tap_done; exit 1
@@ -544,6 +548,17 @@ check "manual snapshot with a reason" sh -c \
 	"id=\$(sed -n 's/^snapshot //p' '$T/sn.out'); grep -qx 'reason = beforeupgrade' '$ST/snapshots/'\$id/meta"
 "$CLI" snapshot list > "$T/sl.out" 2>&1
 check "snapshot list shows id, reason, lock state" grep -qE '^[0-9]{8}T[0-9]{6}Z-[0-9]{9} +pre-lock +by +opsalice +locked=0' "$T/sl.out"
+n0=$(wc -l < "$ST/history.jsonl")
+"$CLI" contain network --allow 10.0.0.1 -y > /dev/null 2>&1
+check "contain: recorded with what was asked" sh -c \
+	"tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"contain\".*\"result\":\"complete\".*\"detail\":\"network --allow 10.0.0.1 -y\"'"
+CONTAIN_RC=1 "$CLI" contain release account mallory -y > /dev/null 2>&1; rc=$?
+check "release that fails: recorded as failed, exit status passed on" sh -c \
+	"[ $rc -eq 1 ] && tail -1 '$ST/history.jsonl' | grep -q '\"action\":\"release\".*\"result\":\"failed\"'"
+"$CLI" contain process 4242 --dry-run > /dev/null 2>&1
+CONTAIN_RC=3 "$CLI" contain process 4242 > /dev/null 2>&1
+"$CLI" contain status > /dev/null 2>&1
+eq "dry runs, unconfirmed actions and status are not recorded" "$(wc -l < "$ST/history.jsonl")" "$((n0 + 2))"
 "$CLI" history --verify > "$T/hv.out" 2>&1; rc=$?
 eq "history chain still verifies after every action" "$rc" 0
 unset SUDO_USER

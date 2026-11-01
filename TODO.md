@@ -218,6 +218,13 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     files blindly.
 
 - [ ] **P1-7: Create incident-response runbooks and safe containment modes.**
+  - Partly done 2026-11-01: docs/INCIDENT_RESPONSE.md (triage, evidence,
+    containment, escalation, recovery, rebuild, and an inventory of every
+    automatic kill/wipe/restore/quarantine) and `secure-sudo contain`
+    (dry run, confirmation, evidence first, release; tests/userspace/
+    test-contain.sh). Remaining: guardrail tests for the ProcGuard,
+    TamperWatch, DriverGuard and BootGuard add-ons, and re-baselining
+    BootGuard/DriverGuard after a kernel update.
   - Document triage, evidence preservation, network isolation, account
     containment, process quarantine, policy lock, escalation, recovery, and
     post-incident rebuild steps.
