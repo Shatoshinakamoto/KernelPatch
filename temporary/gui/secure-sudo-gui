@@ -31,8 +31,9 @@ import hmac, json, os, re, secrets, shutil, signal, subprocess, sys, time, gzip,
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-CONF       = "/etc/secure_sudo/addons/gui.conf"
-ADDON_CONF = "/etc/secure_sudo/addons"
+# SS_GUI_CONF / SS_ADDON_CONF: for the tests (tests/userspace/test-addons.sh)
+CONF       = os.environ.get("SS_GUI_CONF", "/etc/secure_sudo/addons/gui.conf")
+ADDON_CONF = os.environ.get("SS_ADDON_CONF", "/etc/secure_sudo/addons")
 KLOG_DIR   = "/var/log/secure_sudo"            # daemon kernel-event logs
 ALOG_DIR   = "/var/log/secure_sudo/addons"     # guard logs (ssaddon_log)
 SYSFS      = "/sys/kernel/secure_sudo"
@@ -56,23 +57,99 @@ GUARD_BIN = {
 }
 
 
-def load_conf():
+# conf name -> the guard whose `check-config` validates it (P2-2: a change
+# made from the console that a guard would refuse is rolled back).
+CONF_CHECKER = {
+    "procguard": "procguard", "procguard_allow": "procguard",
+    "driverguard": "driverguard", "bootguard": "bootguard",
+    "biosguard": "biosguard", "locus": "locus", "tamperwatch": "tamperwatch",
+    "logging": "biosguard",
+}
+
+
+def load_conf(errors=None):
+    """gui.conf, checked strictly like the guards' configs (ssaddon_conf):
+    unknown keys, repeats, bad values and an unsafe owner/mode are errors,
+    appended to @errors as "path:line: message"."""
     cfg = {"bind": "127.0.0.1", "port": 8790}
+    errs = [] if errors is None else errors
     try:
-        with open(CONF) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k == "bind":
+        f = open(CONF)
+    except FileNotFoundError:
+        return cfg
+    except OSError as e:
+        errs.append(f"{CONF}: cannot be read: {e.strerror}")
+        return cfg
+    with f:
+        st = os.fstat(f.fileno())
+        if st.st_uid != 0:
+            errs.append(f"{CONF}: not owned by root (uid {st.st_uid})")
+        if st.st_mode & 0o022:
+            errs.append(f"{CONF}: writable by group or others (mode {st.st_mode & 0o7777:04o})")
+        seen = {}
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                errs.append(f"{CONF}:{n}: not a 'key = value' line")
+                continue
+            k, v = (x.strip() for x in line.split("=", 1))
+            if k not in ("bind", "port"):
+                errs.append(f"{CONF}:{n}: unknown setting '{k[:64]}'")
+                continue
+            if k in seen:
+                errs.append(f"{CONF}:{n}: {k} is set twice (first on line {seen[k]})")
+                continue
+            seen[k] = n
+            if k == "bind":
+                if not re.fullmatch(r"[A-Za-z0-9.\-_:\[\]%]{1,63}", v):
+                    errs.append(f"{CONF}:{n}: bind: '{v[:64]}' is not a host name or address")
+                else:
                     cfg["bind"] = v
-                elif k == "port":
-                    cfg["port"] = int(v or 8790)
-    except OSError:
-        pass
+            else:
+                if not re.fullmatch(r"[0-9]{1,5}", v) or not 1 <= int(v) <= 65535:
+                    errs.append(f"{CONF}:{n}: port: '{v[:64]}' is not a port (1..65535)")
+                else:
+                    cfg["port"] = int(v)
     return cfg
+
+
+def check_written(name):
+    """Run the owning guard's check-config; None if it passes or the guard is
+    not installed, else its report."""
+    exe = shutil.which(GUARD_BIN[CONF_CHECKER[name]])
+    if not exe:
+        return None
+    rc, out = run([exe, "check-config"])
+    return None if rc == 0 else out
+
+
+def replace_checked(name, path, content):
+    """Write @content to @path atomically; if the guard then reports a config
+    error, put the previous file back and return the report."""
+    try:
+        with open(path, "rb") as f:
+            old = f.read()
+    except FileNotFoundError:
+        old = None
+    os.makedirs(ADDON_CONF, 0o755, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(content)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    bad = check_written(name)
+    if bad is None:
+        return None
+    if old is None:
+        os.unlink(path)
+    else:
+        with open(tmp, "wb") as f:
+            f.write(old)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    return bad
 
 
 def get_token():
@@ -261,12 +338,10 @@ class Handler(BaseHTTPRequestHandler):
         if len(content) > 256 * 1024:
             return {"error": "too large"}
         path = os.path.join(ADDON_CONF, CONF_FILES[name])
-        os.makedirs(ADDON_CONF, 0o755, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(content)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
+        bad = replace_checked(name, path, content)
+        if bad is not None:
+            return {"error": "rejected by check-config; the previous file was kept",
+                    "report": bad}
         return {"ok": True, "path": path}
 
     def api_setkey(self, data):
@@ -289,12 +364,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
         if not found:
             lines.append(f"{key} = {val}\n")
-        os.makedirs(ADDON_CONF, 0o755, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.writelines(lines)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
+        bad = replace_checked(name, path, "".join(lines))
+        if bad is not None:
+            return {"error": "rejected by check-config; the previous file was kept",
+                    "report": bad}
         return {"ok": True, "key": key, "value": val}
 
     def api_action(self, data):
@@ -368,7 +441,19 @@ def main():
     if os.geteuid() != 0:
         sys.stderr.write("secure-sudo-gui: must run as root\n")
         return 1
-    CFG = load_conf()
+    errs = []
+    CFG = load_conf(errs)
+    if len(sys.argv) > 1 and sys.argv[1] == "check-config":
+        for e in errs:
+            print(e)
+        print(f"{len(errs)} configuration problem(s); the console refuses to start "
+              "until they are fixed" if errs else "configuration OK")
+        return 1 if errs else 0
+    if errs:
+        for e in errs:
+            sys.stderr.write(e + "\n")
+        sys.stderr.write("secure-sudo-gui: refusing to start: configuration errors above\n")
+        return 78
     TOKEN = get_token()
     srv = ThreadingHTTPServer((CFG["bind"], CFG["port"]), Handler)
     sys.stderr.write(f"secure-sudo-gui on http://{CFG['bind']}:{CFG['port']} "

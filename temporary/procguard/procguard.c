@@ -52,6 +52,7 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
+#include "ssaddon_conf.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef PG_CONF
@@ -87,10 +88,21 @@ static void trim(char *s)
 		s[--n] = '\0';
 }
 
-static void load_cfg(struct cfg *c)
+static int load_cfg(struct cfg *c, FILE *report)
 {
-	FILE *f;
-	char line[640];
+	static const char *const modes[] = { "monitor", "enforce", NULL };
+	const struct ssc_key keys[] = {
+		{ "mode", SSC_ENUM, &c->enforce, 0, 0, 0, modes },
+		{ "interval", SSC_INT, &c->interval, 0, 1, 3600, NULL },
+		{ "respawn_threshold", SSC_INT, &c->respawn_threshold, 0, 1, 1000, NULL },
+		{ "respawn_window", SSC_INT, &c->respawn_window, 0, 1, 86400, NULL },
+		{ "remove_on_infection", SSC_INT, &c->remove_on_infection, 0, 0, 1, NULL },
+		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
+		{ "quarantine_root", SSC_PATH, c->quarantine_root,
+		  sizeof(c->quarantine_root), 1, 0, NULL },
+		{ "sync_cmd", SSC_STR, c->sync_cmd, sizeof(c->sync_cmd), 0, 0, NULL },
+		SSC_END
+	};
 
 	c->enforce = 0;
 	c->interval = 5;
@@ -100,43 +112,16 @@ static void load_cfg(struct cfg *c)
 	c->rotate = 1;
 	snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", DEF_QROOT);
 	c->sync_cmd[0] = '\0';
+	return ssc_parse(CONF, keys, NULL, NULL, report);
+}
 
-	f = fopen(CONF, "re");
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
+/* Every file ProcGuard reads, checked strictly (P2-2). */
+static int conf_errors(FILE *r)
+{
+	struct cfg c;
 
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-
-		if (!strcmp(k, "mode"))
-			c->enforce = !strcmp(v, "enforce");
-		else if (!strcmp(k, "interval"))
-			c->interval = atoi(v) > 0 ? atoi(v) : 5;
-		else if (!strcmp(k, "respawn_threshold"))
-			c->respawn_threshold = atoi(v) > 0 ? atoi(v) : 3;
-		else if (!strcmp(k, "respawn_window"))
-			c->respawn_window = atoi(v) > 0 ? atoi(v) : 60;
-		else if (!strcmp(k, "remove_on_infection"))
-			c->remove_on_infection = atoi(v);
-		else if (!strcmp(k, "rotate"))
-			c->rotate = atoi(v);
-		else if (!strcmp(k, "quarantine_root"))
-			snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", v);
-		else if (!strcmp(k, "sync_cmd"))
-			snprintf(c->sync_cmd, sizeof(c->sync_cmd), "%s", v);
-	}
-	fclose(f);
+	return load_cfg(&c, r) + ssc_check_list(ALLOW, "allowlist entry", r) +
+	       ssl_check_conf(r) + locus_check_conf(r);
 }
 
 /* ---- allowlist ---- */
@@ -440,8 +425,11 @@ static int run_daemon(void)
 {
 	struct cfg c;
 	struct allowlist a;
+	int rc;
 
-	load_cfg(&c);
+	if ((rc = ssc_refuse("start ProcGuard", conf_errors(stderr))))
+		return rc;
+	load_cfg(&c, NULL);
 	if (allow_load(&a) != 0 || a.n == 0) {
 		ssl_err("refusing to run: allowlist %s is empty or missing "
 			"(an empty list would mean 'kill everything')", ALLOW);
@@ -466,9 +454,11 @@ static int run_once(void)
 {
 	struct cfg c;
 	struct allowlist a;
-	int off;
+	int off, rc;
 
-	load_cfg(&c);
+	if ((rc = ssc_refuse("scan", conf_errors(stderr))))
+		return rc;
+	load_cfg(&c, NULL);
 	if (allow_load(&a) != 0 || a.n == 0) {
 		fprintf(stderr, "procguard: empty/missing allowlist %s - refusing\n", ALLOW);
 		return 1;
@@ -485,8 +475,12 @@ static int cmd_status(void)
 	struct cfg c;
 	struct allowlist a;
 
-	load_cfg(&c);
+	int bad = conf_errors(NULL);
+
+	load_cfg(&c, NULL);
 	allow_load(&a);
+	if (bad)
+		printf("CONFIG:                %d problem(s) - run check-config\n", bad);
 	printf("ProcGuard mode:        %s\n", c.enforce ? "enforce" : "monitor");
 	printf("scan interval:         %ds\n", c.interval);
 	printf("respawn -> infection:  %d kills / %ds\n", c.respawn_threshold,
@@ -506,6 +500,7 @@ static void usage(void)
 "  daemon        run the watch loop (monitor or enforce per config)\n"
 "  scan          one pass now (detect in monitor, act in enforce)\n"
 "  status        show the current configuration\n"
+"  check-config  check every config file strictly; 1 if any problem\n"
 "\nConfig: " CONF "\nAllowlist: " ALLOW "\n");
 }
 
@@ -528,6 +523,8 @@ int main(int argc, char **argv)
 		return run_once();
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
 
 	usage();
 	ssl_close();

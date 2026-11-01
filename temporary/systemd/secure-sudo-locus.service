@@ -1,19 +1,46 @@
 [Unit]
 Description=secure_sudo Locus rotating-location allocator (v8 add-on)
 After=network.target
+OnFailure=secure-sudo-addon-failure@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/secure-sudo-locus serve
 Restart=on-failure
 RestartSec=3
-# Hardening: the allocator only hands out path strings; it needs no special
-# powers beyond creating its bucket dirs.
-NoNewPrivileges=yes
+RestartPreventExitStatus=78
+# The allocator only hands out path strings and creates its bucket dirs.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/secure_sudo /var/log/secure_sudo
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectProc=invisible
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_NET_BIND_SERVICE
+# --- P2-2 hardening shared by every add-on (docs/ADDONS.md "Service hardening")
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the add-on log can be shipped to a syslog collector (logging.conf)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+MemoryMax=64M
+TasksMax=16
+CPUQuota=25%
 
 [Install]
 WantedBy=multi-user.target

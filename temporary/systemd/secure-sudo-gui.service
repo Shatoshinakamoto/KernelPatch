@@ -1,14 +1,35 @@
 [Unit]
 Description=secure_sudo management console (local web GUI)
 After=local-fs.target
+OnFailure=secure-sudo-addon-failure@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/share/secure-sudo-gui/secure-sudo-gui
 Restart=on-failure
 RestartSec=3
-# Loopback console; no new privileges needed beyond root for config/quarantine.
+RestartPreventExitStatus=78
+# The console runs the other tools for the operator: the guards' scans (a
+# DriverGuard or PheonixBox repair writes system files), `secure-sudo set`
+# (writes /sys/kernel/secure_sudo) and quarantine (kills any process). Those
+# children inherit this unit's sandbox, so it only gets what cannot break
+# them; the console itself is loopback-only and token-gated.
 NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+MemoryMax=512M
+TasksMax=64
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

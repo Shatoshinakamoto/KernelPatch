@@ -52,6 +52,7 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
+#include "ssaddon_conf.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef BG_CONF
@@ -75,50 +76,30 @@ struct cfg {
 	char backup_root[PATH_MAX];
 };
 
-static void trim(char *s)
+static int load_cfg(struct cfg *c, FILE *report)
 {
-	size_t n = strlen(s);
-	while (n && isspace((unsigned char)s[n - 1]))
-		s[--n] = '\0';
-}
-
-static void load_cfg(struct cfg *c)
-{
-	FILE *f;
-	char line[PATH_MAX + 64];
+	static const char *const modes[] = { "monitor", "enforce", NULL };
+	const struct ssc_key keys[] = {
+		{ "mode", SSC_ENUM, &c->enforce, 0, 0, 0, modes },
+		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
+		{ "boot_dir", SSC_PATH, c->boot_dir, sizeof(c->boot_dir), 1, 0, NULL },
+		{ "backup_root", SSC_PATH, c->backup_root, sizeof(c->backup_root), 1, 0, NULL },
+		SSC_END
+	};
 
 	c->enforce = 1;			/* staging is safe; default on */
 	c->rotate = 1;
 	snprintf(c->boot_dir, sizeof(c->boot_dir), "/boot");
 	snprintf(c->backup_root, sizeof(c->backup_root), "%s", DEF_BACKUP);
+	return ssc_parse(CONF, keys, NULL, NULL, report);
+}
 
-	f = fopen(CONF, "re");
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
+/* Every file BootGuard reads, checked strictly (P2-2). */
+static int conf_errors(FILE *r)
+{
+	struct cfg c;
 
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-		if (!strcmp(k, "mode"))
-			c->enforce = !strcmp(v, "enforce");
-		else if (!strcmp(k, "rotate"))
-			c->rotate = atoi(v);
-		else if (!strcmp(k, "boot_dir"))
-			snprintf(c->boot_dir, sizeof(c->boot_dir), "%s", v);
-		else if (!strcmp(k, "backup_root"))
-			snprintf(c->backup_root, sizeof(c->backup_root), "%s", v);
-	}
-	fclose(f);
+	return load_cfg(&c, r) + ssl_check_conf(r) + locus_check_conf(r);
 }
 
 static int sha256_file(const char *path, char out[65])
@@ -308,7 +289,7 @@ static int cmd_baseline(void)
 	char bucket[PATH_MAX], tmp[] = STATEDIR "/.manifest.XXXXXX";
 	int fd;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	if (!strncmp(STATEDIR, "/var/lib/secure_sudo/", 21)) {
 		mkdir("/var/lib/secure_sudo", 0700);
 		mkdir("/var/lib/secure_sudo/addons", 0700);
@@ -416,7 +397,7 @@ static int cmd_scan(void)
 	ssize_t len;
 	size_t checked = 0, tampered = 0, staged = 0;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	{
 		char lock[PATH_MAX];
 
@@ -570,7 +551,7 @@ static int cmd_status(void)
 	size_t cap = 0;
 	ssize_t len;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	printf("BootGuard mode:   %s\n", c.enforce ? "enforce (stage on tamper)" :
 	       "monitor (report only)");
 	printf("boot dir:         %s\n", c.boot_dir);
@@ -599,6 +580,7 @@ static void usage(void)
 "  apply-now --i-understand-the-risk   operator-only LIVE restore\n"
 "  refresh [REASON] re-baseline after a legitimate change, logging what changed\n"
 "  status           show state\n"
+"  check-config     check every config file strictly; 1 if any problem\n"
 "\nStage-and-apply-at-boot by design: the live boot partition is not rewritten\n"
 "mid-run. Config: " CONF "\n");
 }
@@ -614,6 +596,15 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("bootguard");
+
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
+	if (strcmp(argv[1], "status")) {
+		int rc = ssc_refuse(argv[1], conf_errors(stderr));
+
+		if (rc)
+			return rc;
+	}
 
 	if (!strcmp(argv[1], "baseline"))
 		return cmd_baseline();

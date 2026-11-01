@@ -21,6 +21,9 @@ The add-ons:
 | **tamperwatch** | real-time attribution of *which process* tampered a protected file; optional quarantine | log by default |
 | **GUI** | local web console to view and configure all of the above | n/a (console) |
 
+Every add-on is **experimental**: see [Maturity](#maturity) for what that means,
+what is done and what is still open before any of them is promoted.
+
 Three things are shared by all of them:
 
 * **Logging** (`ssaddon_log`): every add-on writes timestamped, leveled lines to
@@ -320,14 +323,23 @@ record is shipped off-box with everything else. Tested by
 `/etc/secure_sudo/addons/logging.conf`:
 
 ```
-log_dir = /var/log/secure_sudo/addons     # root-only, 0700
-log_max_bytes = 8388608                    # local rotation cap
-remote_enabled = 0                         # set 1 to ship off-box
-remote_proto = udp                         # udp | tcp
-remote_host =                              # your collector
+# root-only, 0700
+log_dir = /var/log/secure_sudo/addons
+# local rotation cap (65536 .. 1 GiB)
+log_max_bytes = 8388608
+# 1 = ship every line off-box (needs remote_host)
+remote_enabled = 0
+# udp | tcp
+remote_proto = udp
+# your collector
+remote_host =
 remote_port = 514
-# notify_cmd =                             # run on important events (%m %l %f)
+# run on important events (%m %l %f)
+# notify_cmd =
 ```
+
+(Comments go on their own lines: the config is checked strictly, see
+[Config checking](#config-checking).)
 
 With `remote_enabled = 1`, every line is also sent as RFC 5424 syslog to your
 collector (rsyslog/syslog-ng, a SIEM, or a LAN log box) — the off-box backup, so
@@ -336,6 +348,248 @@ also run that command (message/level/feature passed as safely-quoted
 `%m`/`%l`/`%f`). The core PheonixBox feature also logs its tamper/repair and
 enable/disable events via `syslog(3)`, which your system syslog can forward the
 same way.
+
+## Maturity
+
+Every add-on here is **experimental** (TODO P2-2). That is a published status,
+kept in [`temporary/maturity.json`](../temporary/maturity.json) and checked on
+every gate run by `ci/check-addon-maturity.py`: the gate fails if the tree and
+the file disagree (a unit without failure reporting, an add-on without
+`check-config`, a shipped default that is not the published one, a promotion
+without an operator's approval).
+
+Experimental means: install it to try it, run it in its monitor/log mode, and do
+not rely on its enforcing mode on a production host yet. The TODO's caution
+stands: do not turn on automatic quarantine, repair or broad allowlist
+enforcement on production systems as a substitute for the tests and recovery
+work still open below.
+
+| Add-on | Level | Default mode | Acts by | Still open before promotion |
+|--------|-------|--------------|---------|-----------------------------|
+| `procguard` | experimental | monitor | killing processes; removing a respawning executable | evidence on removal, adversarial tests, approved criteria, host soak |
+| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | evidence on quarantine, adversarial tests, approved criteria, host soak |
+| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | baseline trust source, evidence on repair, adversarial tests, approved criteria, host soak |
+| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | baseline trust source, evidence on restore, adversarial tests, approved criteria, host soak |
+| `biosguard` | experimental | detect | nothing (log + notify) | baseline trust source, adversarial tests, approved criteria, host soak |
+| `locus` | experimental | serve | nothing destructive (hands out directory names) | adversarial tests, approved criteria, host soak |
+| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | evidence on quarantine, adversarial tests, approved criteria, host soak |
+| `failure` | experimental | report | nothing (reports another unit's failure) | adversarial tests, approved criteria, host soak |
+| `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | strict config check, baseline trust source, evidence on repair, adversarial tests, approved criteria, host soak |
+
+PheonixBox is a core feature (installed by `install.sh`, run by `secure-sudod`,
+[PHEONIXBOX.md](PHEONIXBOX.md)), but TODO P2-2 holds it to the same gate, so it
+is listed here too.
+
+BootGuard's default is `enforce` because that mode only *stages* a restore; the
+restore is applied by a separate unit at the next boot, and the installer
+enables neither the timer nor the restore unit.
+
+Done for every add-on in this step: strict config checking, a sandboxed and
+resource-limited unit, failure reporting, a threat model (below) and upgrade
+and rollback steps (below). The promotion criteria themselves (what "beta" and
+"stable" require, and the soak period) are not decided yet: they need the
+operator's approval, and `maturity.json` records them as pending until then.
+
+## Config checking
+
+Every add-on reads its config strictly (`temporary/common/ssaddon_conf.c`):
+
+* an unknown key, a line without `=`, and a key set twice are errors, so a
+  typo is never silently ignored (`mode = enforec` used to mean monitor);
+* an enum must be one of its values, a number must parse in full and be in
+  range, a path must be absolute with no `..`, a value too long is an error
+  (never truncated), and control characters are errors;
+* there are no inline comments: `mode = monitor  # note` is an error, put the
+  note on its own line;
+* the file must be owned by root and not group/world writable: these files name
+  commands (`notify_cmd`, `sync_cmd`) and paths that a root daemon acts on.
+
+Each guard's `check-config` checks its own file and the shared `logging.conf`
+and `locus-client.conf` (ProcGuard also its allowlist: one absolute path per
+line) and prints every problem as `file:line: message`:
+
+```sh
+secure-sudo-procguard check-config     # 0 = OK, 1 = problems listed
+secure-sudo-gui check-config           # the console's gui.conf
+```
+
+While a config has an error the acting commands (`daemon`, `scan`, `baseline`,
+`refresh`, `restore-staged`, `serve`, ...) refuse to run and exit 78
+(EX_CONFIG); `status` still works and says how many problems there are. A
+missing file is not an error: the built-in defaults apply. The console runs the
+owning guard's `check-config` after every config change it makes and puts the
+previous file back if the change is rejected.
+
+## Service hardening and failure reporting
+
+Each unit in `temporary/systemd/` is sandboxed as far as its job allows, and the
+gate holds each to a maximum `systemd-analyze security` exposure (listed in
+`maturity.json`; 9.6 "UNSAFE" for every unit before this step):
+
+| Unit | Exposure | Writable | Why not stricter |
+|------|---------:|----------|------------------|
+| procguard | 3.4 | everything but /usr, /boot, /efi, /etc | it removes infected files in /home and /tmp; the system dirs are read-only, so "never delete from a system directory" is enforced by the kernel too |
+| tamperwatch | 3.5 | its state and log | fanotify needs CAP_SYS_ADMIN |
+| driverguard | 2.6 | state, log, /lib/modules, /usr/lib/modules | enforce mode repairs module files |
+| bootguard | 2.3 | state and log (the scan only stages) | |
+| bootguard-restore | 2.0 | state, log, /boot, /efi; no network | it writes the boot partition at boot |
+| biosguard | 2.3 | state and log | |
+| locus | 2.1 | state and log | |
+| gui | 7.5 | everything | the scans, repairs, `secure-sudo set` and quarantine it runs inherit its sandbox |
+| addon-failure@ | 3.9 | /var | it runs `notify_cmd`, which may mail or post |
+
+Every unit also has resource limits (`MemoryMax=`, `TasksMax=`, `CPUQuota=`;
+the scans run at `Nice=10` with idle I/O priority) and
+`OnFailure=secure-sudo-addon-failure@%n.service`. When a guard crashes, is
+killed, hits its memory limit, keeps failing, or refuses to start because its
+config is invalid, that unit runs `/usr/libexec/secure-sudo/secure-sudo-addon-failure`,
+which raises a CRITICAL notification through the shared logging: the local add-on
+log, the off-box collector when one is set, and `notify_cmd`. A guard that
+silently stopped guarding would otherwise look the same as a quiet host. The
+daemons do not restart-loop on a config error (`RestartPreventExitStatus=78`).
+
+Limits of the sandbox: `sync_cmd` and `notify_cmd` run inside the guard's
+sandbox, so a command that writes outside the writable paths (for example ssh
+updating `/root/.ssh/known_hosts` under tamperwatch's read-only /home) fails;
+pre-seed what it needs. A `driver_dir` or `boot_dir` outside the default trees
+needs the matching `ReadWritePaths=` in a drop-in.
+
+## Threat model
+
+Common to all: the adversary is a process on the host, possibly root, trying to
+persist, to hide what it did, or to make a guard do damage for it. A root
+attacker who can rewrite the guards, their configs or their units defeats
+every add-on here: they are tripwires and responders, not a boundary against
+root. What they add is detection that is shipped off the host as it happens,
+and response in the window before the attacker has turned them off. What every
+add-on must never do is the attacker's work for them: a false positive that
+kills or overwrites the wrong thing is the main risk, which is why each acting
+mode is opt-in and each config is checked strictly.
+
+#### procguard
+
+* **Defends:** a non-allowlisted program running at all; an implant that keeps
+  respawning (removed after a compressed sample is quarantined).
+* **Does not defend:** code inside an allowlisted executable (an interpreter on
+  the list runs any script), anything faster than one scan interval, or an
+  attacker who edits the allowlist (root).
+* **Harm if wrong:** killing a legitimate service missing from the allowlist,
+  or removing its file. Mitigations: monitor is the default; an empty list
+  refuses to run; PID 1, kernel threads, its own ancestors and the installed
+  secure_sudo programs are never killed; nothing is removed from a system
+  directory (now enforced by the unit's read-only system dirs too).
+* **Open:** the original path and the quarantined sample are logged, but not
+  the content hash, owner, mode or times (the evidence record, P2-2 part 2),
+  and the adversarial tests (P2-2 part 3) are not written.
+
+#### tamperwatch
+
+* **Defends:** names, in real time, the process that wrote a protected file,
+  and in quarantine mode stops it after compressing its executable.
+* **Does not defend:** writes through paths it does not watch (a bind mount, a
+  new hard link), a writer that exits before the event is read, or a root
+  attacker who stops it first (the stop is reported by failure reporting only
+  if the unit fails, not if it is stopped cleanly).
+* **Harm if wrong:** killing a legitimate writer. Mitigations: log mode by
+  default; never kills PID 1, itself, a secure_sudo program, or anything while a
+  package manager is running.
+
+#### driverguard
+
+* **Defends:** a module file on disk changed outside a package transaction,
+  repaired from its backup in enforce mode.
+* **Does not defend:** a module already loaded (that is the kernel LSM's job),
+  or a baseline rewritten by root: today the baseline and backups are only as
+  trustworthy as the host (P2-2 part 2 adds an independent trust source).
+* **Harm if wrong:** putting back an old module over a legitimate update.
+  Mitigations: monitor by default; scans defer while a package manager holds
+  its lock, and the package hooks re-baseline after an update.
+
+#### bootguard
+
+* **Defends:** a changed kernel, initrd or boot loader config in /boot, put back
+  from its backup at the next boot.
+* **Does not defend:** firmware or the ESP outside `boot_dir`, a change that
+  never touches the files (a different boot entry in NVRAM), or a rewritten
+  baseline (P2-2 part 2).
+* **Harm if wrong:** booting an older kernel or initrd after a legitimate
+  update. Mitigations: restores are staged, never live (`apply-now` needs
+  `--i-understand-the-risk`); scans defer during a package transaction; the
+  hooks re-baseline and drop a staged restore that predates an update.
+
+#### biosguard
+
+* **Defends:** detects a change in the DMI identity or ACPI tables and reports
+  it CRITICAL; it never writes firmware.
+* **Does not defend:** firmware changes that leave DMI and ACPI unchanged
+  (measured boot, P2-1, is the stronger check), or a rewritten fingerprint
+  (P2-2 part 2).
+* **Harm if wrong:** a false alarm after a legitimate firmware update; nothing
+  is changed.
+
+#### locus
+
+* **Defends:** spreads quarantine and backup locations across hourly buckets
+  so a fixed path cannot be targeted.
+* **Does not defend:** anything on its own; a rogue allocator can only name a
+  location, which the guards check (absolute, no `..`, no control characters).
+* **Harm if wrong:** a guard writing to a different directory than expected.
+  It listens on 127.0.0.1 by default; the allocator protocol has no
+  authentication, so do not widen `alloc_bind` beyond a trusted LAN.
+
+#### gui
+
+* **Defends:** nothing itself; it is the operator's console.
+* **Risk:** it can change every config and kill any process, so it is the
+  highest-value target here. Mitigations: loopback by default, a per-install
+  token on every request, a Host header check, config changes rolled back when
+  `check-config` rejects them, and failure reporting on its unit.
+
+#### pheonixbox
+
+* **Defends:** a protected file changed while protection is on: it is put back
+  from the stored copy on the next scan, and the file is kept read-only.
+* **Does not defend:** a change made while protection is off, or by root
+  rewriting the stored copies and manifest (baseline trust, P2-2 part 2).
+* **Harm if wrong:** undoing a legitimate change to a protected file.
+  Mitigations: off by default; `disable` restores the original permissions;
+  tamperwatch never kills a PheonixBox repair (SECURITY_REVIEW #65).
+* **Open:** its path list is not yet checked strictly (`check-config`).
+
+#### failure
+
+* **Defends:** makes a guard that stops guarding visible off the host.
+* **Does not defend:** a clean `systemctl stop` by root (not a failure), or a
+  host whose logging is turned off.
+
+## Upgrade and rollback
+
+**Upgrade.** Install the new tree over the old one with
+`sudo bash temporary/install-temporary.sh`. It replaces the binaries, units and
+hooks, keeps every config you edited, and enables nothing new. Then:
+
+1. Run `check-config` for every add-on you use (the installer prints a warning
+   for each that fails). A config that was accepted before may be rejected now
+   (strict checking arrived in P2-2): fix what it lists. Until you do, that
+   add-on's acting commands refuse to run and its unit fails with status 78,
+   which is reported.
+2. `systemctl daemon-reload`, then restart the daemons you run
+   (`systemctl restart secure-sudo-procguard` and so on).
+3. Baselines (`/var/lib/secure_sudo/addons/*/manifest`, BiosGuard's
+   `fingerprint`) and backups are kept across upgrades; re-baseline only if the
+   release notes say the format changed.
+
+**Rollback.** Keep the previous release tarball. To go back, stop the add-on
+units, install the previous tree with its own `install-temporary.sh`, then
+`systemctl daemon-reload` and start them again. Configs are kept either way.
+A release from before strict checking ignores keys it does not know; a strict
+one rejects them, so a config written for a newer release can fail
+`check-config` on an older one: compare it with that release's templates. A staged BootGuard restore (`PENDING`) survives
+both: inspect `restore.list` before rebooting into either version.
+
+**Turn an add-on off.** `systemctl disable --now` its unit or timer. Nothing
+else depends on it; its state and logs stay until you remove
+`/var/lib/secure_sudo/addons/<name>` and `/var/log/secure_sudo/addons/<name>.log`.
 
 ## Install (opt-in)
 

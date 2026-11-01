@@ -45,6 +45,7 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
+#include "ssaddon_conf.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef TW_PBOX_CONF
@@ -74,40 +75,39 @@ static void trim(char *s)
 		s[--n] = '\0';
 }
 
-static void load_cfg(struct cfg *c)
+/* tamperwatch.conf may also list extra protected files, one absolute path
+ * per line. */
+static int path_line(char *line, char *err, size_t errlen, void *ctx)
 {
-	FILE *f;
-	char line[PATH_MAX + 64];
+	(void)ctx;
+	if (line[0] != '/' || strchr(line, '='))
+		return 0;
+	return ssc_path_ok(line, err, errlen) ? 1 : -1;
+}
+
+static int load_cfg(struct cfg *c, FILE *report)
+{
+	static const char *const modes[] = { "log", "quarantine", NULL };
+	const struct ssc_key keys[] = {
+		{ "mode", SSC_ENUM, &c->quarantine, 0, 0, 0, modes },
+		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
+		{ "quarantine_root", SSC_PATH, c->quarantine_root,
+		  sizeof(c->quarantine_root), 1, 0, NULL },
+		SSC_END
+	};
 
 	c->quarantine = 0;
 	c->rotate = 1;
 	snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", DEF_QROOT);
+	return ssc_parse(CONF, keys, path_line, NULL, report);
+}
 
-	f = fopen(CONF, "re");
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
+/* Every file tamperwatch reads, checked strictly (P2-2). */
+static int conf_errors(FILE *r)
+{
+	struct cfg c;
 
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-		if (!strcmp(k, "mode"))
-			c->quarantine = !strcmp(v, "quarantine");
-		else if (!strcmp(k, "rotate"))
-			c->rotate = atoi(v);
-		else if (!strcmp(k, "quarantine_root"))
-			snprintf(c->quarantine_root, sizeof(c->quarantine_root), "%s", v);
-	}
-	fclose(f);
+	return load_cfg(&c, r) + ssl_check_conf(r) + locus_check_conf(r);
 }
 
 /* ---- marking the protected set ---- */
@@ -250,7 +250,7 @@ static int run_daemon(void)
 	struct cfg c;
 	struct pollfd pfd;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	g_fan = fanotify_init(FAN_CLASS_NOTIF | FAN_NONBLOCK, O_RDONLY | O_CLOEXEC);
 	if (g_fan < 0) {
 		ssl_err("fanotify_init failed: %s (need root + CONFIG_FANOTIFY)",
@@ -310,7 +310,7 @@ static int cmd_status(void)
 {
 	struct cfg c;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	printf("tamperwatch\n");
 	printf("mode:            %s\n", c.quarantine ? "quarantine (kill + compress exe)" :
 	       "log (attribute only)");
@@ -323,9 +323,10 @@ static int cmd_status(void)
 static void usage(void)
 {
 	fprintf(stderr,
-"usage: secure-sudo-tamperwatch <daemon|status>\n"
+"usage: secure-sudo-tamperwatch <daemon|status|check-config>\n"
 "  daemon   watch the protected set and attribute (and optionally quarantine) tampering\n"
 "  status   show configuration\n"
+"  check-config  check every config file strictly; 1 if any problem\n"
 "\nNeeds root + CONFIG_FANOTIFY. Config: " CONF "\n");
 }
 
@@ -340,6 +341,15 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("tamperwatch");
+
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
+	if (strcmp(argv[1], "status")) {
+		int rc = ssc_refuse(argv[1], conf_errors(stderr));
+
+		if (rc)
+			return rc;
+	}
 
 	if (!strcmp(argv[1], "daemon"))
 		return run_daemon();

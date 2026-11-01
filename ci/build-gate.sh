@@ -88,6 +88,9 @@ if stage_on lint; then
 	fi
 	python3 -m py_compile "$SRC/temporary/gui/secure-sudo-gui" || bad=$((bad + 1))
 	bash "$SRC/ci/check-lsm-hooks.sh" || bad=$((bad + 1))
+	python3 -B "$SRC/ci/check-addon-maturity.py" "$SRC" > "$WORK/addon-maturity.log" 2>&1 ||
+		{ grep -v '^ok' "$WORK/addon-maturity.log"; bad=$((bad + 1)); }
+	tail -1 "$WORK/addon-maturity.log"
 	if [ "$bad" -eq 0 ]; then result lint pass "$n shell scripts"; else result lint FAIL "$bad problems"; fi
 fi
 

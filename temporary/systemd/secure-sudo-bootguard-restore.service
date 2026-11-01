@@ -5,11 +5,43 @@ DefaultDependencies=no
 After=local-fs.target
 Before=sysinit.target
 Conflicts=shutdown.target
+OnFailure=secure-sudo-addon-failure@%n.service
 
 [Service]
 Type=oneshot
 # No-op unless a restore is PENDING (staged by a previous `bootguard scan`).
 ExecStart=/usr/bin/secure-sudo-bootguard restore-staged
+# It writes the boot partition (and an ESP mounted under /boot or /efi) and
+# its own state; everything else is read-only. No network this early.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/secure_sudo /var/log/secure_sudo -/boot -/efi
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_CHOWN
+# --- P2-2 hardening shared by every add-on (docs/ADDONS.md "Service hardening")
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the add-on log can be shipped to a syslog collector (logging.conf)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+MemoryMax=768M
+TasksMax=32
+TimeoutStartSec=10min
 
 [Install]
 WantedBy=sysinit.target

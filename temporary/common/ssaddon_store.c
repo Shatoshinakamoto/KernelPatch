@@ -23,6 +23,8 @@
 #include <openssl/evp.h>
 #include <zlib.h>
 
+#include "ssaddon_conf.h"
+
 /* Locus client target: read from /etc/secure_sudo/addons/locus-client.conf,
  * one "host = ..." / "port = ..." pair. Absent => no allocator, use defaults. */
 #ifndef SSADDON_PKG_LOCKS
@@ -274,34 +276,30 @@ static void trim(char *s)
 		s[--n] = '\0';
 }
 
+static int locus_client_conf(char *host, size_t hn, char *port, size_t pn, FILE *report)
+{
+	const struct ssc_key keys[] = {
+		{ "host", SSC_HOST, host, hn, 0, 0, NULL },
+		{ "port", SSC_PORT, port, pn, 0, 0, NULL },
+		{ NULL, 0, NULL, 0, 0, 0, NULL }
+	};
+
+	host[0] = '\0';
+	snprintf(port, pn, "8787");
+	return ssc_parse(LOCUS_CLIENT_CONF, keys, NULL, NULL, report);
+}
+
+int locus_check_conf(FILE *report)
+{
+	char host[256], port[16];
+
+	return locus_client_conf(host, sizeof(host), port, sizeof(port), report);
+}
+
 static int read_locus_target(char *host, size_t hn, char *port, size_t pn)
 {
-	FILE *f = fopen(LOCUS_CLIENT_CONF, "re");
-	char line[256];
-	int have_host = 0;
-
-	host[0] = port[0] = '\0';
-	if (!f)
-		return -1;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
-
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-		if (!strcmp(k, "host")) { snprintf(host, hn, "%s", v); have_host = 1; }
-		else if (!strcmp(k, "port")) snprintf(port, pn, "%s", v);
-	}
-	fclose(f);
-	if (!have_host || !host[0] || !port[0])
+	/* an invalid file means no allocator: the guard keeps its own root */
+	if (locus_client_conf(host, hn, port, pn, NULL) != 0 || !host[0] || !port[0])
 		return -1;
 	return 0;
 }

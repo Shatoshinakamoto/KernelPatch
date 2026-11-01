@@ -49,6 +49,7 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
+#include "ssaddon_conf.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef DG_CONF
@@ -70,13 +71,6 @@ struct cfg {
 	char backup_root[PATH_MAX];
 };
 
-static void trim(char *s)
-{
-	size_t n = strlen(s);
-	while (n && isspace((unsigned char)s[n - 1]))
-		s[--n] = '\0';
-}
-
 static void default_driver_dir(char *out, size_t n)
 {
 	struct utsname u;
@@ -87,43 +81,30 @@ static void default_driver_dir(char *out, size_t n)
 		snprintf(out, n, "/lib/modules");
 }
 
-static void load_cfg(struct cfg *c)
+static int load_cfg(struct cfg *c, FILE *report)
 {
-	FILE *f;
-	char line[PATH_MAX + 64];
+	static const char *const modes[] = { "monitor", "enforce", NULL };
+	const struct ssc_key keys[] = {
+		{ "mode", SSC_ENUM, &c->enforce, 0, 0, 0, modes },
+		{ "rotate", SSC_INT, &c->rotate, 0, 0, 1, NULL },
+		{ "driver_dir", SSC_PATH, c->driver_dir, sizeof(c->driver_dir), 1, 0, NULL },
+		{ "backup_root", SSC_PATH, c->backup_root, sizeof(c->backup_root), 1, 0, NULL },
+		SSC_END
+	};
 
 	c->enforce = 0;
 	c->rotate = 1;
 	default_driver_dir(c->driver_dir, sizeof(c->driver_dir));
 	snprintf(c->backup_root, sizeof(c->backup_root), "%s", DEF_BACKUP);
+	return ssc_parse(CONF, keys, NULL, NULL, report);
+}
 
-	f = fopen(CONF, "re");
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
+/* Every file DriverGuard reads, checked strictly (P2-2). */
+static int conf_errors(FILE *r)
+{
+	struct cfg c;
 
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-		if (!strcmp(k, "mode"))
-			c->enforce = !strcmp(v, "enforce");
-		else if (!strcmp(k, "rotate"))
-			c->rotate = atoi(v);
-		else if (!strcmp(k, "driver_dir"))
-			snprintf(c->driver_dir, sizeof(c->driver_dir), "%s", v);
-		else if (!strcmp(k, "backup_root"))
-			snprintf(c->backup_root, sizeof(c->backup_root), "%s", v);
-	}
-	fclose(f);
+	return load_cfg(&c, r) + ssl_check_conf(r) + locus_check_conf(r);
 }
 
 /* Does this filename look like a kernel module? */
@@ -247,7 +228,7 @@ static int cmd_baseline(void)
 	char bucket[PATH_MAX], tmp[] = STATEDIR "/.manifest.XXXXXX";
 	int fd;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	if (!strncmp(STATEDIR, "/var/lib/secure_sudo/", 21)) {
 		mkdir("/var/lib/secure_sudo", 0700);
 		mkdir("/var/lib/secure_sudo/addons", 0700);
@@ -292,7 +273,7 @@ static int cmd_backup(void)
 	struct base_ctx b = { 0 };
 	char bucket[PATH_MAX];
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	if (backup_bucket(&c, bucket, sizeof(bucket)) != 0) {
 		ssl_err("cannot create backup bucket");
 		return 1;
@@ -335,7 +316,7 @@ static int cmd_scan(void)
 	ssize_t len;
 	size_t checked = 0, tampered = 0, repaired = 0;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	{
 		char lock[PATH_MAX];
 
@@ -418,7 +399,7 @@ static int cmd_status(void)
 	size_t cap = 0;
 	ssize_t len;
 
-	load_cfg(&c);
+	load_cfg(&c, NULL);
 	printf("DriverGuard mode:  %s\n", c.enforce ? "enforce (auto-repair)" :
 	       "monitor (report only)");
 	printf("driver tree:       %s\n", c.driver_dir);
@@ -444,6 +425,7 @@ static void usage(void)
 "  scan       check modules vs baseline; repair from backup in enforce mode\n"
 "  refresh [REASON]  re-baseline after a legitimate update (logged)\n"
 "  status     show configuration and baseline size\n"
+"  check-config  check every config file strictly; 1 if any problem\n"
 "\nConfig: " CONF "\n");
 }
 
@@ -458,6 +440,15 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("driverguard");
+
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
+	if (strcmp(argv[1], "status")) {
+		int rc = ssc_refuse(argv[1], conf_errors(stderr));
+
+		if (rc)
+			return rc;
+	}
 
 	if (!strcmp(argv[1], "baseline"))
 		return cmd_baseline();

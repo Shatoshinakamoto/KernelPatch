@@ -44,8 +44,13 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
+#include "ssaddon_conf.h"
 
-#define CONF		"/etc/secure_sudo/addons/locus.conf"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef LOCUS_CONF
+#define LOCUS_CONF	"/etc/secure_sudo/addons/locus.conf"
+#endif
+#define CONF		LOCUS_CONF
 #define MAX_ROOTS	32
 
 struct root_map {
@@ -70,10 +75,71 @@ static void trim(char *s)
 		s[--n] = '\0';
 }
 
-static void load_cfg(void)
+/* "root <purpose> = <path>": the root handed out for one purpose. */
+static int root_line(char *line, char *err, size_t errlen, void *ctx)
 {
-	FILE *f;
-	char line[PATH_MAX + 128];
+	char *sp, *e, *v;
+	size_t n;
+	int i;
+
+	(void)ctx;
+	if (strncmp(line, "root ", 5) && strncmp(line, "root\t", 5))
+		return 0;
+	sp = line + 5;
+	e = strchr(sp, '=');
+	if (!e) {
+		snprintf(err, errlen, "expected 'root <purpose> = <path>'");
+		return -1;
+	}
+	*e = '\0';
+	trim(sp);
+	while (*sp == ' ' || *sp == '\t') sp++;
+	v = e + 1;
+	while (*v == ' ' || *v == '\t') v++;
+	n = strlen(sp);
+	if (!n || n >= sizeof(C.roots[0].purpose)) {
+		snprintf(err, errlen, "root: the purpose must be 1..%zu characters",
+			 sizeof(C.roots[0].purpose) - 1);
+		return -1;
+	}
+	for (i = 0; sp[i]; i++) {
+		if (!isalnum((unsigned char)sp[i]) && sp[i] != '-' && sp[i] != '_') {
+			snprintf(err, errlen, "root: purpose '%s' may only use letters, digits, - and _", sp);
+			return -1;
+		}
+	}
+	for (i = 0; i < C.nroots; i++) {
+		if (!strcmp(C.roots[i].purpose, sp)) {
+			snprintf(err, errlen, "root %s is set twice", sp);
+			return -1;
+		}
+	}
+	if (C.nroots >= MAX_ROOTS) {
+		snprintf(err, errlen, "more than %d roots", MAX_ROOTS);
+		return -1;
+	}
+	if (!ssc_path_ok(v, err, errlen))
+		return -1;
+	if (strlen(v) >= sizeof(C.roots[0].path)) {
+		snprintf(err, errlen, "root %s: path is too long", sp);
+		return -1;
+	}
+	snprintf(C.roots[C.nroots].purpose, sizeof(C.roots[C.nroots].purpose), "%s", sp);
+	snprintf(C.roots[C.nroots].path, sizeof(C.roots[C.nroots].path), "%s", v);
+	C.nroots++;
+	return 1;
+}
+
+static int load_cfg(FILE *report)
+{
+	const struct ssc_key keys[] = {
+		{ "alloc_bind", SSC_HOST, C.alloc_bind, sizeof(C.alloc_bind), 1, 0, NULL },
+		{ "alloc_port", SSC_PORT, C.alloc_port, sizeof(C.alloc_port), 0, 0, NULL },
+		{ "gui_bind", SSC_HOST, C.gui_bind, sizeof(C.gui_bind), 1, 0, NULL },
+		{ "gui_port", SSC_PORT, C.gui_port, sizeof(C.gui_port), 0, 0, NULL },
+		{ "default_root", SSC_PATH, C.default_root, sizeof(C.default_root), 0, 0, NULL },
+		SSC_END
+	};
 
 	snprintf(C.alloc_bind, sizeof(C.alloc_bind), "127.0.0.1");
 	snprintf(C.alloc_port, sizeof(C.alloc_port), "8787");
@@ -81,48 +147,20 @@ static void load_cfg(void)
 	snprintf(C.gui_port, sizeof(C.gui_port), "8788");
 	C.default_root[0] = '\0';
 	C.nroots = 0;
+	return ssc_parse(CONF, keys, root_line, NULL, report);
+}
 
-	f = fopen(CONF, "re");
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
+/* Every file Locus reads, checked strictly (P2-2). */
+static int conf_errors(FILE *r)
+{
+	int n = load_cfg(r) + ssl_check_conf(r);
 
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		/* "root <purpose> = <path>" */
-		if (!strncmp(line, "root ", 5) && C.nroots < MAX_ROOTS) {
-			char *sp = line + 5, *e = strchr(sp, '=');
-
-			if (!e)
-				continue;
-			*e = '\0';
-			trim(sp);
-			v = e + 1;
-			while (*v == ' ' || *v == '\t') v++;
-			snprintf(C.roots[C.nroots].purpose,
-				 sizeof(C.roots[C.nroots].purpose), "%.63s", sp);
-			snprintf(C.roots[C.nroots].path,
-				 sizeof(C.roots[C.nroots].path), "%s", v);
-			C.nroots++;
-			continue;
-		}
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line; v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-		if (!strcmp(k, "alloc_bind")) snprintf(C.alloc_bind, sizeof(C.alloc_bind), "%s", v);
-		else if (!strcmp(k, "alloc_port")) snprintf(C.alloc_port, sizeof(C.alloc_port), "%s", v);
-		else if (!strcmp(k, "gui_bind")) snprintf(C.gui_bind, sizeof(C.gui_bind), "%s", v);
-		else if (!strcmp(k, "gui_port")) snprintf(C.gui_port, sizeof(C.gui_port), "%s", v);
-		else if (!strcmp(k, "default_root")) snprintf(C.default_root, sizeof(C.default_root), "%s", v);
+	if (!n && !strcmp(C.alloc_port, C.gui_port) && !strcmp(C.alloc_bind, C.gui_bind)) {
+		if (r)
+			fprintf(r, "%s: alloc and gui listen on the same address and port\n", CONF);
+		n++;
 	}
-	fclose(f);
+	return n;
 }
 
 static const char *root_for(const char *purpose)
@@ -290,7 +328,7 @@ static int run_serve(void)
 	int afd, gfd;
 	struct pollfd pfd[2];
 
-	load_cfg();
+	load_cfg(NULL);
 	afd = listen_on(C.alloc_bind, C.alloc_port);
 	gfd = listen_on(C.gui_bind, C.gui_port);
 	if (afd < 0 && gfd < 0) {
@@ -335,7 +373,7 @@ static int cmd_status(void)
 {
 	int i;
 
-	load_cfg();
+	load_cfg(NULL);
 	printf("Locus\n");
 	printf("allocator bind:  %s:%s  (ALLOC <purpose> -> OK <path>)\n",
 	       C.alloc_bind, C.alloc_port);
@@ -350,9 +388,10 @@ static int cmd_status(void)
 static void usage(void)
 {
 	fprintf(stderr,
-"usage: secure-sudo-locus <serve|status>\n"
+"usage: secure-sudo-locus <serve|status|check-config>\n"
 "  serve    run the allocator + read-only GUI listeners\n"
 "  status   show the configured binds and roots\n"
+"  check-config  check every config file strictly; 1 if any problem\n"
 "\nConfig: " CONF "\n");
 }
 
@@ -367,6 +406,15 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("locus");
+
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
+	if (strcmp(argv[1], "status")) {
+		int rc = ssc_refuse(argv[1], conf_errors(stderr));
+
+		if (rc)
+			return rc;
+	}
 
 	if (!strcmp(argv[1], "serve"))
 		return run_serve();
