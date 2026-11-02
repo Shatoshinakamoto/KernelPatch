@@ -556,7 +556,8 @@ if command -v swtpm_setup >/dev/null 2>&1 && command -v swtpm_localca >/dev/null
 	}
 	SS_ATTEST_TCTI="$K" "$T/secure-sudo-attest" ek > "$T/ek.json"
 	check "'attest ek' prints the EK and its NV certificate" python3 -c "
-import json; j=json.load(open('$T/ek.json')); assert j['ek_alg']=='rsa2048' and j['ek_public'] and j['ek_cert']"
+import json; e={x['template']:x for x in json.load(open('$T/ek.json'))['eks']}
+assert e['rsa2048']['public'] and e['rsa2048']['cert'] and e['ecc-p384']['cert']"
 	N="$(nonce)"; kq "$N" "$T/k0" --ek
 	kenroll "$T/k0" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA"; rc=$?
 	check "enroll with --ek-ca: the certificate chains and a challenge is written" sh -c "
@@ -597,21 +598,102 @@ import json; j=json.load(open('$T/ek.json')); assert j['ek_alg']=='rsa2048' and 
 	python3 - "$T/k3" "$T/ekb.json" "$T/k-splice" <<'SPLICE'
 import json, sys
 b = json.load(open(sys.argv[1])); other = json.load(open(sys.argv[2]))
-b["ek"]["ek_public"] = other["ek_public"]       # another TPM's EK, this TPM's certificate
+rsa = lambda j: next(x for x in j["eks"] if x["template"] == "rsa2048")
+rsa(b["ek"])["public"] = rsa(other)["public"]   # another TPM's EK, this TPM's certificate
 json.dump(b, open(sys.argv[3], "w"))
 SPLICE
-	kenroll "$T/k-splice" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA"; rc=$?
+	kenroll "$T/k-splice" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA" --ek-template rsa2048; rc=$?
 	check "another TPM's EK with this TPM's certificate fails" sh -c \
 		"[ $rc -eq 1 ] && grep -qF 'FAIL the EK certificate certifies this endorsement key' '$T/e.out'"
-	kenroll "$T/k-splice" "$N" --ek-no-cert --challenge "$T/splice.ch"; rc=$?
+	kenroll "$T/k-splice" "$N" --ek-no-cert --ek-template rsa2048 --challenge "$T/splice.ch"; rc=$?
 	act "$K" "$T/splice.ch" > /dev/null 2>&1; s1=$?
 	act "$B" "$T/splice.ch" > /dev/null 2>&1; s2=$?
 	check "... and with --ek-no-cert neither TPM can complete it (AK and EK not in one TPM)" \
 		sh -c "[ $rc -eq 0 ] && [ $s1 -ne 0 ] && [ $s2 -ne 0 ]"
+	python3 - "$T/k3" "$T/k-old" <<'OLDEK'
+import json, sys
+b = json.load(open(sys.argv[1])); r = next(x for x in b["ek"]["eks"] if x["template"] == "rsa2048")
+b["ek"] = {"ek_alg": "rsa2048", "ek_public": r["public"], "ek_cert": r["cert"]}   # 0.12 hosts
+json.dump(b, open(sys.argv[2], "w"))
+OLDEK
+	kenroll "$T/k-old" "$N" --ek-ca "$ROOTCA" --ek-intermediate "$INTCA" --challenge "$T/old.ch"; rc=$?
+	check "a bundle in the older single-EK form still enrolls" sh -c \
+		"[ $rc -eq 0 ] && grep -qF 'PASS the endorsement key is a standard rsa2048 EK' '$T/e.out'"
 	N="$(nonce)"; quote "$B" "$N" "$T/k4" --ek
 	python3 "$VERIFY" enroll "$T/k4" --nonce "$N" --out "$T/khost.b" --ek-ca "$ROOTCA" > "$T/e.out" 2>&1; rc=$?
 	check "--ek-ca on a TPM without an EK certificate fails" sh -c \
 		"[ $rc -eq 1 ] && grep -qF 'FAIL the TPM has a manufacturer EK certificate' '$T/e.out'"
+
+	# ---- an ECC P-256 EK (template L-2) whose certificate names its
+	# intermediate CA only by URL (AIA), as many manufacturers do ----
+	if command -v tpm2_createek >/dev/null 2>&1 && command -v tpm2_nvdefine >/dev/null 2>&1; then
+		M="$(start_swtpm m)"
+		export TPM2TOOLS_TCTI="$M"
+		tpm2_createek -G ecc256 -c "$T/m-ek.ctx" -u "$T/m-ek.pem" -f pem > /dev/null 2>&1
+		tpm2_flushcontext -t > /dev/null 2>&1
+		mkdir -p "$T/aia"
+		openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+			-keyout "$T/mroot.key" -out "$T/mroot.pem" -subj /CN=test-tpm-root -days 2 \
+			-addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign > /dev/null 2>&1
+		openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+			-keyout "$T/mica.key" -out "$T/mica.csr" -subj /CN=test-tpm-ica > /dev/null 2>&1
+		printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign\n' > "$T/ica.ext"
+		openssl x509 -req -in "$T/mica.csr" -CA "$T/mroot.pem" -CAkey "$T/mroot.key" \
+			-CAcreateserial -days 2 -extfile "$T/ica.ext" -outform DER -out "$T/aia/ica.der" > /dev/null 2>&1
+		openssl x509 -inform DER -in "$T/aia/ica.der" -out "$T/mica.pem"
+		HP="$(shuf -i 20000-60000 -n 1)"
+		(cd "$T/aia" && exec python3 -m http.server "$HP" --bind 127.0.0.1) > /dev/null 2>&1 &
+		HPID=$!
+		printf 'keyUsage=critical,keyEncipherment\nauthorityInfoAccess=caIssuers;URI:http://127.0.0.1:%s/ica.der\n' "$HP" > "$T/ek.ext"
+		openssl x509 -new -force_pubkey "$T/m-ek.pem" -subj /CN=test-ek -CA "$T/mica.pem" \
+			-CAkey "$T/mica.key" -days 2 -extfile "$T/ek.ext" -outform DER -out "$T/m-ek.der" > /dev/null 2>&1
+		tpm2_nvdefine 0x01c0000a -C o -s "$(stat -c %s "$T/m-ek.der")" \
+			-a "ownerread|ownerwrite|authread|authwrite|no_da" > /dev/null 2>&1 &&
+			tpm2_nvwrite 0x01c0000a -C o -i "$T/m-ek.der" > /dev/null 2>&1; nvrc=$?
+		unset TPM2TOOLS_TCTI
+		SS_ATTEST_TCTI="$M" "$T/secure-sudo-attest" ek > "$T/ekm.json"
+		check "'attest ek' finds the certified ECC P-256 EK (NV 0x01c0000a)" sh -c "[ $nvrc -eq 0 ] && python3 -c \"
+import json; e=[x for x in json.load(open('$T/ekm.json'))['eks'] if x['template']=='ecc-p256']; assert e and e[0]['cert']\""
+		sleep 1
+		N="$(nonce)"; quote "$M" "$N" "$T/m0" --ek
+		python3 "$VERIFY" enroll "$T/m0" --nonce "$N" --out "$T/mhost.e" --ek-ca "$T/mroot.pem" --ek-template ecc-p256 --no-aia > "$T/e.out" 2>&1; nrc=$?
+		check "without the intermediate and with --no-aia the chain fails" sh -c \
+			"[ $nrc -eq 1 ] && grep -qF 'FAIL the EK certificate chains to a trusted TPM manufacturer CA' '$T/e.out'"
+		python3 "$VERIFY" enroll "$T/m0" --nonce "$N" --out "$T/mhost.e" --ek-ca "$T/mroot.pem" > "$T/e.out" 2>&1; rc=$?
+		check "the missing intermediate is fetched from the certificate's AIA URL" sh -c \
+			"[ $rc -eq 0 ] && grep -qF \"PASS the EK certificate chains to a trusted TPM manufacturer CA; intermediate from the certificate's AIA URL\" '$T/e.out' &&
+			grep -qF 'PASS the EK certificate certifies this endorsement key (ecc-p256)' '$T/e.out'"
+		act "$M" "$T/mhost.e.challenge" > "$T/resp.m"; mrc=$?
+		python3 "$VERIFY" activate "$T/mhost.e" --response "$T/resp.m" > "$T/a.out" 2>&1; arc=$?
+		check "credential activation with the ECC P-256 EK (ECDH + KDFe)" sh -c "[ $mrc -eq 0 ] && [ $arc -eq 0 ]"
+		# a TPM with no certificate in NV (like Intel PTT, whose certificates
+		# Intel serves online): the operator passes it with --ek-cert
+		TPM2TOOLS_TCTI="$B" tpm2_createek -G rsa -c "$T/b-ek.ctx" -u "$T/b-ek.pem" -f pem > /dev/null 2>&1
+		TPM2TOOLS_TCTI="$B" tpm2_flushcontext -t > /dev/null 2>&1
+		openssl x509 -new -force_pubkey "$T/b-ek.pem" -subj /CN=test-ek-b -CA "$T/mica.pem" \
+			-CAkey "$T/mica.key" -days 2 -extfile "$T/ek.ext" -out "$T/b-ek.crt" > /dev/null 2>&1
+		N="$(nonce)"; quote "$B" "$N" "$T/k6" --ek
+		python3 "$VERIFY" enroll "$T/k6" --nonce "$N" --out "$T/khost.b2" --ek-ca "$T/mroot.pem" \
+			--ek-cert "$T/b-ek.crt" > "$T/e.out" 2>&1; rc=$?
+		act "$B" "$T/khost.b2.challenge" > "$T/resp.b2"; brc=$?
+		python3 "$VERIFY" activate "$T/khost.b2" --response "$T/resp.b2" > "$T/a.out" 2>&1; arc=$?
+		check "--ek-cert supplies a certificate the TPM does not store" sh -c \
+			"[ $rc -eq 0 ] && [ $brc -eq 0 ] && [ $arc -eq 0 ] && grep -qF 'PASS the EK certificate certifies this endorsement key (rsa2048)' '$T/e.out'"
+		kill "$HPID" 2>/dev/null
+		N="$(nonce)"; kq "$N" "$T/k5" --ek
+		python3 "$VERIFY" enroll "$T/k5" --nonce "$N" --out "$T/khost.384" --ek-ca "$ROOTCA" \
+			--ek-intermediate "$INTCA" --ek-template ecc-p384 > "$T/e.out" 2>&1; rc=$?
+		act "$K" "$T/khost.384.challenge" > "$T/resp.384"; krc=$?
+		python3 "$VERIFY" activate "$T/khost.384" --response "$T/resp.384" > "$T/a.out" 2>&1; arc=$?
+		check "credential activation with the ECC P-384 EK swtpm certified (template H-3)" sh -c "
+		[ $rc -eq 0 ] && [ $krc -eq 0 ] && [ $arc -eq 0 ] && grep -qF 'PASS the EK certificate certifies this endorsement key (ecc-p384)' '$T/e.out'"
+		act "$B" "$T/khost.384.challenge" > /dev/null 2>&1; brc=$?
+		check "... which another TPM cannot answer" test "$brc" -ne 0
+	elif [ "${SS_REQUIRE_SWTPM:-0}" = 1 ]; then
+		not_ok "ECC EK tests need tpm2-tools (SS_REQUIRE_SWTPM=1)"
+	else
+		skip "ECC EK tests need tpm2-tools"
+	fi
 elif [ "${SS_REQUIRE_SWTPM:-0}" = 1 ]; then
 	not_ok "EK tests need swtpm_setup and swtpm_localca (swtpm-tools; SS_REQUIRE_SWTPM=1)"
 else

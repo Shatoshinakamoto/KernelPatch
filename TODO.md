@@ -261,7 +261,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
 
 ## P2 — extend defense-in-depth and monitoring
 
-- [ ] **P2-1: Add measured-boot and executable-integrity integration.**
+- [x] **P2-1: Add measured-boot and executable-integrity integration.**
   - Evaluate TPM-backed measured boot and remote attestation of Secure Boot,
     kernel, initramfs/UKI, and critical policy; document enrollment, verifier
     trust, revocation, and recovery.
@@ -289,10 +289,11 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     logs from a real OVMF + GRUB + Ubuntu 24.04 boot on a software TPM.
     The EK certificate check and credential activation are built too
     (`enroll --ek-ca`, `attest activate`, `secure-sudo-attest-verify
-    activate`), for RSA 2048 EKs, tested against a software TPM with a
-    manufacturer-style EK certificate. Still to build: activation for
-    ECC-only EKs, and fetching intermediate CAs from the certificate's AIA
-    URL.
+    activate`), for RSA 2048, ECC P-256 and ECC P-384 EKs, with missing
+    intermediate CAs fetched from the certificate's AIA URL, tested against
+    software TPMs with manufacturer-style EK certificates. The code is
+    complete; the check against a real machine's TPM is step 3 of
+    [docs/HARDWARE_SMOKE_TEST.md](docs/HARDWARE_SMOKE_TEST.md) (TODO P0-3).
 
 - [ ] **P2-2: Promote add-ons through an explicit maturity gate.**
   - Keep `temporary/` features opt-in until each has automated tests,
