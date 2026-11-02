@@ -326,8 +326,13 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     monitor-to-enforce), and the fixes they needed (SECURITY_REVIEW #71;
     docs/ADDONS.md "Adversarial tests" and "Enforce arming"); PheonixBox
     `check-config` and evidence before repair.
-    Open: promotion criteria for the operator to approve (part 4), a signed
-    PheonixBox snapshot (its baseline trust).
+    *Part 4:* promotion criteria approved by the operator (2026-11-02,
+    standard): beta = every requirement done plus a 14-day monitor soak on a
+    real host with every alert explained; stable = beta plus 30 days in the
+    acting mode and a recovery drill. Recorded in `maturity.json`, enforced
+    by the gate (docs/ADDONS.md "Promotion criteria").
+    Open: the host soaks themselves (they need a real host and time, not
+    code), a signed PheonixBox snapshot (its baseline trust).
 
 - [ ] **P2-3: Improve alerting and fleet integration.**
   - Define a documented event format and supported integrations for common
