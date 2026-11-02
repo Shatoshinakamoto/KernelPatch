@@ -51,7 +51,9 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
 /* Raise a NOTIFICATION about an event the operator should see now (not just a
  * log line): logs it at @level AND runs the configured `notify_cmd` from
  * logging.conf, if any, with %m=message %l=level %f=feature substituted. Used
- * for things like a detected BIOS tamper. Best-effort; never blocks. */
+ * for things like a detected BIOS tamper. The command runs without a shell,
+ * repeats are held back (300 s), at most 10 run a minute, and one that fails
+ * or runs past 10 s (then killed) is logged ERROR (ssaddon_log.c). */
 void ssl_notify(enum ssl_level level, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 

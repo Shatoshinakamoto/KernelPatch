@@ -799,14 +799,23 @@ static void t_creds(void)
 	struct who admcap = { USER, USER, 1, { ADMIN_GID }, 1ULL << CAP_SETUID | 1ULL << CAP_SETGID };
 	int r;
 
+	events_reset();
 	r = as(&nscap, do_setresuid, (void *)(uintptr_t)1001);
 	tap(r == EPERM, "#1 non-sudo with CAP_SETUID cannot change UID (got %d)", r);
+	tap(saw_deny("credential_change", "\"operation\":\"setuid\""),
+	    "#1 the denied UID change is a credential_change event (P2-3)");
 	r = as(&nscap, do_setresuid, (void *)(uintptr_t)USER);
 	tap(r == 0, "#1 non-sudo may make a no-op setresuid to its own UID (got %d)", r);
+	events_reset();
 	r = as(&nscap, do_setresgid, (void *)(uintptr_t)1001);
 	tap(r == EPERM, "#1 non-sudo with CAP_SETGID cannot change GID (got %d)", r);
+	tap(saw_deny("credential_change", "\"operation\":\"setgid\""),
+	    "#1 ... and so is the denied GID change");
+	events_reset();
 	r = as(&nscap, do_setgroups, (void *)(uintptr_t)1001);
 	tap(r == EPERM, "#1 non-sudo with CAP_SETGID cannot setgroups (got %d)", r);
+	tap(saw_deny("credential_change", "\"operation\":\"setgroups\""),
+	    "#1 ... and the denied setgroups");
 	r = as(&admcap, do_setresuid, (void *)(uintptr_t)1001);
 	tap(r == EPERM, "#1 admin group not yet configured: still denied (got %d)", r);
 	tap(knob_set("admin_gid", "27") == 0, "set admin_gid=27");
@@ -819,8 +828,11 @@ static void t_creds(void)
 	tap(r == 0, "#1 with block_setid=0 the ordinary capability rules apply (got %d)", r);
 	knob_set("block_setid", "1");
 
+	events_reset();
 	r = as(&NONSUDO, do_userns, NULL);
 	tap(r == EPERM, "#1 non-sudo cannot create a user namespace (got %d)", r);
+	tap(saw_deny("credential_change", "\"operation\":\"userns_create\""),
+	    "#1 ... and the denied user-namespace creation");
 	r = as(&ROOT, do_userns, NULL);
 	tap(r == 0, "#1 root can create a user namespace (got %d)", r);
 	knob_set("block_userns", "0");

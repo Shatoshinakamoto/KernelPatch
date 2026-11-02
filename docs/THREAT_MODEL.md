@@ -189,9 +189,15 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
   valid password. Admin-group members are exempt. `block_userns` breaks
   rootless containers and some sandboxes (§4.1). A kernel bug reachable
   without a user namespace is not affected.
-* **Tested by:** `t_creds` (denial with the capability held, no-op change
-  allowed, admin GID, root, knob off; user namespaces for non-sudo, root and
-  knob off).
+* **Seen as:** a `credential_change` event per denial (`operation` is
+  `setuid`, `setgid`, `setgroups` or `userns_create`), severity critical,
+  forwarded and alerted on ([EVENTS.md](EVENTS.md)). At most 20 per 5 s are
+  recorded; the next record says how many were not.
+* **Tested by:** `t_creds` (denial with the capability held, and its
+  `credential_change` event; no-op change allowed, admin GID, root, knob off;
+  user namespaces for non-sudo, root and knob off) and
+  `tests/vm/distro/alert-trace-guest.sh` (the event traced to a collector and
+  an alert).
 
 ### #1b Setuid/file-capability exec gate (kernel)
 

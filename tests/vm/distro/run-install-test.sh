@@ -11,7 +11,9 @@
 #   2. reboot: the secure_sudo kernel comes up once; LSM list, AppArmor,
 #      services, verify
 #   3. reboot without committing: the previous kernel comes back by itself
-#   4. re-arm, reboot, verify --commit, reboot: the new kernel is now default
+#   4. re-arm, reboot, verify --commit, reboot: the new kernel is now default;
+#      node-scan, one event traced to an external alert (P2-3), the TPM
+#      (VM_TPM=1)
 #   5. policy and recovery exercises on the real kernel (recovery-exercises.sh)
 #   6. boot the previous kernel on request, uninstall (refused while PAM uses
 #      the modules), check that nothing of ours is left, reboot
@@ -161,6 +163,13 @@ gstep g1-guard 'su plain -s /bin/sh -c "/opt/ss-g1/app -c /usr/bin/true"; echo r
 check "G1: now the kernel's Node guard refuses the child" inlast '^rc=126'
 gstep g1-cleanup 'rm -rf /opt/ss-g1 && secure-sudo node-scan /opt/ss-g1; secure-sudo list node_sea_binaries'
 check "G1: with the app gone, a scan unregisters it" sh -c "! grep -q ss-g1 '$LAST'"
+
+# ------------- 4b2. one event traced from the kernel to an alert (P2-3)
+bash "$VM" put "$W" "$HERE/alert-trace-guest.sh" /root/alert-trace-guest.sh
+gstep p23-trace 'bash /root/alert-trace-guest.sh'
+grep -E '^(ok|not ok)' "$LAST" | sed 's/^/# P2-3 guest: /'
+check "P2-3: a kernel denial reaches the local log, the collector and alert_cmd; a failing alert is visible" \
+	sh -c "! grep -q '^not ok' '$LAST' && grep -q '^1\\.\\.' '$LAST' && [ $GRC -eq 0 ]"
 
 # --------------------- 4c. the OTP master key sealed to the TPM (#15, G3)
 # The guest has a software TPM (VM_TPM=1) on the secure_sudo kernel. The

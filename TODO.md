@@ -342,6 +342,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     safely handled; avoid executing user-controlled event text as shell code.
   - **Done when:** a test event can be traced from the kernel through local
     storage to an external alert, with gaps and failures observable.
+  - Progress (2026-11-02): docs/EVENTS.md (format, severity, PRI,
+    integrations, gaps); `credential_change` events for #1 denials;
+    daemon `alert_cmd` (no shell, dedup, rate limit, timeout, failures in the
+    log and health); add-on `notify_cmd` without a shell; the trace test
+    `tests/vm/distro/alert-trace-guest.sh` in the distro VM run
+    (SECURITY_REVIEW #73). Open: the VM run proving the trace on each distro.
 
 - [ ] **P2-4: Make boot and firmware assurance stronger.**
   - Evaluate an initramfs-stage BootGuard restore/verification path and test

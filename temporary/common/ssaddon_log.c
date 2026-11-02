@@ -18,6 +18,8 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <netdb.h>
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
@@ -267,13 +269,127 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
 	ship_remote(syslog_pri(level), ts, msg);
 }
 
+/*
+ * notify_cmd (TODO P2-3). The template is split into words here (single and
+ * double quotes group, a backslash escapes the next character) and run with
+ * execvp under a fixed PATH: no shell ever sees the message, so text an
+ * attacker put in a file name, unit name or table name cannot become a
+ * command. %m, %l and %f inside a word are replaced by the message, level and
+ * feature, with control bytes written as \xNN.
+ *
+ * The same notification (level and message) within NOTIFY_DEDUP_SECS is
+ * counted, not run again, and the next one says how many were held back; at
+ * most NOTIFY_MAX_PER_MIN run per minute. A command that cannot start, exits
+ * non-zero or runs past NOTIFY_TIMEOUT_SECS (then killed) is logged ERROR, so
+ * the failure is in the local and forwarded log.
+ */
+#define NOTIFY_ARGS		32
+#define NOTIFY_DEDUP_SECS	300
+#define NOTIFY_MAX_PER_MIN	10
+#ifndef NOTIFY_TIMEOUT_SECS
+#define NOTIFY_TIMEOUT_SECS	10
+#endif
+#define NOTIFY_SLOTS		32
+
+static struct {
+	unsigned long long key;
+	time_t last;
+	unsigned long held;
+} notify_seen[NOTIFY_SLOTS];
+static time_t notify_window;
+static unsigned notify_window_n;
+static unsigned long notify_window_dropped;
+
+static int notify_split(const char *tmpl, char *buf, size_t n, char *words[], int max)
+{
+	size_t o = 0;
+	int w = 0;
+	const char *p = tmpl;
+
+	while (*p) {
+		char q = 0;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		if (w >= max - 1)
+			return -1;
+		words[w++] = buf + o;
+		while (*p && (q || (*p != ' ' && *p != '\t'))) {
+			if (!q && (*p == '\'' || *p == '"')) {
+				q = *p++;
+				continue;
+			}
+			if (q && *p == q) {
+				q = 0;
+				p++;
+				continue;
+			}
+			if (*p == '\\' && q != '\'' && p[1])
+				p++;
+			if (o + 1 >= n)
+				return -1;
+			buf[o++] = *p++;
+		}
+		if (q)
+			return -1;
+		buf[o++] = '\0';
+	}
+	words[w] = NULL;
+	return w;
+}
+
+/* Run argv; wait up to NOTIFY_TIMEOUT_SECS. Returns the exit status, 127 if
+ * it could not start, -1 if it was killed for running too long. */
+static int notify_run(char *const argv[])
+{
+	struct timespec tick = { 0, 50 * 1000 * 1000 };
+	time_t start = time(NULL);
+	pid_t pid = fork(), r;
+	int st;
+
+	if (pid == 0) {
+		int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+
+		if (fd >= 0) {
+			dup2(fd, 0);
+			dup2(fd, 1);
+			dup2(fd, 2);
+		}
+		for (fd = 3; fd < 1024; fd++)
+			close(fd);
+		setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	if (pid < 0)
+		return 127;
+	for (;;) {
+		r = waitpid(pid, &st, WNOHANG);
+		if (r == pid)
+			return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+		if (r < 0)
+			return 127;
+		if (time(NULL) - start >= NOTIFY_TIMEOUT_SECS) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &st, 0);
+			return -1;
+		}
+		nanosleep(&tick, NULL);
+	}
+}
+
 void ssl_notify(enum ssl_level level, const char *fmt, ...)
 {
-	char raw[1024], msg[1024], cmd[1600];
+	char raw[1024], msg[1024], buf[1024], *words[NOTIFY_ARGS];
+	char args[NOTIFY_ARGS][1200], *argv[NOTIFY_ARGS], held_s[96] = "";
+	unsigned long long key = 0xcbf29ce484222325ULL;
+	time_t now = time(NULL);
+	const char *s;
+	int w, i, rc, slot = -1, oldest = 0;
+	unsigned long held;
 	va_list ap;
-	const char *p;
-	size_t o = 0;
-	int rc;
 
 	if (!S.ready)
 		ssl_init("addon");
@@ -289,46 +405,92 @@ void ssl_notify(enum ssl_level level, const char *fmt, ...)
 
 	if (!S.notify_cmd[0])
 		return;
-	/* Build the command, substituting %m=message %l=level %f=feature. Each
-	 * substitution is single-quoted so the operator's template cannot be
-	 * broken by message content (the tools are root-only regardless). */
-	for (p = S.notify_cmd; *p && o < sizeof(cmd) - 1; p++) {
-		if (p[0] == '%' && (p[1] == 'm' || p[1] == 'l' || p[1] == 'f')) {
-			const char *val = p[1] == 'm' ? msg :
-					  p[1] == 'l' ? level_name(level) : S.feature;
-			char q[1100];
-			const char *s;
-			size_t qo = 0;
 
-			q[qo++] = '\'';
-			for (s = val; *s && qo < sizeof(q) - 6; s++) {
-				if (*s == '\'') {	/* ' -> '\'' */
-					q[qo++] = '\''; q[qo++] = '\\';
-					q[qo++] = '\''; q[qo++] = '\'';
-				} else {
-					q[qo++] = *s;
-				}
-			}
-			q[qo++] = '\'';
-			q[qo] = '\0';
-			/* never cut a quoted value short: a half-quoted command
-			 * is not run at all (it used to write past cmd[]) */
-			if (o + qo >= sizeof(cmd)) {
-				ssl_log(SSL_WARN, "notify_cmd not run: the command would be "
-					"longer than %zu bytes", sizeof(cmd) - 1);
-				return;
-			}
-			memcpy(cmd + o, q, qo + 1);
-			o += qo;
-			p++;
-		} else {
-			cmd[o++] = *p;
+	key = (key ^ (unsigned)level) * 0x100000001b3ULL;
+	for (s = msg; *s; s++)
+		key = (key ^ (unsigned char)*s) * 0x100000001b3ULL;
+	for (i = 0; i < NOTIFY_SLOTS; i++) {
+		if (notify_seen[i].last && notify_seen[i].key == key) {
+			slot = i;
+			break;
 		}
+		if (notify_seen[i].last < notify_seen[oldest].last)
+			oldest = i;
 	}
-	cmd[o] = '\0';
-	rc = system(cmd);
-	if (rc != 0)
-		ssl_log(SSL_WARN, "notify_cmd returned %d", rc);
+	if (slot >= 0 && now >= notify_seen[slot].last &&
+	    now - notify_seen[slot].last < NOTIFY_DEDUP_SECS) {
+		notify_seen[slot].held++;
+		return;		/* the log line above is the record */
+	}
+	if (!notify_window || now - notify_window >= 60) {
+		if (notify_window_dropped)
+			ssl_log(SSL_WARN, "notify_cmd: %lu notification(s) not run in the "
+				"last minute (more than %d)", notify_window_dropped,
+				NOTIFY_MAX_PER_MIN);
+		notify_window = now;
+		notify_window_n = 0;
+		notify_window_dropped = 0;
+	}
+	if (notify_window_n >= NOTIFY_MAX_PER_MIN) {
+		notify_window_dropped++;
+		return;
+	}
+	if (slot < 0) {
+		slot = oldest;
+		notify_seen[slot].key = key;
+		notify_seen[slot].held = 0;
+	}
+	held = notify_seen[slot].held;
+	notify_seen[slot].held = 0;
+	notify_seen[slot].last = now;
+	if (held)
+		snprintf(held_s, sizeof(held_s), " (%lu more like this in the last %d s)",
+			 held, NOTIFY_DEDUP_SECS);
+
+	w = notify_split(S.notify_cmd, buf, sizeof(buf), words, NOTIFY_ARGS);
+	if (w <= 0) {
+		ssl_log(SSL_ERR, "notify_cmd not run: unbalanced quotes or more than %d "
+			"words", NOTIFY_ARGS - 1);
+		return;
+	}
+	for (i = 0; i < w; i++) {
+		const char *p;
+		size_t o = 0;
+
+		for (p = words[i]; *p && o + 1 < sizeof(args[i]); p++) {
+			const char *v;
+
+			if (p[0] != '%' || (p[1] != 'm' && p[1] != 'l' && p[1] != 'f')) {
+				args[i][o++] = *p;
+				continue;
+			}
+			v = p[1] == 'm' ? msg : p[1] == 'l' ? level_name(level) : S.feature;
+			p++;
+			for (; *v && o + 5 < sizeof(args[i]); v++) {
+				unsigned char ch = (unsigned char)*v;
+
+				if (ch < 0x20 || ch == 0x7f)
+					o += (size_t)snprintf(args[i] + o, sizeof(args[i]) - o,
+							      "\\x%02x", ch);
+				else
+					args[i][o++] = (char)ch;
+			}
+			if (p[-1] == '%' && p[0] == 'm' && held_s[0])
+				for (v = held_s; *v && o + 1 < sizeof(args[i]); v++)
+					args[i][o++] = *v;
+		}
+		args[i][o] = '\0';
+		argv[i] = args[i];
+	}
+	argv[w] = NULL;
+	notify_window_n++;
+	rc = notify_run(argv);
+	if (rc == -1)
+		ssl_log(SSL_ERR, "notify_cmd FAILED: killed after %d s", NOTIFY_TIMEOUT_SECS);
+	else if (rc == 127)
+		ssl_log(SSL_ERR, "notify_cmd FAILED: %s could not be started", argv[0]);
+	else if (rc != 0)
+		ssl_log(SSL_ERR, "notify_cmd FAILED: exited %d", rc);
 }
 
 void ssl_close(void)

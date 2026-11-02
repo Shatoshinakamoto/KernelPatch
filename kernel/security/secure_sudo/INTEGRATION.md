@@ -215,6 +215,14 @@ discards; only a buffer smaller than one record gets a partial one. Consumers
 must monitor the drop counter and sequence numbers rather than assume complete
 history.
 
+Protection #1 records every refused UID/GID/groups change and user-namespace
+creation as `event_type` `credential_change` (`operation` `setuid`, `setgid`,
+`setgroups` or `userns_create`, `decision` `deny`, `reason`
+`non_sudo_user`). These records share a rate limit of 20 per 5 s so that one
+user cannot flush the ring; each message says how many earlier denials were
+not recorded. Severities, forwarding priorities and alerting for every event
+type are in [docs/EVENTS.md](../../../docs/EVENTS.md).
+
 Example shape:
 
 ```json
