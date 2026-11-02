@@ -636,7 +636,7 @@ Do not rely on them until they have tests.
 * **Needs:** a TPM 2.0. Enrollment is trust on first use unless the
   verifier checks the TPM's EK certificate against the manufacturer CA and
   runs credential activation (`--ek-ca`), which binds the attestation key to
-  a certified TPM. That needs an RSA 2048 EK, which most TPMs ship.
+  a certified TPM (an RSA 2048, ECC P-256 or ECC P-384 EK).
 * **Also (part 2):** the LSM measures every policy change it accepts
   (knobs, lists, the lock) into PCR 13 with a securityfs log, and marks any
   extend it did not make. The verifier replays the log, so the policy and

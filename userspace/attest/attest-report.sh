@@ -57,7 +57,8 @@ case "$cmd" in
 	if [ -z "$cred" ] || [ -z "$sec" ]; then
 		echo "attest: $1 is not a challenge from secure-sudo-attest-verify" >&2; exit 2
 	fi
-	exec "$BIN" activate --credential "$cred" --secret "$sec" ;;
+	tmpl="$(tr -d ' \n' < "$1" | sed -n 's/.*"ek_template":"\([a-z0-9-]*\)".*/\1/p')"
+	exec "$BIN" activate --ek "${tmpl:-rsa2048}" --credential "$cred" --secret "$sec" ;;
   quote) ;;
   *) usage ;;
 esac

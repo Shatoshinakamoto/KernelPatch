@@ -94,22 +94,41 @@ credential activation" below).
 ### Endorsement key and credential activation
 
 Every TPM has an endorsement key (EK). The manufacturer stores a
-certificate for it in TPM NV (index `0x01c00002` for the RSA 2048 EK),
-signed by the manufacturer's CA. That certificate says "this key is the EK
-of a genuine TPM". Credential activation then proves that the AK lives in
-the same TPM.
+certificate for it in TPM NV, signed by the manufacturer's CA. That
+certificate says "this key is the EK of a genuine TPM". Credential
+activation then proves that the AK lives in the same TPM. Three EK
+templates of the TCG EK Credential Profile are supported:
 
-1. The host sends its EK with the bundle (`attest quote --ek`, or `attest
-   ek` on its own). The tool recreates the EK from the TCG EK Credential
-   Profile's default RSA template, so it is the key the certificate is for.
-2. The verifier checks that the EK uses the standard template (restricted
-   decryption key, `PolicySecret(endorsement)` policy, fixedTPM), that the
-   certificate is for that EK, and that the certificate chains to a CA you
-   pass with `--ek-ca` (roots; repeatable) and `--ek-intermediate`
-   (repeatable). Get those from the TPM vendor (Infineon, STMicro, Nuvoton,
-   Intel PTT and AMD fTPM all publish them).
+| Template | Key | Certificate in NV | Using it |
+|---|---|---|---|
+| `rsa2048` (L-1) | RSA 2048, SHA-256 name | `0x01c00002` | `PolicySecret(endorsement)` |
+| `ecc-p256` (L-2) | ECC NIST P-256, SHA-256 name | `0x01c0000a` | `PolicySecret(endorsement)` |
+| `ecc-p384` (H-3) | ECC NIST P-384, SHA-384 name | `0x01c00016` | empty auth (userWithAuth) |
+
+1. The host sends its EKs with the bundle (`attest quote --ek`, or `attest
+   ek` on its own): the RSA EK always, and each ECC EK whose certificate
+   index exists. The tool recreates each EK from its template, so it is the
+   key the certificate is for.
+2. The verifier checks that the EK uses its template (restricted decryption
+   key, the template's policy, fixedTPM), that the certificate is for that
+   EK (the same public key), and that the certificate chains to a CA you
+   pass with `--ek-ca` (roots; repeatable). Intermediates come from
+   `--ek-intermediate` (repeatable) or, when the chain is still incomplete,
+   from the certificate's Authority Information Access URL. The verifier
+   fetches them over HTTP(S) and follows the AIA of each fetched certificate
+   up to four levels. A fetched certificate is only an untrusted
+   intermediate: the chain must still end at your `--ek-ca`. Use `--no-aia`
+   on a verifier without network. Get the roots from the TPM vendor
+   (Infineon, STMicro, Nuvoton, Intel and AMD all publish them). The
+   verifier uses the first EK whose certificate checks out, or the one you
+   name with `--ek-template`. A TPM that keeps its certificate somewhere
+   other than NV can still be checked: Intel PTT is one example, since Intel
+   serves the certificates online. Pass the certificate with
+   `--ek-cert FILE` (PEM or DER).
 3. The verifier makes a challenge in software (`TPM2_MakeCredential`): a
-   random secret, encrypted to the EK and bound to the AK's name. It writes
+   random secret, encrypted to the EK and bound to the AK's name. For an
+   RSA EK the seed is RSA-OAEP encrypted. For an ECC EK it comes from ECDH
+   with a fresh ephemeral key and the KDFe key derivation. It writes
    the challenge next to the host record (`HOST.json.challenge`, or
    `--challenge FILE`). The record says `"ek_activation": "pending"` and
    holds only the secret's sha256.
@@ -436,14 +455,14 @@ intact", while the quote answers "what booted".
 These are features the design needs. They are tracked in TODO P2-1 as
 missing work, not as permanent limits:
 
-- **Credential activation with an ECC EK.** Only the RSA 2048 EK is
-  supported. Nearly every TPM has one, but a TPM that ships only an ECC EK
-  certificate (`0x01c0000a`) cannot be bound yet. Making the challenge for
-  it needs ECDH and the KDFe key derivation in the verifier.
-- **Automatic retrieval of intermediate CA certificates.** The verifier does
-  not follow the EK certificate's Authority Information Access URL. Pass
-  intermediates with `--ek-intermediate`.
+Nothing from P2-1 is open. The firmware event-log parser, the IMA log
+replay, the EK certificate check with credential activation (RSA and ECC
+EKs), and fetching intermediate CAs from the AIA URL used to be listed
+here. All of them are built (sections above).
 
-The firmware event-log parser, the IMA log replay and the RSA EK
-certificate check with credential activation that used to be listed here
-are built (sections above).
+EK templates beyond the three above are not recognised: the other
+high-range ones (H-1 RSA 2048, H-2 ECC P-256, H-4 to H-7) and SM2. A TPM
+that only has one of those is refused with "the TPM has an endorsement key
+under a known template". Adding one is a table entry in both
+`secure-sudo-attest` and the verifier, once a certificate from such a TPM is
+available to test against.
