@@ -378,6 +378,14 @@ cat > "$T/apt/apt-get" <<'EOF2'
 #!/bin/sh
 echo "$*" >> "$STUB_LOG"; [ "$1" = install ] && [ -n "${STUB_FAIL:-}" ] && exit 100; exit 0
 EOF2
+cat > "$T/apt/ldconfig" <<'EOF2'
+#!/bin/sh
+# every library install.sh checks is present, except STUB_NOLIB
+for l in libtss2-esys.so.0 libtss2-tctildr.so.0 libtss2-mu.so.0 libtss2-rc.so.0 \
+	 libtss2-tcti-device.so.0 libcrypto.so.3; do
+	[ "$l" = "${STUB_NOLIB:-}" ] || printf '\t%s (libc6,x86-64) => /lib/%s\n' "$l" "$l"
+done
+EOF2
 chmod 0755 "$T/apt/"*
 rdeps() { SS_ROOT="" SS_INSTALL_LIB=1 PATH="$T/apt:$PATH" STUB_LOG="$T/apt.log" bash -c '. "$0"; FAMILY=debian; "$@"' "$INST" "$@"; }
 eq "runtime_missing lists only the missing package" "$(rdeps runtime_missing)" libqrencode4
@@ -389,6 +397,15 @@ eq "a known package is installed without a refresh" "$(tr '\n' '|' < "$T/apt.log
 : > "$T/apt.log"
 refute_with "a failed package install stops with a clear message" "could not install the runtime packages libqrencode4" \
 	withenv STUB_FAIL=1 -- rdeps install_runtime_deps
+# The distro VM test found secure-sudo-attest (P2-1) could not load
+# libtss2-tctildr/-rc on a cloud image: libraries the programs link against
+# are installed by library, under the name the distro offers.
+eq "a missing library brings in its package (64-bit time_t name offered)" \
+	"$(withenv STUB_NOLIB=libtss2-rc.so.0 STUB_CANDIDATE=1 -- rdeps runtime_missing | tr '\n' ' ')" "libqrencode4 libtss2-rc0t64 "
+check "every library secure-sudo-attest links against is covered" sh -c '
+	for l in $(sed -n "s/^LDLIBS *:= *//p" "$0/userspace/attest/Makefile"); do
+		case "$l" in -l*) grep -q "lib${l#-l}.so" "$1" || { echo "missing $l"; exit 1; } ;; esac
+	done' "$ROOT" "$INST"
 # ---- G4: tpm-lockout against stand-in tpm2-tools (the TPM itself: VM run) ----
 mkdir -p "$T/tpmbin"
 : > "$T/tpm-dev"
