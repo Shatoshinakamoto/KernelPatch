@@ -110,6 +110,8 @@ check "the next boot (only) is the new kernel" G "grub-editenv list | grep -q '^
 check "both are top-level entries (no submenu a GRUB password would hold)" G "grub-editenv list | grep -q '^next_entry=.' && ! grub-editenv list | grep -qE '^(saved_entry|next_entry)=.*>'"
 gstep userspace "$I userspace --prebuilt /root/stage"
 check "userspace install succeeds" test "$GRC" -eq 0
+# CI artifacts cannot be downloaded: show why, in the TAP output.
+[ "$GRC" -eq 0 ] || tail -n 15 "$LAST" | sed 's/^/# userspace: /'
 gstep verify-before-reboot "$I verify"
 check "verify passes before the reboot" test "$GRC" -eq 0
 check "verify: the trial boot is armed" inlast 'armed: the next boot tries it once'

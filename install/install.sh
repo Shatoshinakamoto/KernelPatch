@@ -151,28 +151,69 @@ install_deps() {
 # helper's QR code, nft for the network modes, zip/unzip for TimeVault
 # quarantine). Distro packages: installed if missing, never removed by
 # uninstall (other software may use them).
+# Shared libraries the programs link against that a minimal image may not
+# have: tpm2-tss for secure-sudo-attest (P2-1) and the TCTI it loads at run
+# time for /dev/tpm*, and OpenSSL. "SONAME pkg|pkg...": the first package the
+# distro offers is installed (Debian/Ubuntu renamed them for 64-bit time_t).
+runtime_libs() {
+	case "$FAMILY" in
+	debian) printf '%s\n' \
+		'libtss2-esys.so.0 libtss2-esys-3.0.2-0t64|libtss2-esys-3.0.2-0' \
+		'libtss2-tctildr.so.0 libtss2-tctildr0t64|libtss2-tctildr0' \
+		'libtss2-mu.so.0 libtss2-mu-4.0.1-0t64|libtss2-mu0t64|libtss2-mu0' \
+		'libtss2-rc.so.0 libtss2-rc0t64|libtss2-rc0' \
+		'libtss2-tcti-device.so.0 libtss2-tcti-device0t64|libtss2-tcti-device0' \
+		'libcrypto.so.3 libssl3t64|libssl3' ;;
+	fedora) printf '%s\n' 'libtss2-tctildr.so.0 tpm2-tss' 'libtss2-rc.so.0 tpm2-tss' \
+		'libtss2-tcti-device.so.0 tpm2-tss' 'libcrypto.so.3 openssl-libs' ;;
+	suse)   printf '%s\n' 'libtss2-esys.so.0 libtss2-esys0' 'libtss2-tctildr.so.0 libtss2-tctildr0' \
+		'libtss2-mu.so.0 libtss2-mu0' 'libtss2-rc.so.0 libtss2-rc0' \
+		'libtss2-tcti-device.so.0 libtss2-tcti-device0' 'libcrypto.so.3 libopenssl3' ;;
+	arch)   printf '%s\n' 'libtss2-tctildr.so.0 tpm2-tss' 'libtss2-rc.so.0 tpm2-tss' \
+		'libtss2-tcti-device.so.0 tpm2-tss' 'libcrypto.so.3 openssl' ;;
+	esac
+}
+pkg_offered() { # PKG: the distro's repositories have it
+	case "$FAMILY" in
+	debian) apt-cache policy "$1" 2>/dev/null | grep -q 'Candidate: [^(]' ;;
+	fedora) dnf -q list --available "$1" >/dev/null 2>&1 || rpm -q "$1" >/dev/null 2>&1 ;;
+	suse)   zypper --non-interactive -q info "$1" 2>/dev/null | grep -q "^Name *: *$1" ;;
+	arch)   pacman -Si "$1" >/dev/null 2>&1 ;;
+	esac
+}
 runtime_missing() { # one package name per line
-	local p
+	local p so alts a
 	case "$FAMILY" in
 	debian) for p in libqrencode4 nftables zip unzip; do dpkg -s "$p" >/dev/null 2>&1 || echo "$p"; done ;;
 	fedora) for p in qrencode-libs nftables zip unzip; do rpm -q "$p" >/dev/null 2>&1 || echo "$p"; done ;;
 	suse)   for p in libqrencode4 nftables zip unzip; do rpm -q "$p" >/dev/null 2>&1 || echo "$p"; done ;;
 	arch)   for p in qrencode nftables zip unzip; do pacman -Q "$p" >/dev/null 2>&1 || echo "$p"; done ;;
 	esac
+	while read -r so alts; do
+		ldconfig -p 2>/dev/null | awk '{print $1}' | grep -qxF "$so" && continue
+		p=""
+		for a in ${alts//|/ }; do pkg_offered "$a" && { p="$a"; break; }; done
+		echo "${p:-${alts%%|*}}"
+	done < <(runtime_libs) | awk '!seen[$0]++'
 }
 install_runtime_deps() {
 	local p miss=()
 	[ -z "$SS_ROOT" ] || return 0
 	mapfile -t miss < <(runtime_missing)
 	[ "${#miss[@]}" -gt 0 ] || return 0
+	if [ "$FAMILY" = debian ]; then
+		# A fresh image (cloud, container) may have no package lists yet;
+		# refresh them, then choose again (a library's name depends on them).
+		for p in "${miss[@]}"; do
+			pkg_offered "$p" && continue
+			apt-get update -q || true
+			mapfile -t miss < <(runtime_missing)
+			break
+		done
+	fi
 	log "installing runtime packages: ${miss[*]}"
 	case "$FAMILY" in
-	debian)
-		# A fresh image (cloud, container) may have no package lists yet.
-		for p in "${miss[@]}"; do
-			apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate: [^(]' || { apt-get update -q || true; break; }
-		done
-		apt-get install -y "${miss[@]}" ;;
+	debian) apt-get install -y "${miss[@]}" ;;
 	fedora) dnf install -y "${miss[@]}" ;;
 	suse)   zypper --non-interactive install -y "${miss[@]}" ;;
 	arch)   pacman -S --noconfirm --needed "${miss[@]}" ;;
