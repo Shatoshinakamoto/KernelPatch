@@ -747,8 +747,9 @@ mode is opt-in and each config is checked strictly.
 * **Defends:** a protected file changed while protection is on: it is put back
   from the stored copy on the next scan, and the file is kept read-only.
 * **Does not defend:** a change made while protection is off, or by root
-  rewriting the stored copies and manifest together (no signed snapshot yet;
-  `baseline-trust` is open in `maturity.json`).
+  rewriting the stored copies and manifest together, unless `trust = signed`
+  (docs/PHEONIXBOX.md "Snapshot trust"): then a snapshot the operator has
+  not signed is reported on but never repaired from.
 * **Harm if wrong:** undoing a legitimate change to a protected file.
   Mitigations: off by default; `disable` restores the original permissions;
   tamperwatch never kills a PheonixBox repair (SECURITY_REVIEW #65).

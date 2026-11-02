@@ -1329,6 +1329,41 @@ refuse while it has an error). Tested by `tests/userspace/test-addons.sh`
 (135 checks, 39 new) and `tests/userspace/test-pheonixbox.sh` (41, 13 new);
 docs/ADDONS.md "Adversarial tests" lists every attack.
 
+### 72. PheonixBox trusted its own snapshot, applied any ACL file in its store, and could be told to set any mode on `off` (v8–v12, found 2026-11-02 by P2-2) — SI-7 / AU-9 / CM-5
+
+The add-ons got operator-signed baselines in #70; PheonixBox, the core
+file-repair feature, did not. Root (or anything that can write the 0700
+store) could rewrite a protected file, its blob and the manifest together,
+and the next scan would "repair" to that version. Three gaps:
+
+1. **No trust source for the snapshot.** `trust = signed` in
+   `pheonixbox.conf` now makes PheonixBox repair only while `manifest.sig`
+   is a valid Ed25519 signature over the manifest by the operator's key (the
+   add-ons' `baseline-signing.pub`, root-owned, only root can write). A new
+   snapshot drops the old signature and logs CRITICAL its manifest SHA-256 and
+   the key's fingerprint. While the snapshot is not trusted, tampering is
+   reported and its evidence kept once per change (not every 30 s), and
+   nothing is written back. A config edited from `signed` to `local` is logged
+   CRITICAL on the next scan. A typo in the trust line counts as `signed`.
+2. **ACL files were applied unchecked.** `off` ran `setfacl --restore` on
+   whatever file was in `acls/`, so it could grant any user access to a
+   protected file. The manifest now records each ACL file's SHA-256 (an
+   `acl <sha> <path>` line), and an ACL file is applied only if it matches.
+3. **`off` applied the manifest's owners and modes.** An edited manifest
+   could name mode 4755 owner root for any protected file. With the snapshot
+   not trusted, `off` now only gives back the owner write bit the lock took.
+4. **Evidence copies overwrote each other.** A copy was named by path hash
+   and the second, so two in one second (a hand-run `scan` next to the
+   daemon's) kept only the last. Names now add the process id and a counter.
+
+`trust = local` stays the default, as the add-ons' `baseline_trust` does, and
+`maturity.json` says so. Tested by `tests/userspace/test-pheonixbox.sh`
+(62 checks, 21 new): an unknown trust value, a missing key, an unsigned
+snapshot (reported, kept once, not repaired), signing it (repairs), an
+edited manifest and a forged signature (refused), trust lowered (noticed),
+`off` with a setuid edit (not applied), and a rewritten ACL file (not
+applied, with a control showing a matching one is).
+
 ---
 
 ## Residual notes / assumptions

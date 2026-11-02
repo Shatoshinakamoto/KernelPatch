@@ -101,7 +101,7 @@ check "no command ran from a file name" test ! -e "$T/cwd/pwned"
 eq "the store is root-only (0700)" "$(in_ns stat -c %a "$STORE")" 700
 eq "files are locked read-only" "$(stat -c %a "$D/a.conf")" 440
 eq "every file is locked, recursively" "$(stat -c %a "$D/sub/b.conf")" 400
-eq "the manifest has one line per stored file (3)" "$(in_ns cat "$STORE/manifest" | wc -l)" 3
+eq "the manifest has one line per stored file (3)" "$(in_ns grep -vc '^acl ' "$STORE/manifest")" 3
 
 chmod 0644 "$D/a.conf"; printf 'evil\n' > "$D/a.conf"
 rm -f "$D/sub/b.conf"
@@ -192,5 +192,92 @@ eq "... and so does snapshot" "$rc" 78
 in_ns sh -c "grep -vx -e relative/path -e /a/../b /etc/secure_sudo/pheonixbox.conf | awk '!s[\$0]++' > /etc/secure_sudo/pb.new && mv /etc/secure_sudo/pb.new /etc/secure_sudo/pheonixbox.conf && chmod 0664 /etc/secure_sudo/pheonixbox.conf"
 pb check-config > "$T/cc.out" 2>&1; rc=$?
 check "check-config: a group-writable config is an error" sh -c "[ $rc = 1 ] && grep -q 'writable by group or others' '$T/cc.out'"
+
+echo "# signed snapshot (TODO P2-2: baseline trust)"
+KEY=/etc/secure_sudo/addons/baseline-signing.pub
+in_ns sh -c "printf '%s\n' '$D' > /etc/secure_sudo/pheonixbox.conf && chmod 0644 /etc/secure_sudo/pheonixbox.conf"
+chmod 0644 "$D/a.conf"; printf 'alpha\n' > "$D/a.conf"; chmod 0640 "$D/a.conf"
+in_ns sh -c "echo 'trust = sgned' >> /etc/secure_sudo/pheonixbox.conf"
+pb check-config > "$T/cc.out" 2>&1; rc=$?
+check "check-config: an unknown trust value is an error" sh -c "[ $rc = 1 ] && grep -q 'trust must be local or signed' '$T/cc.out'"
+in_ns sed -i 's/^trust = sgned$/trust = signed/' /etc/secure_sudo/pheonixbox.conf
+pb check-config > "$T/cc.out" 2>&1; rc=$?
+check "check-config: trust = signed without a signing key is an error" sh -c "[ $rc = 1 ] && grep -q 'trust = signed, but' '$T/cc.out'"
+openssl genpkey -algorithm ed25519 -out "$T/k.pem" 2>/dev/null
+in_ns mkdir -p /etc/secure_sudo/addons
+in_ns sh -c "openssl pkey -in '$T/k.pem' -pubout > $KEY && chmod 0644 $KEY"
+pb check-config > "$T/cc.out" 2>&1
+check "check-config passes with trust = signed and a key" grep -q 'configuration OK' "$T/cc.out"
+pb on > "$T/on.out" 2>&1
+check "on with trust = signed says nothing is repaired until it is signed" grep -q 'nothing is repaired until' "$T/on.out"
+pb status > "$T/st.out" 2>&1
+check "status: an unsigned snapshot is NOT TRUSTED" grep -q 'snapshot trust: signed - NOT TRUSTED: the snapshot is not signed' "$T/st.out"
+if command -v getfacl >/dev/null; then
+	check "the manifest records a hash for each captured ACL file" in_ns grep -q "^acl [0-9a-f]\{64\} $D/a.conf\$" "$STORE/manifest"
+else
+	skip "ACL hashes in the manifest (no getfacl)"
+fi
+EV0="$(in_ns sh -c "ls $STORE/evidence 2>/dev/null | wc -l")"
+chmod 0644 "$D/a.conf"; printf 'evil3\n' > "$D/a.conf"
+pb scan > "$T/scan.out" 2>&1
+check "unsigned snapshot: tampering is reported, not repaired" sh -c "
+	[ \"\$(cat '$D/a.conf')\" = evil3 ] && grep -q 'would repair $D/a.conf' '$T/scan.out' &&
+	grep -q 'NOT TRUSTED: reporting only' '$T/scan.out'"
+EV1="$(in_ns sh -c "ls $STORE/evidence | wc -l")"
+check "... and its bytes are kept as evidence" test "$EV1" -gt "$EV0"
+pb scan > "$T/scan.out" 2>&1
+check "the next scan does not report (or copy) the same change again" sh -c "
+	! grep -q 'would repair' '$T/scan.out' && [ \"\$(nsenter -t $NS -m -- sh -c 'ls $STORE/evidence | wc -l')\" = $EV1 ]"
+in_ns openssl pkeyutl -sign -rawin -inkey "$T/k.pem" -in "$STORE/manifest" -out "$STORE/manifest.sig"
+pb status > "$T/st.out" 2>&1
+check "status: once the operator signs it, the snapshot is trusted" grep -q 'snapshot trust: signed - signature valid' "$T/st.out"
+pb scan > "$T/scan.out" 2>&1
+eq "a signed snapshot repairs" "$(cat "$D/a.conf")" alpha
+# an edited manifest (here: a.conf's mode set to setuid) breaks the signature
+in_ns cp "$STORE/manifest" "$T/manifest.signed"
+in_ns sed -i "s#^\([0-9a-f]\{64\}\) [0-7]* \([0-9]* [0-9]* $D/a.conf\)\$#\1 4755 \2#" "$STORE/manifest"
+check "(the test edited the manifest)" in_ns grep -q " 4755 .* $D/a.conf\$" "$STORE/manifest"
+chmod 0644 "$D/a.conf"; printf 'evil4\n' > "$D/a.conf"
+pb scan > "$T/scan.out" 2>&1
+check "an edited manifest is not trusted: nothing is written back" sh -c "
+	[ \"\$(cat '$D/a.conf')\" = evil4 ] && grep -q 'does not verify' '$T/scan.out'"
+in_ns sh -c "echo 'garbage' > $STORE/manifest.sig"
+pb status > "$T/st.out" 2>&1
+check "a forged signature is not trusted either" grep -q 'NOT TRUSTED: the manifest.s signature does not verify' "$T/st.out"
+in_ns cp "$T/manifest.signed" "$STORE/manifest"
+in_ns openssl pkeyutl -sign -rawin -inkey "$T/k.pem" -in "$STORE/manifest" -out "$STORE/manifest.sig"
+pb scan > /dev/null 2>&1
+eq "... and the signed manifest repairs it again" "$(cat "$D/a.conf")" alpha
+# trust lowered from signed to local is said out loud
+in_ns sed -i 's/^trust = signed$/trust = local/' /etc/secure_sudo/pheonixbox.conf
+pb scan > "$T/scan.out" 2>&1
+check "a scan notices trust lowered from signed to local" grep -q 'trust LOWERED from signed to local' "$T/scan.out"
+in_ns sed -i 's/^trust = local$/trust = signed/' /etc/secure_sudo/pheonixbox.conf
+pb scan > /dev/null 2>&1
+# off with an unsigned edit to the manifest: the setuid mode it names is not applied
+in_ns sed -i "s#^\([0-9a-f]\{64\}\) [0-7]* \([0-9]* [0-9]* $D/a.conf\)\$#\1 4755 \2#" "$STORE/manifest"
+pb off > "$T/off.out" 2>&1; rc=$?
+check "off with an untrusted manifest only unlocks (and says so)" sh -c "
+	[ $rc = 0 ] && grep -q 'files are only unlocked' '$T/off.out'"
+M="$(stat -c %a "$D/a.conf")"
+check "... the setuid mode the edited manifest names is not applied (mode $M)" sh -c "[ \$(( 0$M & 04000 )) = 0 ]"
+check "... and the file is writable by its owner again" sh -c "[ \$(( 0$M & 0200 )) != 0 ]"
+in_ns cp "$T/manifest.signed" "$STORE/manifest"
+in_ns openssl pkeyutl -sign -rawin -inkey "$T/k.pem" -in "$STORE/manifest" -out "$STORE/manifest.sig"
+if command -v getfacl >/dev/null && command -v setfacl >/dev/null &&
+   setfacl -m u:nobody:r "$D/a.conf" 2>/dev/null; then
+	pb on > /dev/null 2>&1
+	in_ns openssl pkeyutl -sign -rawin -inkey "$T/k.pem" -in "$STORE/manifest" -out "$STORE/manifest.sig"
+	pb off > /dev/null 2>&1
+	check "off applies a captured ACL whose hash is in the signed manifest" sh -c "getfacl -p '$D/a.conf' 2>/dev/null | grep -q '^user:nobody:r--'"
+	pb on > /dev/null 2>&1
+	AP="$(in_ns sh -c "grep -l '^# file: $D/a.conf\$' $STORE/acls/*.acl" | head -1)"
+	in_ns sh -c "printf '# file: $D/a.conf\nuser::rw-\nuser:nobody:rwx\ngroup::r--\nmask::rwx\nother::---\n' > '$AP'"
+	in_ns openssl pkeyutl -sign -rawin -inkey "$T/k.pem" -in "$STORE/manifest" -out "$STORE/manifest.sig"
+	pb off > /dev/null 2>&1
+	check "a rewritten ACL file (hash not in the manifest) is not applied by off" sh -c "! getfacl -p '$D/a.conf' 2>/dev/null | grep -q '^user:nobody:rwx'"
+else
+	skip "captured ACLs applied only when their hash matches (needs getfacl, setfacl, ACL support)"
+fi
 
 tap_done
