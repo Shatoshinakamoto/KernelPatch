@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 /*
  * ss_hooks.c - one registration for every LSM hook that more than one
  * secure_sudo protection uses.

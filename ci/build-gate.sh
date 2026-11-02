@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # build-gate.sh - the release build gate (TODO P0-1). CI runs exactly this;
 # so can you, from a clean checkout. Each stage works in a scratch copy, so

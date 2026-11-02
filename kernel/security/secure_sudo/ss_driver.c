@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 /*
  * ss_driver.c - Protection #6: driver blacklist (Bring-Your-Own-Vulnerable-
  * Driver defence).

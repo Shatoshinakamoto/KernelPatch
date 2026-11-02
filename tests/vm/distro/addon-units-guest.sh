@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # addon-units-guest.sh - runs INSIDE the throwaway guest (driven by
 # run-addon-units-test.sh): every hardened temporary/ add-on unit under real

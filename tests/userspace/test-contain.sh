@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-contain.sh - tests for userspace/daemon/helpers/contain.sh (TODO P1-7:
 # safe containment). The account tools (usermod, chage, getent, loginctl)

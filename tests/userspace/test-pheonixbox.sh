@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-pheonixbox.sh - PheonixBox (#21): snapshot, tamper detection, repair
 # and permission restore, run against the real helper (TODO P1-5: every

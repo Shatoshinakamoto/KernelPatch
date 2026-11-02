@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # The release gate (TODO P0-1, P0-2): every push and pull request runs
 # ci/build-gate.sh on a clean checkout, against the installer's default kernel

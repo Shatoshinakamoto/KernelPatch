@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # detect-admin-gids.sh - print every admin group GID on this box as a comma
 # list (e.g. "27,10"), for secure_sudo's admin_gid. Members of these groups

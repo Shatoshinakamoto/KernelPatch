@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-node-scan.sh - `secure-sudo node-scan` (#11, THREAT_MODEL.md gap G1):
 # Node runtimes outside the standard paths (single-executable apps, pkg

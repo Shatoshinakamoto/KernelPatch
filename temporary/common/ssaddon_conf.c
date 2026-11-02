@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * ssaddon_conf - strict config parsing for the temporary/ add-ons.
  * See ssaddon_conf.h for the rules.

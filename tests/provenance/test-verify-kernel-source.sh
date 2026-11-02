@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # Tests for scripts/verify-kernel-source.sh and install.sh's fetch_kernel
 # (TODO P0-4): a good archive passes; tampered, truncated, unsigned,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # fetch-kernel-source.sh - get an upstream kernel tree through the Ubuntu
 # archive for the distro VM test, with a provenance record install.sh accepts

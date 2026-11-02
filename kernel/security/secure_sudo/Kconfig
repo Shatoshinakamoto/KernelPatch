@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 config SECURITY_SECURE_SUDO
 	bool "Secure Sudo privilege-escalation hardening"
 	depends on SECURITY

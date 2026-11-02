@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-daemon-events.sh - secure-sudod's handling of kernel event records:
 # JSON parsing, which records may trigger the root-run cooldown kill and

@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Installed as /etc/kernel/postinst.d/zzz-secure-sudo-addons and
 # /etc/kernel/postrm.d/zzz-secure-sudo-addons ("zzz" runs after
 # zz-update-grub). Arguments: VERSION [IMAGE].

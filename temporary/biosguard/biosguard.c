@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * secure-sudo-biosguard - BiosGuard (temporary add-on): firmware tamper
  * DETECTION, log and notify ONLY.

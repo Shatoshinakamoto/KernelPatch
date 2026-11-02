@@ -1,4 +1,5 @@
 ---
+# SPDX-License-Identifier: Apache-2.0
 # deploy-encrypted.yml - push the encrypted source bundle + keys and run the
 # encrypted/Secure-Boot installer. Keep the age identity in ansible-vault.
 #

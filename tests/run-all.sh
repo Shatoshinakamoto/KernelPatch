@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # run-all.sh - run every host-side test suite (TODO P0-2). The build gate's
 # "tests" stage runs exactly this.

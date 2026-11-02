@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # check-lsm-hooks.sh - fail if any LSM hook is registered more than once by
 # secure_sudo. Since 6.9 each LSM has one static-call slot per hook, so a

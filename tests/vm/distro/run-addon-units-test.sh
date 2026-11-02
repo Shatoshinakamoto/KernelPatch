@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # run-addon-units-test.sh - the temporary/ add-ons under real systemd, in a
 # throwaway distro VM (TODO P2-2).

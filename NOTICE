@@ -1,0 +1,9 @@
+secure_sudo
+Copyright 2026 Johnathan Edward Brown
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The in-kernel LSM under kernel/security/secure_sudo/ is dual-licensed as
+"GPL-2.0 OR Apache-2.0" (see LICENSES/GPL-2.0 and LICENSE), because code built
+into the Linux kernel must carry a GPLv2-compatible license. Recipients may use
+those files under either license.

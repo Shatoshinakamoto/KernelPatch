@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # secure-sudo-attest (TODO P2-1): TPM quote of the boot chain for remote
 # attestation, plus the host report helper and the off-box verifier.
