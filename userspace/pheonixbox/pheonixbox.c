@@ -45,7 +45,11 @@
  *   manifest             one line per file: <csha> <mode> <uid> <gid> <path>
  *   blobs/<psha>.z       zlib-compressed original bytes (8-byte LE size header)
  *   acls/<psha>.acl      getfacl output for the file (POSIX ACLs), if captured
+ *   manifest.sig         Ed25519 signature over manifest (trust = signed)
  *   lastscan             text timestamp of the last scan
+ *   trust                the trust mode the last scan ran with
+ *   reported/<psha>      what an unrepaired file was last reported as, so a
+ *                        30 s scan reports (and copies) each change once
  * where <csha> = SHA-256 of the file's contents, <psha> = SHA-256 of its
  * absolute path (a slash-free, collision-free blob/acl filename).
  *
@@ -56,6 +60,24 @@
  *
  * Root-only. The snapshot store is 0700 so no non-root user can read the
  * original contents or forge a blob.
+ *
+ * ============================ SNAPSHOT TRUST ==============================
+ * (TODO P2-2.) Every blob and ACL file is checked against its hash in the
+ * manifest before it is used, so the manifest is what has to be trusted.
+ * `trust = local` (the default) trusts the host's own manifest. With
+ *     trust = signed
+ * in pheonixbox.conf, PheonixBox repairs only while manifest.sig is a valid
+ * Ed25519 signature over the manifest by the operator's key (public half at
+ * PBX_SIGNING_KEY; the private key need never be on the host):
+ *     openssl pkeyutl -sign -rawin -inkey KEY.pem \
+ *         -in /var/lib/secure_sudo/pheonixbox/manifest \
+ *         -out /var/lib/secure_sudo/pheonixbox/manifest.sig
+ * A new snapshot is unsigned until the operator signs it. While the manifest
+ * is not trusted, a scan still finds tampering, keeps the evidence and logs
+ * it CRITICAL, but writes nothing back, and `off` does not apply the
+ * manifest's owners, modes or ACLs. Each new snapshot's SHA-256 and the key's
+ * fingerprint are logged CRITICAL, and a scan that finds the mode lowered
+ * from signed to local says so CRITICAL, so both are on record off-box.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -73,6 +95,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <zlib.h>
 
 #define STORE     "/var/lib/secure_sudo/pheonixbox"
@@ -83,6 +107,17 @@
 #define LASTSCAN  STORE "/lastscan"
 #define EVIDENCE  STORE "/evidence"
 #define CONF      "/etc/secure_sudo/pheonixbox.conf"
+#define MANIFEST_SIG MANIFEST ".sig"
+#define TRUSTSTATE STORE "/trust"	/* the trust mode the last scan used */
+#define UNTRUSTED_NOTED STORE "/untrusted-noted"
+#define REPORTED  STORE "/reported"	/* <psha>: state last reported, unrepaired */
+/* The operator's Ed25519 public key: the same one the temporary/ add-ons use
+ * for their baselines, so one key signs every baseline on the host. */
+#ifndef PBX_SIGNING_KEY
+#define PBX_SIGNING_KEY "/etc/secure_sudo/addons/baseline-signing.pub"
+#endif
+/* How often a scan repeats "snapshot NOT TRUSTED" while nothing changes. */
+#define UNTRUSTED_REPEAT 600
 
 /* Guard against snapshotting something enormous into RAM. */
 #define MAX_FILE  (256UL * 1024 * 1024)
@@ -289,6 +324,8 @@ static unsigned char *blob_load(const char *bp, size_t *out_len)
 /* Keep what is at @abspath now, before a repair overwrites it: a compressed
  * copy under evidence/ and a CRITICAL syslog line with its hash, owner and
  * mode (a symlink: where it pointed). 0 if kept, or nothing was there. */
+static unsigned evidence_seq;
+
 static int keep_evidence(const char *abspath, const char *expect)
 {
 	char bp[PATH_MAX], psha[65], sha[65] = "", target[PATH_MAX] = "";
@@ -315,7 +352,10 @@ static int keep_evidence(const char *abspath, const char *expect)
 	if (sha256_str(abspath, psha) != 0)
 		return -1;
 	mkdir(EVIDENCE, 0700);
-	snprintf(bp, sizeof(bp), "%s/%s.%ld.z", EVIDENCE, psha, (long)time(NULL));
+	/* time, pid and a counter: two copies in one second must not
+	 * overwrite each other (a scan every 30 s, `scan` by hand, a test) */
+	snprintf(bp, sizeof(bp), "%s/%s.%ld.%ld.%u.z", EVIDENCE, psha, (long)time(NULL),
+		 (long)getpid(), ++evidence_seq);
 	if (blob_store_to(abspath, bp, sha) != 0) {
 		syslog(LOG_CRIT, "EVIDENCE could not be kept for %s (disk full?)", abspath);
 		return -1;
@@ -405,6 +445,237 @@ static int open_reg(const char *path)
 	return fd;
 }
 
+/* ---------------------------- snapshot trust ----------------------------- */
+
+enum { PBX_LOCAL = 0, PBX_SIGNED = 1 };
+
+/* A `trust = <value>` config line: -1 if @p is not one, else PBX_LOCAL,
+ * PBX_SIGNED, or 2 for an unknown value. */
+static int parse_trust_line(const char *p)
+{
+	size_t vl;
+
+	if (strncmp(p, "trust", 5) != 0 || (p[5] != ' ' && p[5] != '\t' && p[5] != '='))
+		return -1;
+	p += 5;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p++ != '=')
+		return 2;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	vl = strlen(p);
+	while (vl && (p[vl - 1] == ' ' || p[vl - 1] == '\t'))
+		vl--;
+	if (vl == 5 && !strncmp(p, "local", 5))
+		return PBX_LOCAL;
+	if (vl == 6 && !strncmp(p, "signed", 6))
+		return PBX_SIGNED;
+	return 2;
+}
+
+/* The configured trust mode. An unreadable config, or a trust line with an
+ * unknown value, counts as signed: a typo must not quietly trust the host's
+ * own copy (check-config reports it). */
+static int trust_mode(void)
+{
+	FILE *f = fopen(CONF, "re");
+	char *line = NULL;
+	size_t cap = 0;
+	ssize_t len;
+	int mode = PBX_LOCAL, t;
+
+	if (!f)
+		return errno == ENOENT ? PBX_LOCAL : PBX_SIGNED;
+	while ((len = getline(&line, &cap, f)) >= 0) {
+		char *p = line;
+
+		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+			line[--len] = '\0';
+		while (*p == ' ' || *p == '\t')
+			p++;
+		t = parse_trust_line(p);
+		if (t == PBX_SIGNED || t == 2)
+			mode = PBX_SIGNED;
+	}
+	free(line);
+	fclose(f);
+	return mode;
+}
+
+/* The operator's public key, only from a root-owned file nobody else can
+ * write (whoever can replace it decides what "signed" means). */
+static EVP_PKEY *load_signing_key(char *why, size_t n)
+{
+	struct stat st;
+	EVP_PKEY *k;
+	FILE *f;
+	int fd = open(PBX_SIGNING_KEY, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+
+	if (fd < 0) {
+		snprintf(why, n, "signing key %s: %s", PBX_SIGNING_KEY, strerror(errno));
+		return NULL;
+	}
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != 0 ||
+	    (st.st_mode & (S_IWGRP | S_IWOTH))) {
+		snprintf(why, n, "signing key %s is not a root-owned file only root can "
+			 "write", PBX_SIGNING_KEY);
+		close(fd);
+		return NULL;
+	}
+	f = fdopen(fd, "re");
+	if (!f) {
+		close(fd);
+		snprintf(why, n, "signing key %s: %s", PBX_SIGNING_KEY, strerror(errno));
+		return NULL;
+	}
+	k = PEM_read_PUBKEY(f, NULL, NULL, NULL);
+	fclose(f);
+	if (!k || EVP_PKEY_id(k) != EVP_PKEY_ED25519) {
+		snprintf(why, n, "signing key %s is not an Ed25519 public key (PEM)",
+			 PBX_SIGNING_KEY);
+		EVP_PKEY_free(k);
+		return NULL;
+	}
+	return k;
+}
+
+/* First 16 hex digits of the SHA-256 of the key's DER encoding. */
+static void key_fpr(EVP_PKEY *k, char out[17])
+{
+	unsigned char *der = NULL;
+	char full[65];
+	int n = i2d_PUBKEY(k, &der);
+
+	snprintf(out, 17, "unknown");
+	if (n > 0 && sha256_mem(der, (size_t)n, full) == 0)
+		snprintf(out, 17, "%.16s", full);
+	OPENSSL_free(der);
+}
+
+/* 1 if the manifest may be acted on under @mode; else 0 and why. */
+static int manifest_trusted(int mode, char *why, size_t n)
+{
+	unsigned char *m, *sig;
+	size_t ml = 0, sl = 0;
+	EVP_PKEY *k;
+	EVP_MD_CTX *c;
+	int ok = 0;
+
+	why[0] = '\0';
+	if (access(MANIFEST, F_OK) != 0) {
+		snprintf(why, n, "no snapshot");
+		return 0;
+	}
+	if (mode != PBX_SIGNED)
+		return 1;
+	k = load_signing_key(why, n);
+	if (!k)
+		return 0;
+	m = read_file(MANIFEST, &ml);
+	sig = read_file(MANIFEST_SIG, &sl);
+	if (!m) {
+		snprintf(why, n, "the manifest cannot be read");
+	} else if (!sig) {
+		snprintf(why, n, "the snapshot is not signed (no %s)", MANIFEST_SIG);
+	} else {
+		c = EVP_MD_CTX_new();
+		ok = c && EVP_DigestVerifyInit(c, NULL, NULL, NULL, k) == 1 &&
+		     EVP_DigestVerify(c, sig, sl, m, ml) == 1;
+		EVP_MD_CTX_free(c);
+		if (!ok)
+			snprintf(why, n, "the manifest's signature does not verify with %s",
+				 PBX_SIGNING_KEY);
+	}
+	free(m);
+	free(sig);
+	EVP_PKEY_free(k);
+	return ok;
+}
+
+/* A new snapshot: the old signature signed something else, so it goes, and
+ * the new manifest's hash and the key's fingerprint go on record. */
+static void announce_snapshot(size_t files)
+{
+	char sha[65] = "unreadable", fpr[17] = "none", why[256];
+	EVP_PKEY *k;
+	int mode = trust_mode();
+
+	unlink(MANIFEST_SIG);
+	if (sha256_file(MANIFEST, sha) != 0)
+		snprintf(sha, sizeof(sha), "unreadable");
+	k = load_signing_key(why, sizeof(why));
+	if (k) {
+		key_fpr(k, fpr);
+		EVP_PKEY_free(k);
+	}
+	syslog(LOG_CRIT, "NEW SNAPSHOT: %zu files, manifest sha256=%s trust=%s "
+	       "signing-key=%s%s", files, sha, mode == PBX_SIGNED ? "signed" : "local",
+	       fpr, mode == PBX_SIGNED ? " - not trusted (no repairs) until the "
+	       "operator signs it" : "");
+	if (mode == PBX_SIGNED)
+		printf("secure-sudo pheonixbox: trust = signed: nothing is repaired until "
+		       "the operator signs this snapshot:\n"
+		       "  manifest sha256 %s\n"
+		       "  openssl pkeyutl -sign -rawin -inkey KEY.pem -in %s -out %s\n",
+		       sha, MANIFEST, MANIFEST_SIG);
+}
+
+/* One line for status. */
+static void describe_trust(char *out, size_t n)
+{
+	char why[256];
+	int mode = trust_mode();
+
+	if (mode != PBX_SIGNED)
+		snprintf(out, n, "local (the host's own copy is trusted)");
+	else if (manifest_trusted(mode, why, sizeof(why)))
+		snprintf(out, n, "signed - signature valid");
+	else
+		snprintf(out, n, "signed - NOT TRUSTED: %s", why);
+}
+
+/* Called once per scan: note a trust mode lowered since the last scan, and
+ * (at most every UNTRUSTED_REPEAT seconds) a manifest that is not trusted. */
+static void note_trust(int mode, int trusted, const char *why)
+{
+	char prev[16] = "";
+	FILE *f = fopen(TRUSTSTATE, "re");
+	struct stat st;
+	time_t now = time(NULL);
+
+	if (f) {
+		if (!fgets(prev, sizeof(prev), f))
+			prev[0] = '\0';
+		fclose(f);
+		prev[strcspn(prev, "\n")] = '\0';
+	}
+	if (!strcmp(prev, "signed") && mode != PBX_SIGNED) {
+		syslog(LOG_CRIT, "snapshot trust LOWERED from signed to local: the host's "
+		       "own manifest is trusted again (" CONF ")");
+		fprintf(stderr, "secure-sudo pheonixbox: snapshot trust LOWERED from "
+			"signed to local\n");
+	}
+	f = fopen(TRUSTSTATE, "we");
+	if (f) {
+		fprintf(f, "%s\n", mode == PBX_SIGNED ? "signed" : "local");
+		fclose(f);
+		chmod(TRUSTSTATE, 0600);
+	}
+	if (trusted) {
+		unlink(UNTRUSTED_NOTED);
+		return;
+	}
+	if (stat(UNTRUSTED_NOTED, &st) == 0 && now - st.st_mtime < UNTRUSTED_REPEAT &&
+	    now >= st.st_mtime)
+		return;
+	syslog(LOG_CRIT, "snapshot NOT TRUSTED (%s): tampering is reported and its "
+	       "evidence kept, nothing is repaired", why);
+	f = fopen(UNTRUSTED_NOTED, "we");
+	if (f)
+		fclose(f);
+}
+
 /* ------------------------------ ACLs ------------------------------------- */
 /*
  * Best-effort POSIX ACL capture/restore via getfacl/setfacl if present.
@@ -442,7 +713,9 @@ static int run_tool(char *const argv[], const char *out)
 	return WEXITSTATUS(st) == 127 ? -1 : WEXITSTATUS(st);
 }
 
-static void acl_capture(const char *abspath)
+/* Capture @abspath's ACLs; @sha_out gets the ACL file's SHA-256 (it goes in
+ * the manifest, so a rewritten ACL file is never applied). 0 if captured. */
+static int acl_capture(const char *abspath, char sha_out[65])
 {
 	char ap[PATH_MAX];
 	/* -p keeps leading slash; --absolute-names avoids path rewriting. */
@@ -450,10 +723,38 @@ static void acl_capture(const char *abspath)
 			 (char *)abspath, NULL };
 
 	blob_path(abspath, ap, sizeof(ap), ACLS, ".acl");
-	if (run_tool(argv, ap) == 0)
-		chmod(ap, 0600);
-	else
-		unlink(ap);		/* no getfacl, or it failed: keep no stub */
+	if (run_tool(argv, ap) == 0 && chmod(ap, 0600) == 0 &&
+	    sha256_file(ap, sha_out) == 0)
+		return 0;
+	unlink(ap);		/* no getfacl, or it failed: keep no stub */
+	return -1;
+}
+
+/* The ACL file hash the manifest records for @abspath ("acl <sha> <path>"
+ * lines). 0 if found. */
+static int acl_expected(const char *abspath, char out[65])
+{
+	FILE *f = fopen(MANIFEST, "re");
+	char *line = NULL;
+	size_t cap = 0;
+	ssize_t len;
+	int rc = -1;
+
+	if (!f)
+		return -1;
+	while (rc != 0 && (len = getline(&line, &cap, f)) >= 0) {
+		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+			line[--len] = '\0';
+		if (len > 69 && !strncmp(line, "acl ", 4) && line[68] == ' ' &&
+		    !strcmp(line + 69, abspath)) {
+			memcpy(out, line + 4, 64);
+			out[64] = '\0';
+			rc = 0;
+		}
+	}
+	free(line);
+	fclose(f);
+	return rc;
 }
 
 static void acl_restore(const char *abspath)
@@ -462,9 +763,21 @@ static void acl_restore(const char *abspath)
 	char *argv[] = { "setfacl", opt, NULL };
 	struct stat st;
 
+	char want[65], got[65];
+
 	blob_path(abspath, ap, sizeof(ap), ACLS, ".acl");
-	if (stat(ap, &st) != 0)
+	if (lstat(ap, &st) != 0)
 		return;
+	if (acl_expected(abspath, want) != 0) {
+		syslog(LOG_ERR, "ACLs of %s NOT restored: the manifest records no hash "
+		       "for them (take a new snapshot)", abspath);
+		return;
+	}
+	if (!S_ISREG(st.st_mode) || sha256_file(ap, got) != 0 || strcmp(got, want)) {
+		syslog(LOG_CRIT, "ACLs of %s NOT restored: %s does not match the "
+		       "manifest", abspath, ap);
+		return;
+	}
 	snprintf(opt, sizeof(opt), "--restore=%s", ap);
 	(void)run_tool(argv, NULL);	/* best-effort ACL restore */
 }
@@ -560,7 +873,7 @@ static void snap_one(const char *abspath, void *vctx)
 {
 	struct snap_ctx *c = vctx;
 	struct stat st;
-	char csha[65];
+	char csha[65], asha[65];
 
 	if (lstat(abspath, &st) != 0 || !S_ISREG(st.st_mode))
 		return;
@@ -576,10 +889,12 @@ static void snap_one(const char *abspath, void *vctx)
 		fprintf(stderr, "secure-sudo pheonixbox: could not snapshot %s\n", abspath);
 		return;
 	}
-	acl_capture(abspath);
-	/* manifest: <content-sha> <mode-octal> <uid> <gid> <abspath> */
+	/* manifest: <content-sha> <mode-octal> <uid> <gid> <abspath>
+	 *      and, when ACLs were captured: acl <acl-file-sha> <abspath> */
 	fprintf(c->mf, "%s %o %u %u %s\n", csha, (unsigned)(st.st_mode & 07777),
 		(unsigned)st.st_uid, (unsigned)st.st_gid, abspath);
+	if (acl_capture(abspath, asha) == 0)
+		fprintf(c->mf, "acl %s %s\n", asha, abspath);
 	c->files++;
 }
 
@@ -630,6 +945,7 @@ static int do_snapshot(void)
 	chmod(MANIFEST, 0600);
 	syslog(LOG_INFO, "snapshot captured %zu files", ctx.files);
 	printf("secure-sudo pheonixbox: snapshot captured %zu files\n", ctx.files);
+	announce_snapshot(ctx.files);
 	return 0;
 }
 
@@ -675,8 +991,8 @@ static int for_each_manifest(man_cb cb, void *ctx)
 
 		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
 			line[--len] = '\0';
-		if (len == 0 || line[0] == '#')
-			continue;
+		if (len == 0 || line[0] == '#' || !strncmp(line, "acl ", 4))
+			continue;		/* acl lines: see acl_expected() */
 		if (manifest_parse(line, &csha, &mode, &uid, &gid, &path) != 0)
 			continue;
 		if (strlen(csha) != 64 || !manifest_path_ok(path)) {
@@ -742,14 +1058,24 @@ static int cmd_enable(void)
 static void restore_perms(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 			  const char *path, void *ctx)
 {
-	int fd = open_reg(path), rc;
+	int fd = open_reg(path), rc, trusted = *(int *)ctx;
+	struct stat st;
 
-	(void)csha; (void)ctx;
+	(void)csha;
 	if (fd < 0) {
 		/* a symlink here could point at any file: its permissions are
 		 * never changed through it */
 		syslog(LOG_CRIT, "permissions NOT restored: %s is not a regular file "
 		       "any more", path);
+		return;
+	}
+	if (!trusted) {
+		/* An untrusted manifest could name any owner and mode (setuid
+		 * root, say): only the write bit the lock took is given back. */
+		if (fstat(fd, &st) == 0 &&
+		    fchmod(fd, (st.st_mode & 0755) | (mode & S_IWUSR)) != 0)
+			syslog(LOG_ERR, "could not unlock %s", path);
+		close(fd);
 		return;
 	}
 	/* Put ownership and mode back exactly as captured, then ACLs. */
@@ -763,13 +1089,25 @@ static void restore_perms(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 
 static int cmd_disable(void)
 {
+	char why[256];
+	int trusted;
+
 	if (!is_enabled()) {
 		printf("secure-sudo pheonixbox: not enabled\n");
 		return 0;
 	}
+	trusted = manifest_trusted(trust_mode(), why, sizeof(why));
+	if (!trusted) {
+		syslog(LOG_CRIT, "DISABLE with the snapshot NOT TRUSTED (%s): files are "
+		       "unlocked, but the manifest's owners, modes and ACLs are not "
+		       "applied", why);
+		fprintf(stderr, "secure-sudo pheonixbox: snapshot not trusted (%s): "
+			"files are only unlocked; owners, modes and ACLs are left as "
+			"they are\n", why);
+	}
 	/* Restore every file's original permissions from the PermissionsSnapshot
 	 * (this undoes the read-only lock). */
-	for_each_manifest(restore_perms, NULL);
+	for_each_manifest(restore_perms, &trusted);
 	unlink(ENABLED);
 	syslog(LOG_WARNING, "DISABLED - original permissions restored");
 	printf("secure-sudo pheonixbox: DISABLED - original permissions restored\n");
@@ -779,15 +1117,16 @@ static int cmd_disable(void)
 /* ------------------------------ scan ------------------------------------- */
 
 struct scan_ctx {
-	size_t checked, repaired, missing;
-	int quiet;
+	size_t checked, repaired, missing, unrepaired;
+	int quiet, trusted;
+	const char *why;
 };
 
 static void scan_one(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 		     const char *path, void *vctx)
 {
 	struct scan_ctx *c = vctx;
-	char now[65];
+	char now[65], mark[PATH_MAX];
 	struct stat st;
 	int tampered = 0;
 
@@ -805,8 +1144,49 @@ static void scan_one(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 		lock_ro(csha, mode, uid, gid, path, NULL);
 	}
 
-	if (!tampered)
+	blob_path(path, mark, sizeof(mark), REPORTED, "");
+	if (!tampered) {
+		unlink(mark);
 		return;
+	}
+	if (!c->trusted) {
+		/* the snapshot itself may be the attacker's: report and keep
+		 * the evidence once per change, write nothing back */
+		char state[80], prev[80] = "";
+		FILE *f;
+
+		if (lstat(path, &st) != 0)
+			snprintf(state, sizeof(state), "missing");
+		else if (!S_ISREG(st.st_mode))
+			snprintf(state, sizeof(state), "type %o", (unsigned)(st.st_mode & S_IFMT));
+		else if (sha256_file(path, now) == 0)
+			snprintf(state, sizeof(state), "sha256 %s", now);
+		else
+			snprintf(state, sizeof(state), "unreadable");
+		c->unrepaired++;
+		f = fopen(mark, "re");
+		if (f) {
+			if (!fgets(prev, sizeof(prev), f))
+				prev[0] = '\0';
+			fclose(f);
+			prev[strcspn(prev, "\n")] = '\0';
+		}
+		if (!strcmp(prev, state))
+			return;			/* already reported as it is now */
+		if (keep_evidence(path, csha) != 0)
+			syslog(LOG_CRIT, "evidence could not be kept for %s", path);
+		syslog(LOG_CRIT, "TAMPERED, NOT repaired: %s (snapshot not trusted: %s)",
+		       path, c->why);
+		if (!c->quiet)
+			printf("would repair %s (snapshot not trusted: %s)\n", path, c->why);
+		mkdir(REPORTED, 0700);
+		f = fopen(mark, "we");
+		if (f) {
+			fprintf(f, "%s\n", state);
+			fclose(f);
+		}
+		return;
+	}
 	if (keep_evidence(path, csha) != 0) {
 		/* what is there would be lost: it is left for the operator */
 		syslog(LOG_CRIT, "NOT repaired: %s (its current bytes could not be kept)",
@@ -833,24 +1213,32 @@ static void scan_one(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 static int cmd_scan(int quiet)
 {
 	struct scan_ctx ctx = { 0 };
+	char why[256];
 	FILE *f;
+	int mode;
 
 	if (!is_enabled())
 		return 0;			/* no-op when off (daemon calls this) */
 	ctx.quiet = quiet;
+	mode = trust_mode();
+	ctx.trusted = manifest_trusted(mode, why, sizeof(why));
+	ctx.why = why;
+	if (access(MANIFEST, F_OK) == 0)
+		note_trust(mode, ctx.trusted, why);
 	if (for_each_manifest(scan_one, &ctx) < 0)
 		return 0;			/* no manifest yet */
 
 	f = fopen(LASTSCAN, "we");
 	if (f) {
-		fprintf(f, "%ld checked=%zu repaired=%zu\n", (long)time(NULL),
-			ctx.checked, ctx.repaired);
+		fprintf(f, "%ld checked=%zu repaired=%zu unrepaired=%zu\n",
+			(long)time(NULL), ctx.checked, ctx.repaired, ctx.unrepaired);
 		fclose(f);
 		chmod(LASTSCAN, 0600);
 	}
 	if (!quiet)
-		printf("secure-sudo pheonixbox: scanned %zu, repaired %zu\n",
-		       ctx.checked, ctx.repaired);
+		printf("secure-sudo pheonixbox: scanned %zu, repaired %zu%s\n",
+		       ctx.checked, ctx.repaired, ctx.trusted ? "" :
+		       " (snapshot NOT TRUSTED: reporting only)");
 	return 0;
 }
 
@@ -866,13 +1254,17 @@ static void count_cb(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 static int cmd_status(void)
 {
 	size_t n = 0;
-	char buf[128] = "";
+	char buf[128] = "", trust[320], sha[65];
 	FILE *f;
 
 	printf("PheonixBox: %s\n", is_enabled() ? "ENABLED (read-only + scanning)" :
 	       "disabled");
 	for_each_manifest(count_cb, &n);
 	printf("snapshot entries: %zu\n", n);
+	describe_trust(trust, sizeof(trust));
+	printf("snapshot trust: %s\n", trust);
+	if (sha256_file(MANIFEST, sha) == 0)
+		printf("manifest sha256: %s\n", sha);
 	f = fopen(LASTSCAN, "re");
 	if (f) {
 		if (fgets(buf, sizeof(buf), f))
@@ -956,7 +1348,8 @@ static int conf_edit(const char *path, int add)
 /*
  * check-config (TODO P2-2): pheonixbox.conf is checked strictly. It must be
  * root-owned and not group/world writable (whoever can edit it chooses what
- * is snapshotted and repaired); every line is blank, a '#' comment, or one
+ * is snapshotted and repaired); every line is blank, a '#' comment, one
+ * `trust = local|signed` (signed needs a usable PBX_SIGNING_KEY), or one
  * absolute path with no whitespace, control characters or "."/".."
  * components, listed once. A path that does not exist yet is a note, not an
  * error. Returns the number of errors; each problem goes to @r.
@@ -968,7 +1361,7 @@ static int conf_check(FILE *r)
 	size_t cap = 0, nseen = 0, i;
 	ssize_t len;
 	struct stat st;
-	int errs = 0, ln = 0;
+	int errs = 0, ln = 0, trust_ln = 0, t;
 
 	if (!f) {
 		if (errno != ENOENT) {
@@ -998,6 +1391,29 @@ static int conf_check(FILE *r)
 			p++;
 		if (!*p || *p == '#')
 			continue;
+		if ((t = parse_trust_line(p)) >= 0) {
+			if (t == 2) {
+				fprintf(r, "%s:%d: trust must be local or signed: %.80s\n",
+					CONF, ln, p);
+				errs++;
+			} else if (trust_ln) {
+				fprintf(r, "%s:%d: trust is already set on line %d\n", CONF,
+					ln, trust_ln);
+				errs++;
+			} else if (t == PBX_SIGNED) {
+				char why[256];
+				EVP_PKEY *k = load_signing_key(why, sizeof(why));
+
+				if (!k) {
+					fprintf(r, "%s:%d: trust = signed, but %s\n", CONF, ln,
+						why);
+					errs++;
+				}
+				EVP_PKEY_free(k);
+			}
+			trust_ln = trust_ln ? trust_ln : ln;
+			continue;
+		}
 		if ((size_t)len >= PATH_MAX) {
 			fprintf(r, "%s:%d: line too long\n", CONF, ln);
 			errs++;
@@ -1106,7 +1522,8 @@ static void usage(void)
 "  off | disable        restore original permissions and unlock (stop protecting)\n"
 "  snapshot             (while off) re-capture contents, hashes and permissions as the baseline\n"
 "  scan [--quiet]       check all protected files now and repair any tampering\n"
-"  status               show whether protection is on and how many files are covered\n"
+"  status               show whether protection is on, how many files are covered,\n"
+"                       and whether the snapshot is trusted (trust = signed)\n"
 "  add <path>           add a file or directory (recursive) to the protected set\n"
 "  remove <path>        remove a path from the protected set\n"
 "  list                 list the protected paths\n"

@@ -331,8 +331,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     real host with every alert explained; stable = beta plus 30 days in the
     acting mode and a recovery drill. Recorded in `maturity.json`, enforced
     by the gate (docs/ADDONS.md "Promotion criteria").
+    *Part 5 (2026-11-02):* signed PheonixBox snapshots (`trust = signed`,
+    the add-ons' operator key), ACL files checked against the manifest, `off`
+    applying nothing from an untrusted manifest (SECURITY_REVIEW #72;
+    docs/PHEONIXBOX.md "Snapshot trust").
     Open: the host soaks themselves (they need a real host and time, not
-    code), a signed PheonixBox snapshot (its baseline trust).
+    code).
 
 - [ ] **P2-3: Improve alerting and fleet integration.**
   - Define a documented event format and supported integrations for common

@@ -81,10 +81,13 @@ Everything lives under `/var/lib/secure_sudo/pheonixbox`, mode `0700`, root-only
 | Path | Contents |
 |------|----------|
 | `enabled` | present ⇒ protection is ON |
-| `manifest` | one line per file: `<content-sha256> <mode-octal> <uid> <gid> <abspath>` |
+| `manifest` | one line per file: `<content-sha256> <mode-octal> <uid> <gid> <abspath>`, plus `acl <acl-file-sha256> <abspath>` for each captured ACL file |
+| `manifest.sig` | Ed25519 signature over `manifest` by the operator's key (`trust = signed`) |
 | `blobs/<path-sha256>.z` | the file's original bytes, zlib-compressed, with an 8-byte little-endian length header |
 | `acls/<path-sha256>.acl` | the file's `getfacl` output, if ACL tools are present |
-| `lastscan` | timestamp + tally of the last scan |
+| `lastscan` | timestamp + tally of the last scan (checked, repaired, unrepaired) |
+| `trust` | the trust mode the last scan ran with (to notice it being lowered) |
+| `reported/<path-sha256>` | how an unrepaired file was last reported, so each change is reported once |
 
 Blob and ACL filenames are the SHA-256 of the file's **absolute path**, which
 gives a slash-free, collision-free name per file.
@@ -116,9 +119,61 @@ and refuses to replace the previous snapshot if any file could not be stored
 in full. Manifest lines whose path is not a plain absolute path (whitespace,
 control characters, `.` or `..` components) are ignored and logged.
 
+### Snapshot trust (signed snapshots)
+
+Every blob and every ACL file is used only if its SHA-256 is the one in the
+manifest, so the manifest is the one thing that has to be trusted. By default
+(`trust = local`) PheonixBox trusts the host's own manifest. Root on the host
+could then rewrite a protected file, its blob and the manifest together, and
+the next scan would "repair" to the attacker's version.
+
+With this line in `/etc/secure_sudo/pheonixbox.conf`:
+
+```
+trust = signed
+```
+
+PheonixBox repairs only while `manifest.sig` is a valid Ed25519 signature
+over the manifest by the operator's key. The public half lives at
+`/etc/secure_sudo/addons/baseline-signing.pub`. It is the same key the
+`temporary/` add-ons use for their baselines (docs/ADDONS.md "Baseline trust
+and evidence"), so one key signs every baseline on the host. The key file must
+be root-owned and writable only by root. The private key never has to be on
+the host: copy the manifest off, or sign from removable media.
+
+```sh
+sudo secure-sudo pheonixbox on            # or `snapshot`: prints the manifest's sha256
+# on the signing machine, after checking that sha256:
+openssl pkeyutl -sign -rawin -inkey KEY.pem \
+    -in /var/lib/secure_sudo/pheonixbox/manifest \
+    -out /var/lib/secure_sudo/pheonixbox/manifest.sig
+sudo secure-sudo pheonixbox status        # "snapshot trust: signed - signature valid"
+```
+
+While the snapshot is not trusted (it is unsigned, edited after signing, the
+signature does not verify, or the key is missing or unsafe):
+
+* each scan still finds tampering, keeps the evidence and logs it CRITICAL
+  (`TAMPERED, NOT repaired`), but **writes nothing back**. Each change is
+  reported and copied once, not every 30 seconds;
+* `off` unlocks the files (gives back the owner write bit the lock took) but
+  does **not** apply the manifest's owners, modes or ACLs, because an edited
+  manifest could name setuid root;
+* "snapshot NOT TRUSTED" is logged CRITICAL at most every 10 minutes.
+
+Every new snapshot deletes the old signature and logs CRITICAL its file
+count, the manifest's SHA-256 and the signing key's fingerprint. A scan that
+finds `trust` lowered from `signed` to `local` logs that CRITICAL too. Both
+are on record off-box, so neither can be done quietly. ACL files captured
+before this release have no hash in the manifest and are not applied until
+the next snapshot.
+
+### Checking the configuration
+
 `secure-sudo pheonixbox check-config` checks `/etc/secure_sudo/pheonixbox.conf`
 strictly: root-owned and not group/world writable; each line blank, a `#`
-comment, or one absolute path without whitespace, control characters or
+comment, one `trust = local|signed` (`signed` needs a usable key), or one
+absolute path without whitespace, control characters or
 `.`/`..`, listed once (a path that does not exist yet is a note). `on` and
 `snapshot` refuse to run (exit 78) while it has an error; `add`, `remove`,
 `list`, `status` and `scan` still work.
@@ -132,7 +187,7 @@ sudo secure-sudo pheonixbox add /etc/ssh/sshd_config   # protect a file
 sudo secure-sudo pheonixbox add /usr/local/bin         # protect a dir (recursive)
 sudo secure-sudo pheonixbox list                       # show protected paths
 sudo secure-sudo pheonixbox on                         # snapshot + lock + scan
-sudo secure-sudo pheonixbox status                     # on/off + entry count + last scan
+sudo secure-sudo pheonixbox status                     # on/off, entries, snapshot trust, last scan
 sudo secure-sudo pheonixbox scan                       # scan+repair now (daemon does this on a timer)
 sudo secure-sudo pheonixbox off                        # restore permissions, stop
 sudo secure-sudo pheonixbox snapshot                   # (while off) re-baseline after a real update
@@ -175,7 +230,12 @@ version is what repairs restore to, by design.
   *restoring* content rather than only blocking writes.
 * **ACLs are best-effort.** Capture/restore uses `getfacl`/`setfacl`; on a
   system without them, the owner/group/mode from the manifest are still
-  restored.
+  restored. A captured ACL file is applied only if its hash matches the
+  manifest's.
+* **Trust is only as strong as the mode.** With `trust = local` the snapshot is
+  the host's own copy (see "Snapshot trust"). With `trust = signed`, root can
+  still edit the config back to `local`, but not silently: that change is
+  logged CRITICAL.
 
 ## 9. Relationship to the other anti-tamper layers
 
