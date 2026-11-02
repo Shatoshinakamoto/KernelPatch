@@ -327,10 +327,10 @@
         "check-config",
         "threat-model",
         "evidence-preserved",
-        "adversarial-tests"
+        "adversarial-tests",
+        "baseline-trust"
       ],
       "open": [
-        "baseline-trust",
         "promotion-approved",
         "host-soak"
       ],
@@ -341,7 +341,7 @@
         "upgrade-rollback"
       ],
       "na_why": "it is part of the core release: it runs inside secure-sudod's unit and is upgraded and rolled back with install.sh",
-      "open_note": "baseline-trust: the snapshot is trusted as the host's own copy (no signed snapshot yet)"
+      "trust_note": "baseline-trust needs `trust = signed` in pheonixbox.conf; the default (local) trusts the host's own snapshot"
     }
   }
 }

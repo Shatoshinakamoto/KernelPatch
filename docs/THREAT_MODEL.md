@@ -576,11 +576,14 @@ The installer fills `admin_gid` from the `sudo`, `wheel` and `admin` groups
 * **Needs:** `secure-sudod`'s timer (about every 30 s); the store
   (`/var/lib/secure_sudo/pheonixbox`) on protected storage.
 * **Limits:** it repairs within one interval, it does not block; whatever a
-  tampered file did meanwhile has happened. Root can change the store or turn
-  it off (the lock does not cover userspace). Pair it with #17/#13 for
+  tampered file did meanwhile has happened. Root can turn it off (the lock
+  does not cover userspace). Root can rewrite the store too, unless
+  `trust = signed`: then only an operator-signed snapshot is repaired from,
+  and switching back to `local` is logged CRITICAL. Pair it with #17/#13 for
   programs.
 * **Tested by:** `tests/userspace/test-pheonixbox.sh` (ROOT-ONLY, in a
-  private mount namespace: snapshot, tamper, detect, restore, permissions).
+  private mount namespace: snapshot, tamper, detect, restore, permissions,
+  signed snapshots, edited manifests and ACL files).
 
 ### #22 BPF and perf guard (kernel)
 
