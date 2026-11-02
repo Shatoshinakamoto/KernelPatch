@@ -1366,6 +1366,50 @@ applied, with a control showing a matching one is).
 
 ---
 
+### 73. Refused UID switches never reached the event log, add-on notifications could run shell code from event text, and nothing alerted (v1–v12, found 2026-11-02 by P2-3) — AU-2 / AU-5 / SI-4 / SI-10
+
+Tracing one event from the kernel to an alert (TODO P2-3) found:
+
+1. **The core protection was invisible to the log.** Protection #1's
+   setuid, setgid, setgroups and user-namespace denials went only to dmesg
+   through `pr_warn_ratelimited`. The daemon, the collector and auditd never
+   saw the main thing secure_sudo exists to stop. Each denial is now a
+   `credential_change` event (`operation`, `decision` `deny`, `reason`
+   `non_sudo_user`, `target_uid`). The events share a limit of 20 per 5 s so
+   one user cannot flush the ring, and the next record says how many were
+   not recorded.
+2. **Add-on `notify_cmd` ran a shell.** The message was single-quoted into
+   the template and the result passed to `sh -c`. A placeholder inside a
+   double-quoted word (`"%m"`, as the examples suggested) left `$(...)` in a
+   file or process name live, so a user who could name a file could run
+   commands as root. `notify_cmd` now runs with `execvp`, split into words
+   without a shell, under a fixed `PATH`; values are substituted inside
+   words, control bytes written as `\xNN`. A failing, unstartable or hung
+   command (killed after 10 s) is logged ERROR, the same message within
+   300 s is sent once, and at most 10 run a minute.
+3. **No severity, no alerting.** Every forwarded record had the same syslog
+   priority, so a collector could not route on it, and the daemon had no way
+   to page anyone. Records now get a severity from their typed fields only
+   (EVENTS.md section 3) and a matching `authpriv` priority. `alert_cmd`
+   runs, without a shell, for records at `alert_min_severity` or above, with
+   dedup, a per-minute limit, a timeout, and `alert_failed` /
+   `alert_rate_limited` records that are logged and forwarded. Alert records
+   never alert, so a broken command cannot loop. `secure-sudo health` shows
+   the alert state and is degraded while alerts fail or `alert_cmd` was
+   refused; `secure-sudo lint` checks the keys.
+
+Tested by `tests/userspace/test-daemon-events.sh` (21 new checks: severity
+and priority per type, placeholders and hostile text kept as data, dedup,
+flood limit, failure and timeout records, health), `test-addons.sh` (notify
+rewritten: shell syntax not run, a 999-byte quoted argument intact, dedup,
+rate limit, failures logged), `test-cli.sh` (lint of the keys), `t_creds`
+(4 new: an event per denial) and `tests/vm/distro/alert-trace-guest.sh`
+(a denial on the real kernel reaches the local log, a collector with
+`<82>` and the alert command; a failing command is visible in the log, at
+the collector and in health). Documented in [EVENTS.md](EVENTS.md).
+
+---
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

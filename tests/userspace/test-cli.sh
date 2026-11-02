@@ -155,6 +155,18 @@ fresh; echo "block_setid = 0" >> "$CFG/secure-sudo.conf"; lint --no-kernel
 check "duplicate key is a warning naming the first line" says "WARN +secure-sudo.conf:[0-9]+ +block_setid is set again \(first on line [0-9]+\)"
 fresh; setkey vault_action delete; lint --no-kernel
 lint_err "bad daemon value (vault_action)" "vault_action = delete: not quarantine or wipe"
+fresh; setkey alert_min_severity urgent; lint --no-kernel
+lint_err "bad alert_min_severity" "alert_min_severity = urgent: not info, low, medium, high or critical"
+fresh; setkey alert_max_per_minute 0; lint --no-kernel
+lint_err "alert_max_per_minute below its range" "alert_max_per_minute = 0: out of range \\(1\\.\\.600\\)"
+fresh; setkey alert_dedup_seconds 86401; lint --no-kernel
+lint_err "alert_dedup_seconds above its range" "alert_dedup_seconds = 86401: out of range \\(0\\.\\.86400\\)"
+fresh; setkey alert_cmd '/usr/local/sbin/page "%m'; lint --no-kernel
+lint_err "alert_cmd with an unbalanced quote" "unbalanced \" quote"
+fresh; setkey alert_cmd '/usr/local/sbin/page %x'; lint --no-kernel
+lint_err "alert_cmd with an unknown placeholder" "unknown placeholder %x"
+fresh; setkey alert_cmd '/usr/local/sbin/page %s %t "%h: %m" %j'; setkey alert_min_severity critical; lint --no-kernel
+check "a good alert block passes lint" says '^lint: 0 error\(s\)'
 fresh; setkey remote_syslog loghost; lint --no-kernel
 lint_err "bad daemon value (remote_syslog)" "remote_syslog = loghost: not host:port"
 fresh; setkey remote_syslog loghost:70000; lint --no-kernel

@@ -37,6 +37,7 @@ docs/
   SECURITY_REVIEW.md              NIST-framed review: findings + fixes
   THREAT_MODEL.md                 per control: threat, preconditions, limits, test
   ATTESTATION.md                  remote attestation: enroll, verify, revoke, recover (P2-1)
+  EVENTS.md                       event format, severity, forwarding priority, alerts, SIEM integration (P2-3)
   STIG.md                         STIG/CIS tooling, control map, results
   OSCAP_BUGS.md                   every oscap bug, root cause, patch, before/after
   FEATURE_MAP.md                  how each feature maps from the v1/v2 originals
