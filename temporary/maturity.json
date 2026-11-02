@@ -1,0 +1,321 @@
+{
+  "_comment": "Published maturity status of the temporary/ add-ons (TODO P2-2). ci/check-addon-maturity.sh checks this file against the tree on every gate run; docs/ADDONS.md 'Maturity' is the readable form. An add-on leaves 'experimental' only with every 'open' item closed and an operator approval recorded under 'promotion' (see 'criteria').",
+  "schema": 1,
+  "levels": [
+    "experimental",
+    "beta",
+    "stable"
+  ],
+  "criteria": {
+    "beta": "pending operator approval (TODO P2-2 'operator-approved promotion criteria')",
+    "stable": "pending operator approval (TODO P2-2 'operator-approved promotion criteria')"
+  },
+  "requirements": {
+    "check-config": "a check-config command; acting commands refuse a config with errors (exit 78)",
+    "hardened-unit": "every unit sandboxed; systemd-analyze security exposure at most max_exposure",
+    "resource-limits": "MemoryMax= and TasksMax= on every unit",
+    "failure-reporting": "OnFailure=secure-sudo-addon-failure@%n.service on every unit",
+    "threat-model": "a threat model section in docs/ADDONS.md",
+    "upgrade-rollback": "upgrade and rollback steps in docs/ADDONS.md",
+    "baseline-trust": "baselines and backups verified against a trust source the host cannot rewrite unnoticed",
+    "evidence-preserved": "quarantine and repair keep the original bytes and hashes as evidence",
+    "adversarial-tests": "malicious input, concurrent replacement, symlink race, stale/modified baseline, storage exhaustion and monitor-to-enforce tests",
+    "promotion-approved": "the operator approved the promotion criteria and this add-on meets them",
+    "host-soak": "run in monitor/log mode on a real host for the soak period in the criteria with no false positive left unexplained"
+  },
+  "addons": {
+    "procguard": {
+      "level": "experimental",
+      "binary": "secure-sudo-procguard",
+      "source": "temporary/procguard/procguard.c",
+      "configs": [
+        "procguard.conf",
+        "procguard_allow.conf"
+      ],
+      "default_mode": "monitor",
+      "acts": "kills processes that are not on the allowlist; removes a respawning executable outside the system directories",
+      "units": {
+        "secure-sudo-procguard.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "baseline-trust"
+      ],
+      "na_why": "its allowlist is operator input, not a recorded baseline of the host"
+    },
+    "tamperwatch": {
+      "level": "experimental",
+      "binary": "secure-sudo-tamperwatch",
+      "source": "temporary/tamperwatch/tamperwatch.c",
+      "configs": [
+        "tamperwatch.conf"
+      ],
+      "default_mode": "log",
+      "acts": "in quarantine mode, kills the process that wrote a protected file after compressing its executable",
+      "units": {
+        "secure-sudo-tamperwatch.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "baseline-trust"
+      ],
+      "na_why": "it watches writes as they happen; it keeps no baseline"
+    },
+    "driverguard": {
+      "level": "experimental",
+      "binary": "secure-sudo-driverguard",
+      "source": "temporary/driverguard/driverguard.c",
+      "configs": [
+        "driverguard.conf"
+      ],
+      "default_mode": "monitor",
+      "acts": "in enforce mode, overwrites a changed kernel module file with its backup",
+      "units": {
+        "secure-sudo-driverguard.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "baseline-trust",
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ]
+    },
+    "bootguard": {
+      "level": "experimental",
+      "binary": "secure-sudo-bootguard",
+      "source": "temporary/bootguard/bootguard.c",
+      "configs": [
+        "bootguard.conf"
+      ],
+      "default_mode": "enforce",
+      "default_mode_note": "enforce only stages a restore; it is applied at the next boot, and neither the timer nor the restore unit is enabled by the installer",
+      "acts": "at the next boot, overwrites changed /boot files with their backups",
+      "units": {
+        "secure-sudo-bootguard.service": {
+          "max_exposure": 4.0
+        },
+        "secure-sudo-bootguard-restore.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "baseline-trust",
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ]
+    },
+    "biosguard": {
+      "level": "experimental",
+      "binary": "secure-sudo-biosguard",
+      "source": "temporary/biosguard/biosguard.c",
+      "configs": [
+        "biosguard.conf"
+      ],
+      "default_mode": "detect",
+      "acts": "nothing: detection, log and notify only",
+      "units": {
+        "secure-sudo-biosguard.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "baseline-trust",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "evidence-preserved"
+      ],
+      "na_why": "it never quarantines or repairs anything"
+    },
+    "locus": {
+      "level": "experimental",
+      "binary": "secure-sudo-locus",
+      "source": "temporary/locus/locus.c",
+      "configs": [
+        "locus.conf"
+      ],
+      "default_mode": "serve",
+      "acts": "nothing destructive: hands out directory names and creates its bucket directories",
+      "units": {
+        "secure-sudo-locus.service": {
+          "max_exposure": 4.0
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "baseline-trust",
+        "evidence-preserved"
+      ],
+      "na_why": "it keeps no baseline and changes no files but its bucket directories"
+    },
+    "gui": {
+      "level": "experimental",
+      "binary": "secure-sudo-gui",
+      "source": "temporary/gui/secure-sudo-gui",
+      "configs": [
+        "gui.conf"
+      ],
+      "default_mode": "loopback",
+      "acts": "edits the add-on configs (rolled back if check-config fails), runs scans and baselines, quarantines a process on request",
+      "units": {
+        "secure-sudo-gui.service": {
+          "max_exposure": 8.0,
+          "why": "its children (scans, repairs, secure-sudo set, quarantine) inherit the sandbox"
+        }
+      },
+      "done": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "baseline-trust"
+      ],
+      "na_why": "it keeps no baseline; the guards it runs do"
+    },
+    "failure": {
+      "level": "experimental",
+      "binary": "secure-sudo-addon-failure",
+      "source": "temporary/failure/failure.c",
+      "configs": [
+        "logging.conf"
+      ],
+      "default_mode": "report",
+      "acts": "nothing: logs, ships and notifies that another add-on unit failed",
+      "units": {
+        "secure-sudo-addon-failure@.service": {
+          "max_exposure": 4.5
+        }
+      },
+      "done": [
+        "hardened-unit",
+        "resource-limits",
+        "threat-model",
+        "upgrade-rollback"
+      ],
+      "open": [
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "check-config",
+        "baseline-trust",
+        "evidence-preserved",
+        "failure-reporting"
+      ],
+      "na_why": "it has no settings of its own (logging.conf is checked by every guard), keeps no baseline, and is itself the failure reporting (a failing report must not start another)"
+    },
+    "pheonixbox": {
+      "level": "experimental",
+      "binary": "secure-sudo-pheonixbox",
+      "source": "userspace/pheonixbox/pheonixbox.c",
+      "configs": [],
+      "configs_note": "its protected-path list is /etc/secure_sudo/pheonixbox.conf, managed with add/remove",
+      "default_mode": "off",
+      "acts": "when enabled, makes protected files read-only and repairs a changed one from its stored copy on each scan",
+      "units": {},
+      "units_note": "no unit of its own: secure-sudod runs `scan --quiet` on a timer, so it runs under the core daemon's unit",
+      "done": [
+        "threat-model"
+      ],
+      "open": [
+        "check-config",
+        "baseline-trust",
+        "evidence-preserved",
+        "adversarial-tests",
+        "promotion-approved",
+        "host-soak"
+      ],
+      "na": [
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "upgrade-rollback"
+      ],
+      "na_why": "it is part of the core release: it runs inside secure-sudod's unit and is upgraded and rolled back with install.sh"
+    }
+  }
+}

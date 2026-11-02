@@ -195,10 +195,15 @@ jobs:
           sudo bash tests/vm/distro/run-stig-test.sh \
             "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$KOUT" "$ds" "$RUNNER_TEMP/res-stig"
 
+      - name: Add-on units under real systemd (P2-2 hardening, limits, failure reporting)
+        run: |
+          sudo bash tests/vm/distro/run-addon-units-test.sh \
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$RUNNER_TEMP/res-addons"
+
       - name: Make the results readable for upload (never the VM key or disk)
         if: always()
         run: |
-          for d in "$RUNNER_TEMP/res-install" "$RUNNER_TEMP/res-stig"; do
+          for d in "$RUNNER_TEMP/res-install" "$RUNNER_TEMP/res-stig" "$RUNNER_TEMP/res-addons"; do
             sudo test -d "$d" || continue
             sudo find "$d" \( -name 'id_vm*' -o -name '*.qcow2' \) -print -delete
             sudo chown -R "$(id -u):$(id -g)" "$d"
@@ -211,3 +216,4 @@ jobs:
           path: |
             ${{ runner.temp }}/res-install
             ${{ runner.temp }}/res-stig
+            ${{ runner.temp }}/res-addons

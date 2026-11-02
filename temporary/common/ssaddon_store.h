@@ -19,6 +19,7 @@
 #define SSADDON_STORE_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 /* Cap on a single file stored compressed (256 MiB), matching PheonixBox. */
 #define STORE_MAX_FILE (256UL * 1024UL * 1024UL)
@@ -58,6 +59,10 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
  * writes the allocated path to @out and returns 0; on any failure returns -1
  * and the caller should fall back to its configured default root. */
 int locus_request_root(const char *purpose, char *out, size_t n);
+
+/* Check locus-client.conf strictly (ssaddon_conf); each problem goes to
+ * @report. Returns the number of errors. */
+int locus_check_conf(FILE *report);
 
 /*
  * Is a package manager in the middle of a transaction (dpkg, rpm, zypper

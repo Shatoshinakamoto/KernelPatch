@@ -5,6 +5,7 @@
  */
 #define _GNU_SOURCE
 #include "ssaddon_log.h"
+#include "ssaddon_conf.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,7 @@ static struct {
 	int sock;			/* remote socket, -1 if none */
 	char logpath[512];
 	char notify_cmd[512];		/* run on ssl_notify(); %m %l %f subst */
+	int conf_errors;
 	int ready;
 } S = { .sock = -1, .max_bytes = DEF_MAX };
 
@@ -73,56 +75,49 @@ static int syslog_pri(enum ssl_level l)
 	return 13 * 8 + sev;
 }
 
-static void trim(char *s)
+/* Parse logging.conf strictly (ssaddon_conf). A key with an error keeps its
+ * safe default; the add-ons' acting commands refuse to run while
+ * ssl_check_conf() reports errors. The file may be absent. */
+static int load_conf(FILE *report)
 {
-	size_t n = strlen(s);
-
-	while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' ||
-		     s[n - 1] == '\t'))
-		s[--n] = '\0';
-}
-
-/* Parse logging.conf. Unknown keys are ignored; the file may be absent. */
-static void load_conf(void)
-{
-	FILE *f = fopen(CONF, "re");
-	char line[512];
+	static const char *const protos[] = { "udp", "tcp", NULL };
+	int max = (int)DEF_MAX;
+	const struct ssc_key keys[] = {
+		{ "log_dir", SSC_PATH, S.dir, sizeof(S.dir), 1, 0, NULL },
+		{ "log_max_bytes", SSC_INT, &max, 0, 65536, 1L << 30, NULL },
+		{ "remote_enabled", SSC_INT, &S.remote_enabled, 0, 0, 1, NULL },
+		{ "remote_proto", SSC_ENUM, &S.remote_tcp, 0, 0, 0, protos },
+		{ "remote_host", SSC_HOST, S.host, sizeof(S.host), 0, 0, NULL },
+		{ "remote_port", SSC_PORT, S.port, sizeof(S.port), 0, 0, NULL },
+		{ "notify_cmd", SSC_STR, S.notify_cmd, sizeof(S.notify_cmd), 0, 0, NULL },
+		{ NULL, 0, NULL, 0, 0, 0, NULL }
+	};
+	int errors;
 
 	snprintf(S.dir, sizeof(S.dir), "%s", DEF_DIR);
-	if (!f)
-		return;
-	while (fgets(line, sizeof(line), f)) {
-		char *eq, *k, *v;
-
-		trim(line);
-		if (line[0] == '#' || line[0] == '\0')
-			continue;
-		eq = strchr(line, '=');
-		if (!eq)
-			continue;
-		*eq = '\0';
-		k = line;
-		v = eq + 1;
-		while (*k == ' ' || *k == '\t') k++;
-		trim(k);
-		while (*v == ' ' || *v == '\t') v++;
-
-		if (!strcmp(k, "log_dir"))
-			snprintf(S.dir, sizeof(S.dir), "%s", v);
-		else if (!strcmp(k, "log_max_bytes"))
-			S.max_bytes = strtoul(v, NULL, 10);
-		else if (!strcmp(k, "remote_enabled"))
-			S.remote_enabled = atoi(v);
-		else if (!strcmp(k, "remote_proto"))
-			S.remote_tcp = !strcmp(v, "tcp");
-		else if (!strcmp(k, "remote_host"))
-			snprintf(S.host, sizeof(S.host), "%s", v);
-		else if (!strcmp(k, "remote_port"))
-			snprintf(S.port, sizeof(S.port), "%s", v);
-		else if (!strcmp(k, "notify_cmd"))
-			snprintf(S.notify_cmd, sizeof(S.notify_cmd), "%s", v);
+	S.remote_enabled = 0;
+	S.remote_tcp = 0;
+	S.host[0] = S.notify_cmd[0] = '\0';
+	snprintf(S.port, sizeof(S.port), "514");
+	errors = ssc_parse(CONF, keys, NULL, NULL, report);
+	S.max_bytes = (unsigned long)max;
+	if (!errors && S.remote_enabled && !S.host[0]) {
+		if (report)
+			fprintf(report, "%s: remote_enabled = 1 needs remote_host\n", CONF);
+		errors++;
 	}
-	fclose(f);
+	S.conf_errors = errors;
+	return errors;
+}
+
+int ssl_check_conf(FILE *report)
+{
+	return load_conf(report);
+}
+
+int ssl_conf_errors(void)
+{
+	return S.conf_errors;
 }
 
 static void open_remote(void)
@@ -153,7 +148,7 @@ static void open_remote(void)
 void ssl_init(const char *feature)
 {
 	snprintf(S.feature, sizeof(S.feature), "%s", feature ? feature : "addon");
-	load_conf();
+	load_conf(NULL);
 
 	/* Local log dir is root-only: the logs name quarantined malware paths
 	 * and host state that should not leak to unprivileged users. */
@@ -285,7 +280,15 @@ void ssl_notify(enum ssl_level level, const char *fmt, ...)
 			}
 			q[qo++] = '\'';
 			q[qo] = '\0';
-			o += snprintf(cmd + o, sizeof(cmd) - o, "%s", q);
+			/* never cut a quoted value short: a half-quoted command
+			 * is not run at all (it used to write past cmd[]) */
+			if (o + qo >= sizeof(cmd)) {
+				ssl_log(SSL_WARN, "notify_cmd not run: the command would be "
+					"longer than %zu bytes", sizeof(cmd) - 1);
+				return;
+			}
+			memcpy(cmd + o, q, qo + 1);
+			o += qo;
 			p++;
 		} else {
 			cmd[o++] = *p;

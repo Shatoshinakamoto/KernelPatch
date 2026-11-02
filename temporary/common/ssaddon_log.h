@@ -20,6 +20,7 @@
 #define SSADDON_LOG_H
 
 #include <stdarg.h>
+#include <stdio.h>
 
 enum ssl_level {
 	SSL_DEBUG = 0,
@@ -52,6 +53,12 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
  * for things like a detected BIOS tamper. Best-effort; never blocks. */
 void ssl_notify(enum ssl_level level, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
+
+/* Re-check logging.conf, printing each problem to @report (may be NULL).
+ * Returns the number of errors. ssl_conf_errors() is the count from the
+ * last parse (ssl_init parses it once). */
+int ssl_check_conf(FILE *report);
+int ssl_conf_errors(void);
 
 /* Flush and close. */
 void ssl_close(void);

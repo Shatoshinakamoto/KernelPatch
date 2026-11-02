@@ -1,15 +1,48 @@
 [Unit]
 Description=secure_sudo ProcGuard process allowlist enforcer (v8 add-on)
 After=network.target
+OnFailure=secure-sudo-addon-failure@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/secure-sudo-procguard daemon
 Restart=on-failure
 RestartSec=3
-# ProcGuard must send signals to arbitrary processes, so it cannot be heavily
-# sandboxed; it still drops new-privilege acquisition.
+# 78 = the configuration is invalid: restarting cannot fix it
+RestartPreventExitStatus=78
+# ProcGuard signals and reads arbitrary processes and removes infected files
+# outside the system directories, so /home and /tmp stay visible. The system
+# directories are read-only to it: "never delete from /usr, /boot, /etc" is
+# then enforced by the kernel as well as by the code.
+ProtectSystem=full
+ReadWritePaths=/var/lib/secure_sudo /var/log/secure_sudo
+CapabilityBoundingSet=CAP_KILL CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
+# --- P2-2 hardening shared by every add-on (docs/ADDONS.md "Service hardening")
 NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the add-on log can be shipped to a syslog collector (logging.conf)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+# --- resource limits: a quarantined sample is read whole (at most 256 MiB)
+MemoryHigh=512M
+MemoryMax=768M
+TasksMax=64
+CPUQuota=50%
+Nice=5
 
 [Install]
 WantedBy=multi-user.target

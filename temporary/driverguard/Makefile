@@ -5,8 +5,8 @@ CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security
 CPPFLAGS += -I../common
 PREFIX   ?= /usr
 BINDIR   ?= $(PREFIX)/bin
-COMMON    = ../common/ssaddon_log.c ../common/ssaddon_store.c
-HDRS      = ../common/ssaddon_log.h ../common/ssaddon_store.h
+COMMON    = ../common/ssaddon_log.c ../common/ssaddon_store.c ../common/ssaddon_conf.c
+HDRS      = ../common/ssaddon_log.h ../common/ssaddon_store.h ../common/ssaddon_conf.h
 LDLIBS   := -lcrypto -lz
 BIN       = secure-sudo-driverguard
 SRC       = driverguard.c

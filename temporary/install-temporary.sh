@@ -38,6 +38,12 @@ for d in procguard driverguard biosguard bootguard locus tamperwatch; do
 	make -C "$SRC/$d" clean >/dev/null 2>&1 || true
 done
 
+# 1a. Failure reporting: OnFailure= of every add-on unit runs this (P2-2).
+log "building the add-on failure reporter"
+make -C "$SRC/failure" clean >/dev/null 2>&1 || true
+make -C "$SRC/failure" BINDIR=/usr/libexec/secure-sudo install >/dev/null
+make -C "$SRC/failure" clean >/dev/null 2>&1 || true
+
 # 1b. Management GUI (pure Python stdlib - script + page installed together).
 log "installing management GUI"
 make -C "$SRC/gui" >/dev/null
@@ -77,6 +83,14 @@ fi
 	install -m0644 "$SRC/hooks/dnf4.action" /etc/dnf/plugins/post-transaction-actions.d/secure-sudo-addons.action
 true
 
+# 3c. Every config is checked strictly: an add-on refuses to act on a config
+#     with an unknown key, a bad value or an unsafe owner/mode (P2-2).
+for b in procguard driverguard biosguard bootguard locus tamperwatch; do
+	if ! "$BINDIR/secure-sudo-$b" check-config >/dev/null 2>&1; then
+		log "WARNING: $b config has problems - run: secure-sudo-$b check-config"
+	fi
+done
+
 # 4. systemd units.
 if [ -d "$UNITDIR" ]; then
 	log "installing systemd units to $UNITDIR"
@@ -88,6 +102,11 @@ fi
 cat <<'NEXT'
 
 Installed. NOTHING is enabled yet - every enforcing part is opt-in.
+
+Every add-on has `check-config`; its acting commands refuse to run while its
+config has an error. Each unit is sandboxed and resource-limited, and a unit
+that fails is reported (CRITICAL log, off-box syslog, notify_cmd) by
+secure-sudo-addon-failure@.service. Maturity: docs/ADDONS.md "Maturity".
 
 Recommended order:
 

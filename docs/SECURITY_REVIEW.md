@@ -1207,6 +1207,41 @@ P2-1 checks, which replay the log against a software TPM in the guest.
 
 ---
 
+### 69. Add-on configs failed open, a long notification overflowed a buffer, and nothing reported a dead guard (v8–v12, found 2026-11-01 by P2-2) — CM-6 / SI-4 / AU-5
+
+Working through the P2-2 maturity requirements found three problems in the
+temporary/ add-ons.
+
+1. Every config loader ignored what it did not understand. `mode = enforec`
+   meant monitor, `interval = 5s` meant the default, a misspelt key or a
+   path with `..` was taken or dropped without a word, and a config writable
+   by any user was read by a root daemon that runs `notify_cmd` and
+   `sync_cmd` from it. All add-ons now share a strict parser
+   (`ssaddon_conf`): unknown keys, repeats, bad values, over-long values and
+   an owner other than root or a group/world-writable file are errors, each
+   add-on has `check-config`, and the acting commands refuse to run (exit 78)
+   while there is an error. The console rolls a change back when the owning
+   guard's `check-config` rejects it.
+2. `ssl_notify()` quoted the message into a 1600-byte command with
+   `o += snprintf(...)` and then wrote `cmd[o] = '\0'`. A template with two
+   `%m` and a message full of quotes (each becomes four bytes) put `o` past
+   the end of the buffer: a stack write of one byte at an offset the message
+   controls. A command that would not fit is now not run and the reason is
+   logged; it is never cut inside a quoted value.
+3. A guard that crashed, was OOM-killed or refused its config simply stopped:
+   nothing distinguished it from a quiet host. Every unit now has
+   `OnFailure=secure-sudo-addon-failure@%n.service`, which raises a CRITICAL
+   notification (local log, off-box syslog, `notify_cmd`), and the daemons do
+   not restart-loop on a config error.
+
+The units are also sandboxed and resource-limited for the first time
+(exposure 9.6 down to 2.0–3.9, the console 7.5; docs/ADDONS.md "Service
+hardening"). Tested by `tests/userspace/test-addons.sh` (31 new checks) and,
+under real systemd, `tests/vm/distro/run-addon-units-test.sh`; the gate holds
+the tree to `temporary/maturity.json` (`ci/check-addon-maturity.py`).
+
+---
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

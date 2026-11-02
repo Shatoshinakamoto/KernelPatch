@@ -1,6 +1,42 @@
 [Unit]
 Description=secure_sudo BootGuard scan (v8 add-on)
+OnFailure=secure-sudo-addon-failure@%n.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/secure-sudo-bootguard scan
+# The scan only reads /boot: a restore is staged, and applied at the next boot
+# by secure-sudo-bootguard-restore.service.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/secure_sudo /var/log/secure_sudo
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
+# --- P2-2 hardening shared by every add-on (docs/ADDONS.md "Service hardening")
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# the add-on log can be shipped to a syslog collector (logging.conf)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+# --- resource limits: a scan runs in the background, at low priority
+MemoryHigh=512M
+MemoryMax=768M
+TasksMax=32
+CPUQuota=50%
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min

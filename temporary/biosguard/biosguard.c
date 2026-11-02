@@ -34,8 +34,12 @@
 #include <sys/stat.h>
 
 #include "ssaddon_log.h"
+#include "ssaddon_conf.h"
 
-#define CONF		"/etc/secure_sudo/addons/biosguard.conf"
+#ifndef BIOS_CONF
+#define BIOS_CONF	"/etc/secure_sudo/addons/biosguard.conf"
+#endif
+#define CONF		BIOS_CONF
 #define STATEDIR	"/var/lib/secure_sudo/addons/biosguard"
 #define MANIFEST	STATEDIR "/fingerprint"
 #define DMI_DIR		"/sys/class/dmi/id"
@@ -237,6 +241,15 @@ static int cmd_status(void)
 	return 0;
 }
 
+/* BiosGuard has no settings of its own yet: any line in biosguard.conf is an
+ * error rather than a setting that silently does nothing. */
+static int conf_errors(FILE *r)
+{
+	const struct ssc_key none[] = { SSC_END };
+
+	return ssc_parse(CONF, none, NULL, NULL, r) + ssl_check_conf(r);
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -244,6 +257,7 @@ static void usage(void)
 "  baseline   fingerprint the firmware (DMI ids + ACPI tables)\n"
 "  scan       check for firmware tamper; log + notify on any change (no repair)\n"
 "  status     show state\n"
+"  check-config  check every config file strictly; 1 if any problem\n"
 "\nDetection only by design: BiosGuard never writes firmware. Config: " CONF "\n");
 }
 
@@ -258,6 +272,15 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	ssl_init("biosguard");
+
+	if (!strcmp(argv[1], "check-config"))
+		return ssc_verdict(conf_errors(stdout));
+	if (strcmp(argv[1], "status")) {
+		int rc = ssc_refuse(argv[1], conf_errors(stderr));
+
+		if (rc)
+			return rc;
+	}
 
 	if (!strcmp(argv[1], "baseline"))
 		return cmd_baseline();
