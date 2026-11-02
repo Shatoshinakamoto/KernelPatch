@@ -40,6 +40,9 @@ printf 'mode = enforce\nrotate = 1\ndriver_dir = %s\nbackup_root = /var/lib/secu
 secure-sudo-driverguard baseline >/dev/null
 M=$(find "$MD" -name '*.ko*' | head -1); cp "$M" /root/mod.orig; echo junk >> "$M"
 runit secure-sudo-driverguard.service
+r "driverguard turned to enforce reports only until it is armed (P2-2 part 3)" '! cmp -s "$M" /root/mod.orig && grep -qF "ENFORCE NOT ARMED: driverguard" $L/driverguard.log'
+secure-sudo-driverguard arm >/dev/null
+runit secure-sudo-driverguard.service
 r "driverguard enforce repairs $M under its sandbox" '[ "$(res secure-sudo-driverguard.service)" = success ] && cmp -s "$M" /root/mod.orig'
 r "... keeping the tampered bytes as evidence (P2-2 part 2)" 'grep -qF "\"action\":\"repair\",\"path\":\"$M\"" /var/lib/secure_sudo/addons/evidence/driverguard.jsonl'
 
@@ -61,6 +64,7 @@ find /usr /opt -xdev -type f -perm -u+x 2>/dev/null > $C/procguard_allow.conf
 for p in /proc/[0-9]*; do readlink "$p/exe" 2>/dev/null; done | grep ^/ | sed 's/ (deleted)$//' | sort -u >> $C/procguard_allow.conf
 printf 'mode = enforce\ninterval = 1\nrespawn_threshold = 3\nrespawn_window = 60\nremove_on_infection = 1\nrotate = 1\nquarantine_root = /var/lib/secure_sudo/addons/procguard/quarantine\n' > $C/procguard.conf
 cp "$(readlink -f "$(command -v sleep)")" /tmp/evil
+secure-sudo-procguard arm >/dev/null
 systemctl start secure-sudo-procguard.service
 until_ok 'grep -q "procguard started: mode=enforce" $L/procguard.log 2>/dev/null'
 for _ in 1 2 3; do [ -e /tmp/evil ] || break; /tmp/evil 100 & p=$!; for _ in $(seq 30); do kill -0 $p 2>/dev/null || break; sleep 0.2; done; wait $p 2>/dev/null; done
@@ -74,6 +78,7 @@ printf 'mode = monitor\n' > $C/procguard.conf
 # --- tamperwatch: quarantine mode kills the writer of a protected file
 echo protected > /etc/ss-prot.conf
 printf 'mode = quarantine\nrotate = 1\nquarantine_root = /var/lib/secure_sudo/addons/tamperwatch/quarantine\n/etc/ss-prot.conf\n' > $C/tamperwatch.conf
+secure-sudo-tamperwatch arm >/dev/null
 systemctl start secure-sudo-tamperwatch.service
 until_ok 'grep -q "files watched" $L/tamperwatch.log 2>/dev/null'
 cp "$(readlink -f /bin/bash)" /tmp/wbash

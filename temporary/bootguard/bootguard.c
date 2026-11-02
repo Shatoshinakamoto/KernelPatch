@@ -106,39 +106,6 @@ static int conf_errors(FILE *r)
 	return load_cfg(&c, r) + ssl_check_conf(r) + locus_check_conf(r);
 }
 
-static int sha256_file(const char *path, char out[65])
-{
-	unsigned char buf[65536], d[EVP_MAX_MD_SIZE];
-	unsigned int dn = 0;
-	EVP_MD_CTX *c = EVP_MD_CTX_new();
-	FILE *f;
-	size_t r;
-	int i, ok = 0;
-
-	if (!c)
-		return -1;
-	f = fopen(path, "rbe");
-	if (!f) {
-		EVP_MD_CTX_free(c);
-		return -1;
-	}
-	if (EVP_DigestInit_ex(c, EVP_sha256(), NULL)) {
-		ok = 1;
-		while ((r = fread(buf, 1, sizeof(buf), f)) > 0)
-			if (!EVP_DigestUpdate(c, buf, r)) { ok = 0; break; }
-	}
-	fclose(f);
-	if (ok && EVP_DigestFinal_ex(c, d, &dn)) {
-		for (i = 0; i < (int)dn; i++)
-			sprintf(out + 2 * i, "%02x", d[i]);
-		out[2 * dn] = '\0';
-	} else {
-		ok = 0;
-	}
-	EVP_MD_CTX_free(c);
-	return ok ? 0 : -1;
-}
-
 typedef void (*file_cb)(const char *path, void *ctx);
 static void walk(const char *dir, file_cb cb, void *ctx, int depth)
 {
@@ -172,7 +139,8 @@ static void walk(const char *dir, file_cb cb, void *ctx, int depth)
 struct base_ctx {
 	FILE *mf;
 	const char *bucket;
-	size_t files, backed;
+	const char *root;		/* boot_dir */
+	size_t files, backed, failed;
 };
 
 static void base_one(const char *path, void *vctx)
@@ -180,12 +148,21 @@ static void base_one(const char *path, void *vctx)
 	struct base_ctx *b = vctx;
 	char sha[65], sample[PATH_MAX];
 
-	if (sha256_file(path, sha) == 0) {
-		fprintf(b->mf, "%s %s\n", sha, path);
-		b->files++;
+	if (!sst_path_within(b->root, path)) {
+		ssl_crit("BOOT odd file name skipped (not baselined): %s", path);
+		return;
 	}
-	if (store_put_compressed(path, b->bucket, "boot", sample, sizeof(sample)) == 0)
-		b->backed++;
+	/* the hash recorded is that of exactly the bytes backed up */
+	if (store_put_compressed_sha(path, b->bucket, "boot", sample, sizeof(sample),
+				     sha) != 0) {
+		ssl_crit("BOOT backup FAILED for %s (disk full, or it changed while "
+			 "being read)", path);
+		b->failed++;
+		return;
+	}
+	b->backed++;
+	fprintf(b->mf, "%s %s\n", sha, path);
+	b->files++;
 }
 
 static int backup_bucket(const struct cfg *c, char *out, size_t n)
@@ -316,10 +293,22 @@ static int baseline_why(const char *why)
 		return 1;
 	}
 	b.bucket = bucket;
+	b.root = c.boot_dir;
 	walk(c.boot_dir, base_one, &b, 0);
-	fflush(b.mf);
-	fsync(fileno(b.mf));
-	fclose(b.mf);
+	if (fflush(b.mf) != 0 || fsync(fileno(b.mf)) != 0 || ferror(b.mf))
+		b.failed++;
+	if (fclose(b.mf) != 0)
+		b.failed++;
+	if (b.failed) {
+		/* keep the old baseline rather than one its backups cannot serve */
+		unlink(tmp);
+		ssl_crit("BOOT baseline REFUSED (%s): %zu file(s) could not be backed "
+			 "up or recorded; the previous baseline is kept. Free space "
+			 "under %s and run it again", why, b.failed, bucket);
+		fprintf(stderr, "bootguard: baseline refused: %zu file(s) could not be "
+			"backed up (see the log)\n", b.failed);
+		return 1;
+	}
 	if (rename(tmp, MANIFEST) != 0) {
 		unlink(tmp);
 		return 1;
@@ -397,9 +386,10 @@ static int cmd_scan(void)
 	char *line = NULL;
 	size_t cap = 0;
 	ssize_t len;
-	size_t checked = 0, tampered = 0, staged = 0;
+	size_t checked = 0, tampered = 0, staged = 0, outside = 0;
 	char why[512];
 	int untrusted = 0;
+	struct stat lst;
 
 	load_cfg(&c, NULL);
 	{
@@ -439,7 +429,17 @@ static int cmd_scan(void)
 		path = sp + 1;
 		checked++;
 
-		if (sha256_file(path, sha_now) != 0) {
+		if (strlen(sha) != 64 || !sst_path_within(c.boot_dir, path)) {
+			ssl_crit("BOOT baseline entry IGNORED: %s is not a file under %s "
+				 "(edited baseline, or boot_dir changed: re-baseline)",
+				 path, c.boot_dir);
+			outside++;
+			continue;
+		}
+		if (lstat(path, &lst) == 0 && S_ISLNK(lst.st_mode)) {
+			ssl_crit("BOOT tamper: %s was replaced by a symlink", path);
+			bad = 1;
+		} else if (sst_sha256_file(path, sha_now) != 0) {
 			ssl_crit("BOOT file missing/unreadable: %s", path);
 			bad = 1;
 		} else if (strcmp(sha, sha_now) != 0) {
@@ -485,7 +485,7 @@ static int cmd_scan(void)
 		ssl_info("scan: boot partition intact (%zu files)", checked);
 		printf("bootguard: boot partition intact (%zu files)\n", checked);
 	}
-	return untrusted ? 3 : 0;	/* a failed unit is reported */
+	return untrusted || outside ? 3 : 0;	/* a failed unit is reported */
 }
 
 static int is_sha(const char *s)
@@ -546,14 +546,28 @@ static int do_restore(void)
 		if (!tab)
 			continue;
 		*tab = '\0';
-		if (is_sha(tab + 1)) {
-			snprintf(sha, sizeof(sha), "%s", tab + 1);
-		} else if (manifest_sha(line, sha) != 0) {	/* staged by an older release */
-			ssl_err("BOOT restore FAILED: %s is not in the baseline", line);
+		/* What is written back is decided by the (trusted) baseline, not
+		 * by restore.list: the file must be under boot_dir and in the
+		 * baseline, and a hash staged with it must be the baseline's. A
+		 * line from an older release carries a blob path, not a hash. */
+		if (!sst_path_within(c.boot_dir, line) || manifest_sha(line, sha) != 0) {
+			ssl_crit("BOOT restore REFUSED: %s is not a baselined file under %s",
+				 line, c.boot_dir);
 			fail++;
 			continue;
 		}
-		sst_evidence("bootguard", line, "restore", sha, NULL);
+		if (is_sha(tab + 1) && strcmp(tab + 1, sha) != 0) {
+			ssl_crit("BOOT restore REFUSED: the hash staged for %s is not the "
+				 "baseline's", line);
+			fail++;
+			continue;
+		}
+		if (sst_evidence("bootguard", line, "restore", sha, NULL) != 0) {
+			ssl_crit("BOOT restore FAILED: %s: its current bytes could not be "
+				 "kept as evidence, so it is not overwritten", line);
+			fail++;
+			continue;
+		}
 		if (sst_restore_from_backups(c.backup_root, "boot", line, sha, used,
 					     sizeof(used), why, sizeof(why)) == 0 ||
 		    (locus_request_root(LOCUS_PURPOSE, root, sizeof(root)) == 0 &&

@@ -46,24 +46,31 @@
 #endif
 #define STATEDIR	BIOS_STATEDIR
 #define MANIFEST	STATEDIR "/fingerprint"
-#define DMI_DIR		"/sys/class/dmi/id"
-#define ACPI_DIR	"/sys/firmware/acpi/tables"
+/* Overridable for the tests only (tests/userspace/test-addons.sh). */
+#ifndef BIOS_DMI_DIR
+#define BIOS_DMI_DIR	"/sys/class/dmi/id"
+#endif
+#ifndef BIOS_ACPI_DIR
+#define BIOS_ACPI_DIR	"/sys/firmware/acpi/tables"
+#endif
+#define DMI_DIR		BIOS_DMI_DIR
+#define ACPI_DIR	BIOS_ACPI_DIR
 
-/* SHA-256 one file into out[65] via sha256sum (the firmware sources are tiny). */
+/* SHA-256 one file into out[65]. It is hashed in-process: this used to run
+ * `sha256sum '<path>'` through a shell, so a table name with a quote in it
+ * would have been a command (P2-2 part 3). */
 static int sha_file(const char *path, char out[65])
 {
-	char cmd[PATH_MAX + 64];
-	FILE *p;
-	int ok = 0;
+	return sst_sha256_file(path, out);
+}
 
-	snprintf(cmd, sizeof(cmd), "sha256sum '%s' 2>/dev/null", path);
-	p = popen(cmd, "re");
-	if (!p)
-		return -1;
-	if (fscanf(p, "%64s", out) == 1 && strlen(out) == 64)
-		ok = 1;
-	pclose(p);
-	return ok ? 0 : -1;
+/* A label goes in the fingerprint as one whitespace-free token. */
+static int label_ok(const char *s)
+{
+	for (; *s; s++)
+		if ((unsigned char)*s <= 0x20 || *s == 0x7f)
+			return 0;
+	return 1;
 }
 
 static void fp_one(FILE *mf, const char *path, const char *label, size_t *n)
@@ -108,6 +115,11 @@ static size_t build_fingerprint(FILE *mf)
 
 			if (de->d_name[0] == '.')
 				continue;
+			if (!label_ok(de->d_name)) {
+				ssl_notify(SSL_CRIT, "FIRMWARE table with an odd name: %s/%s "
+					   "(not fingerprinted)", ACPI_DIR, de->d_name);
+				continue;
+			}
 			if (snprintf(p, sizeof(p), "%s/%s", ACPI_DIR, de->d_name) >=
 			    (int)sizeof(p))
 				continue;
@@ -213,6 +225,28 @@ static int fingerprint_diff(void)
 		}
 		if (!matched) {
 			ssl_notify(SSL_CRIT, "FIRMWARE source vanished: %s", blabel);
+			mism++;
+		}
+	}
+	/* and the other way: a source the baseline does not have (an extra
+	 * ACPI table is how firmware-level code is often injected) */
+	rewind(now);
+	while (fgets(lb, sizeof(lb), now)) {
+		char nsha[65], nlabel[160], bl[256], bsha[65], blabel[160];
+		int known = 0;
+
+		if (sscanf(lb, "%64s %159s", nsha, nlabel) != 2)
+			continue;
+		rewind(base);
+		while (fgets(bl, sizeof(bl), base))
+			if (sscanf(bl, "%64s %159s", bsha, blabel) == 2 &&
+			    !strcmp(blabel, nlabel)) {
+				known = 1;
+				break;
+			}
+		if (!known) {
+			ssl_notify(SSL_CRIT, "FIRMWARE source appeared: %s (not in the "
+				   "baseline)", nlabel);
 			mism++;
 		}
 	}

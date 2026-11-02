@@ -114,6 +114,52 @@ pb scan > "$T/scan2.out" 2>&1
 check "a second scan finds nothing to repair" grep -q 'repaired 0' "$T/scan2.out"
 check "no command ran from a file name during scans" test ! -e "$T/cwd/pwned"
 
+echo "# adversarial (TODO P2-2 part 3)"
+check "the rewritten file's bytes were kept as evidence before the repair" \
+	sh -c "in_ns() { nsenter -t $NS -m -- \"\$@\"; }; [ \"\$(in_ns sh -c 'ls $STORE/evidence/*.z' | wc -l)\" -ge 1 ]"
+# a symlink planted where a protected file was: the repair replaces the
+# link, it never writes through it (it used to: open(O_TRUNC) followed it)
+printf 'victim\n' > "$T/victim"; chmod 0644 "$T/victim"
+rm -f "$D/a.conf"; ln -s "$T/victim" "$D/a.conf"
+pb scan > "$T/scan.out" 2>&1
+check "a symlink planted at a protected path is replaced by the real file" sh -c "
+	[ ! -L '$D/a.conf' ] && [ \"\$(cat '$D/a.conf')\" = alpha ]"
+check "... and the file it pointed at is untouched (contents and mode)" sh -c "
+	[ \"\$(cat '$T/victim')\" = victim ] && [ \"\$(stat -c %a '$T/victim')\" = 644 ]"
+# a snapshot blob swapped for other bytes is never written back
+for b in $(in_ns sh -c "ls $STORE/blobs/*.z"); do
+	in_ns cp "$b" "$b.keep"
+	in_ns python3 -c 'import struct,sys,zlib; d=b"attacker\n"; open(sys.argv[1],"wb").write(struct.pack("<Q",len(d))+zlib.compress(d))' "$b"
+done
+chmod 0644 "$D/a.conf"; printf 'evil2\n' > "$D/a.conf"
+pb scan > "$T/scan.out" 2>&1
+check "a swapped snapshot blob is refused: the file is not overwritten with it" sh -c "
+	[ \"\$(cat '$D/a.conf')\" = evil2 ] && grep -q 'FAILED to repair' '$T/scan.out'"
+for b in $(in_ns sh -c "ls $STORE/blobs/*.z"); do in_ns mv "$b.keep" "$b"; done
+pb scan > /dev/null 2>&1
+eq "... and the real snapshot repairs it" "$(cat "$D/a.conf")" alpha
+# a manifest line naming a path with a .. component is ignored
+in_ns cp "$STORE/manifest" "$T/manifest.keep"
+H="$(sha256sum "$D/a.conf" | cut -d' ' -f1)"
+in_ns sh -c "echo '$H 644 0 0 $D/../victim2' >> $STORE/manifest"
+printf 'v2\n' > "$T/victim2"
+pb scan > "$T/scan.out" 2>&1
+check "an edited manifest entry with a .. component is never acted on" sh -c "
+	[ \"\$(cat '$T/victim2')\" = v2 ] && grep -q 'repaired 0' '$T/scan.out'"
+in_ns cp "$T/manifest.keep" "$STORE/manifest"
+# no room to keep the evidence: the tampered file is left, not overwritten
+in_ns mkdir -p "$STORE/evidence"
+in_ns mount -t tmpfs -o size=16k tmpfs "$STORE/evidence"
+chmod 0644 "$D/a.conf"; head -c 200000 /dev/urandom > "$D/a.conf"; BIGH="$(sha256sum "$D/a.conf")"
+pb scan > "$T/scan.out" 2>&1
+check "with no room for the evidence copy, the tampered file is not overwritten" sh -c "
+	[ \"\$(sha256sum '$D/a.conf')\" = '$BIGH' ] && grep -q 'NOT repaired' '$T/scan.out'"
+in_ns umount "$STORE/evidence"
+pb scan > /dev/null 2>&1
+eq "... and is repaired once there is room" "$(cat "$D/a.conf")" alpha
+# disable with a symlink in place: its target's permissions are not changed
+rm -f "$D/sub/b.conf"; ln -s "$T/victim" "$D/sub/b.conf"; chmod 0600 "$T/victim"
+
 pb status > "$T/status.out" 2>&1
 check "status says ENABLED with 3 snapshot entries" \
 	sh -c "grep -q ENABLED '$T/status.out' && grep -q 'snapshot entries: 3' '$T/status.out'"
@@ -122,10 +168,28 @@ refute_with "snapshot while enabled is refused" 'disable first' pb snapshot
 pb off > "$T/off.out" 2>&1; RC=$?
 eq "off succeeds" "$RC" 0
 eq "off restores the original mode (0640)" "$(stat -c %a "$D/a.conf")" 640
-eq "off restores the original mode (0600)" "$(stat -c %a "$D/sub/b.conf")" 600
+check "off does not change permissions through a planted symlink" sh -c "
+	[ \"\$(stat -c %a '$T/victim')\" = 600 ] && [ -L '$D/sub/b.conf' ]"
+rm -f "$D/sub/b.conf"; printf 'beta\n' > "$D/sub/b.conf"; chmod 0600 "$D/sub/b.conf"
 pb scan > "$T/scan3.out" 2>&1
 printf 'changed\n' > "$D/a.conf"
 pb scan > "$T/scan3.out" 2>&1
 eq "while off, scan repairs nothing" "$(cat "$D/a.conf")" changed
+
+echo "# check-config (TODO P2-2)"
+pb check-config > "$T/cc.out" 2>&1; rc=$?
+check "check-config passes on the config add/remove wrote" sh -c "[ $rc = 0 ] && grep -q 'configuration OK' '$T/cc.out'"
+in_ns sh -c "printf 'relative/path\n$D\n/a/../b\n' >> /etc/secure_sudo/pheonixbox.conf"
+pb check-config > "$T/cc.out" 2>&1; rc=$?
+check "check-config: a relative path, a duplicate and a .. component (3 problems)" sh -c "
+	[ $rc = 1 ] && grep -q 'not an absolute path' '$T/cc.out' && grep -q 'listed twice' '$T/cc.out' &&
+	grep -q '\./\.\. component' '$T/cc.out' && grep -q '^3 configuration problem' '$T/cc.out'"
+pb on > "$T/on.out" 2>&1; rc=$?
+check "on refuses while the config has an error (78)" sh -c "[ $rc = 78 ] && grep -q 'on refused' '$T/on.out'"
+pb snapshot > "$T/on.out" 2>&1; rc=$?
+eq "... and so does snapshot" "$rc" 78
+in_ns sh -c "grep -vx -e relative/path -e /a/../b /etc/secure_sudo/pheonixbox.conf | awk '!s[\$0]++' > /etc/secure_sudo/pb.new && mv /etc/secure_sudo/pb.new /etc/secure_sudo/pheonixbox.conf && chmod 0664 /etc/secure_sudo/pheonixbox.conf"
+pb check-config > "$T/cc.out" 2>&1; rc=$?
+check "check-config: a group-writable config is an error" sh -c "[ $rc = 1 ] && grep -q 'writable by group or others' '$T/cc.out'"
 
 tap_done

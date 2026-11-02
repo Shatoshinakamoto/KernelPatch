@@ -80,6 +80,7 @@
 #define MANIFEST  STORE "/manifest"
 #define ENABLED   STORE "/enabled"
 #define LASTSCAN  STORE "/lastscan"
+#define EVIDENCE  STORE "/evidence"
 #define CONF      "/etc/secure_sudo/pheonixbox.conf"
 
 /* Guard against snapshotting something enormous into RAM. */
@@ -120,30 +121,39 @@ static int sha256_str(const char *s, char out[65])
 	return sha256_mem(s, strlen(s), out);
 }
 
-/* Read a whole regular file into a malloc'd buffer (caller frees). */
+/* Read a whole regular file into a malloc'd buffer (caller frees). The file
+ * is opened O_NOFOLLOW: a protected file replaced by a symlink is never read
+ * through it (it could point at anything). A file that changes size while it
+ * is read is refused rather than stored half-old, half-new. */
 static unsigned char *read_file(const char *path, size_t *out_len)
 {
 	struct stat st;
 	unsigned char *buf;
-	FILE *f;
-	size_t got;
+	size_t got = 0;
+	ssize_t r;
+	int fd;
 
-	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+	fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0)
 		return NULL;
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+		close(fd);
+		return NULL;
+	}
 	if ((unsigned long)st.st_size > MAX_FILE) {
 		fprintf(stderr, "secure-sudo pheonixbox: %s too large to snapshot\n", path);
+		close(fd);
 		return NULL;
 	}
-	buf = malloc(st.st_size ? (size_t)st.st_size : 1);
-	if (!buf)
-		return NULL;
-	f = fopen(path, "rbe");
-	if (!f) {
-		free(buf);
+	buf = malloc((size_t)st.st_size + 1);
+	if (!buf) {
+		close(fd);
 		return NULL;
 	}
-	got = fread(buf, 1, (size_t)st.st_size, f);
-	fclose(f);
+	while (got <= (size_t)st.st_size &&
+	       (r = pread(fd, buf + got, (size_t)st.st_size + 1 - got, (off_t)got)) > 0)
+		got += (size_t)r;
+	close(fd);
 	if (got != (size_t)st.st_size) {
 		free(buf);
 		return NULL;
@@ -177,70 +187,83 @@ static void blob_path(const char *abspath, char *out, size_t n, const char *dir,
 	snprintf(out, n, "%s/%s%s", dir, psha, ext);
 }
 
-/* Compress @abspath's current contents into blobs/<psha>.z. */
-static int blob_store(const char *abspath)
+/* Compress @abspath's current contents into @bp. The SHA-256 of exactly the
+ * bytes stored goes to @sha_out, so a manifest built from it always matches
+ * its own snapshot (a file rewritten mid-snapshot cannot split them). Returns
+ * 0, -1 when the file cannot be read (a symlink, too large, changing), or -2
+ * when the copy cannot be written in full (disk full): no partial blob stays. */
+static int blob_store_to(const char *abspath, const char *bp, char sha_out[65])
 {
 	size_t len = 0;
 	unsigned char *buf = read_file(abspath, &len);
 	uLongf clen;
 	unsigned char *cbuf;
-	char bp[PATH_MAX];
 	FILE *f;
 	uint64_t hdr = len;
-	int rc = -1;
+	int rc = -2, fd;
 
 	if (!buf)
 		return -1;
+	if (sha_out && sha256_mem(buf, len, sha_out) != 0) {
+		free(buf);
+		return -1;
+	}
 	clen = compressBound(len);
 	cbuf = malloc(clen ? clen : 1);
 	if (!cbuf) {
 		free(buf);
-		return -1;
+		return -2;
 	}
 	if (compress2(cbuf, &clen, buf, len, Z_BEST_COMPRESSION) != Z_OK)
 		goto out;
-	blob_path(abspath, bp, sizeof(bp), BLOBS, ".z");
-	f = fopen(bp, "wbe");
-	if (!f)
+	fd = open(bp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+	if (fd < 0)
 		goto out;
-	/* 8-byte little-endian original length, then the compressed bytes. */
-	if (fwrite(&hdr, 1, 8, f) == 8 && fwrite(cbuf, 1, clen, f) == clen)
+	f = fdopen(fd, "wb");
+	if (!f) {
+		close(fd);
+		unlink(bp);
+		goto out;
+	}
+	/* 8-byte little-endian original length, then the compressed bytes;
+	 * a full disk can show up at any of these steps */
+	if (fwrite(&hdr, 1, 8, f) == 8 && fwrite(cbuf, 1, clen, f) == clen &&
+	    fflush(f) == 0 && fsync(fd) == 0)
 		rc = 0;
-	fclose(f);
-	if (rc == 0)
-		chmod(bp, 0600);
+	if (fclose(f) != 0)
+		rc = -2;
+	if (rc != 0)
+		unlink(bp);
 out:
 	free(cbuf);
 	free(buf);
 	return rc;
 }
 
-/* Decompress blobs/<psha>.z and overwrite @abspath with the original bytes.
- * @mode is the original mode to restore afterwards. */
-static int blob_restore(const char *abspath, mode_t mode)
+static int blob_store(const char *abspath, char sha_out[65])
 {
 	char bp[PATH_MAX];
+
+	blob_path(abspath, bp, sizeof(bp), BLOBS, ".z");
+	return blob_store_to(abspath, bp, sha_out);
+}
+
+/* Load and decompress a blob into memory (caller frees). */
+static unsigned char *blob_load(const char *bp, size_t *out_len)
+{
 	FILE *f;
 	uint64_t orig = 0;
 	long csz;
 	unsigned char *cbuf, *obuf;
 	uLongf olen;
-	int fd, rc = -1;
 
-	blob_path(abspath, bp, sizeof(bp), BLOBS, ".z");
 	f = fopen(bp, "rbe");
 	if (!f)
-		return -1;
-	if (fread(&orig, 1, 8, f) != 8 || orig > MAX_FILE) {
+		return NULL;
+	if (fread(&orig, 1, 8, f) != 8 || orig > MAX_FILE || fseek(f, 0, SEEK_END) != 0 ||
+	    (csz = ftell(f) - 8) <= 0 || fseek(f, 8, SEEK_SET) != 0) {
 		fclose(f);
-		return -1;
-	}
-	fseek(f, 0, SEEK_END);
-	csz = ftell(f) - 8;
-	fseek(f, 8, SEEK_SET);
-	if (csz <= 0) {
-		fclose(f);
-		return -1;
+		return NULL;
 	}
 	cbuf = malloc((size_t)csz);
 	obuf = malloc(orig ? (size_t)orig : 1);
@@ -248,29 +271,137 @@ static int blob_restore(const char *abspath, mode_t mode)
 		fclose(f);
 		free(cbuf);
 		free(obuf);
-		return -1;
+		return NULL;
 	}
 	fclose(f);
 	olen = orig;
-	if (uncompress(obuf, &olen, cbuf, (uLong)csz) != Z_OK || olen != orig)
-		goto out;
-
-	/* Make the file writable for the rewrite (it is normally read-only while
-	 * protected), overwrite it in place, fsync, then restore the mode. */
-	chmod(abspath, 0600);
-	fd = open(abspath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	if (fd < 0)
-		goto out;
-	if (write(fd, obuf, (size_t)orig) == (ssize_t)orig) {
-		fsync(fd);
-		rc = 0;
+	if (uncompress(obuf, &olen, cbuf, (uLong)csz) != Z_OK || olen != orig) {
+		free(cbuf);
+		free(obuf);
+		return NULL;
 	}
-	close(fd);
-	chmod(abspath, mode & ~(mode_t)(S_IWUSR | S_IWGRP | S_IWOTH)); /* re-lock RO */
-out:
 	free(cbuf);
+	*out_len = (size_t)orig;
+	return obuf;
+}
+
+/* Keep what is at @abspath now, before a repair overwrites it: a compressed
+ * copy under evidence/ and a CRITICAL syslog line with its hash, owner and
+ * mode (a symlink: where it pointed). 0 if kept, or nothing was there. */
+static int keep_evidence(const char *abspath, const char *expect)
+{
+	char bp[PATH_MAX], psha[65], sha[65] = "", target[PATH_MAX] = "";
+	struct stat st;
+	ssize_t tl;
+
+	if (lstat(abspath, &st) != 0) {
+		syslog(LOG_CRIT, "EVIDENCE before repair: %s missing (expected %.64s)",
+		       abspath, expect);
+		return 0;
+	}
+	if (S_ISLNK(st.st_mode)) {
+		tl = readlink(abspath, target, sizeof(target) - 1);
+		target[tl > 0 ? tl : 0] = '\0';
+		syslog(LOG_CRIT, "EVIDENCE before repair: %s was replaced by a symlink "
+		       "to %s (expected %.64s)", abspath, target, expect);
+		return 0;
+	}
+	if (!S_ISREG(st.st_mode)) {
+		syslog(LOG_CRIT, "EVIDENCE before repair: %s is no longer a regular file "
+		       "(mode %o)", abspath, (unsigned)st.st_mode);
+		return 0;
+	}
+	if (sha256_str(abspath, psha) != 0)
+		return -1;
+	mkdir(EVIDENCE, 0700);
+	snprintf(bp, sizeof(bp), "%s/%s.%ld.z", EVIDENCE, psha, (long)time(NULL));
+	if (blob_store_to(abspath, bp, sha) != 0) {
+		syslog(LOG_CRIT, "EVIDENCE could not be kept for %s (disk full?)", abspath);
+		return -1;
+	}
+	syslog(LOG_CRIT, "EVIDENCE before repair: %s sha256=%s expected=%.64s size=%lld "
+	       "mode=%04o uid=%u gid=%u mtime=%lld copy=%s", abspath, sha, expect,
+	       (long long)st.st_size, (unsigned)(st.st_mode & 07777), (unsigned)st.st_uid,
+	       (unsigned)st.st_gid, (long long)st.st_mtime, bp);
+	return 0;
+}
+
+/* Put the snapshot of @abspath back: only if its bytes hash to @csha (the
+ * manifest's), written to a new file next to it with the captured owner and
+ * a read-only mode, then renamed over whatever is there. A symlink planted
+ * at @abspath is replaced, never written through. */
+static int blob_restore(const char *abspath, const char *csha, mode_t mode,
+			uid_t uid, gid_t gid)
+{
+	char bp[PATH_MAX], tmp[PATH_MAX], got[65];
+	unsigned char *obuf;
+	size_t len = 0;
+	int fd, rc = -1;
+
+	blob_path(abspath, bp, sizeof(bp), BLOBS, ".z");
+	obuf = blob_load(bp, &len);
+	if (!obuf)
+		return -1;
+	if (sha256_mem(obuf, len, got) != 0 || strcmp(got, csha) != 0) {
+		syslog(LOG_CRIT, "snapshot of %s does not match the manifest: not used",
+		       abspath);
+		free(obuf);
+		return -1;
+	}
+	if (snprintf(tmp, sizeof(tmp), "%s.pbx-restore", abspath) >= (int)sizeof(tmp)) {
+		free(obuf);
+		return -1;
+	}
+	unlink(tmp);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		free(obuf);
+		return -1;
+	}
+	if (write(fd, obuf, len) == (ssize_t)len && fchown(fd, uid, gid) == 0 &&
+	    fchmod(fd, mode & ~(mode_t)(S_IWUSR | S_IWGRP | S_IWOTH)) == 0 && /* RO */
+	    fsync(fd) == 0)
+		rc = 0;
+	close(fd);
 	free(obuf);
+	if (rc == 0 && rename(tmp, abspath) != 0)
+		rc = -1;
+	if (rc != 0)
+		unlink(tmp);
 	return rc;
+}
+
+/* A manifest path PheonixBox will act on: absolute, no whitespace or
+ * control characters, no "." / ".." / empty components. */
+static int manifest_path_ok(const char *p)
+{
+	const char *q;
+
+	if (p[0] != '/' || !p[1])
+		return 0;
+	for (q = p; *q; q++) {
+		if (*q == ' ' || (unsigned char)*q < 0x20 || *q == 0x7f)
+			return 0;
+		if (q[0] == '/' && (q[1] == '/' || !q[1] ||
+		    (q[1] == '.' && (q[2] == '/' || !q[2] ||
+				     (q[2] == '.' && (q[3] == '/' || !q[3]))))))
+			return 0;
+	}
+	return 1;
+}
+
+/* Open @path for a permission change without following a symlink; -1 if it
+ * is not a regular file any more. */
+static int open_reg(const char *path)
+{
+	struct stat st;
+	int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+
+	if (fd >= 0 && (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))) {
+		close(fd);
+		fd = -1;
+	}
+	return fd;
 }
 
 /* ------------------------------ ACLs ------------------------------------- */
@@ -421,7 +552,7 @@ static int for_each_protected(file_cb cb, void *ctx)
 
 struct snap_ctx {
 	FILE *mf;
-	size_t files;
+	size_t files, failed;
 };
 
 static void snap_one(const char *abspath, void *vctx)
@@ -430,11 +561,17 @@ static void snap_one(const char *abspath, void *vctx)
 	struct stat st;
 	char csha[65];
 
-	if (stat(abspath, &st) != 0 || !S_ISREG(st.st_mode))
+	if (lstat(abspath, &st) != 0 || !S_ISREG(st.st_mode))
 		return;
-	if (sha256_file(abspath, csha) != 0)
+	switch (blob_store(abspath, csha)) {
+	case 0:
+		break;
+	case -2:
+		fprintf(stderr, "secure-sudo pheonixbox: could not store a snapshot of %s "
+			"(disk full?)\n", abspath);
+		c->failed++;
 		return;
-	if (blob_store(abspath) != 0) {
+	default:
 		fprintf(stderr, "secure-sudo pheonixbox: could not snapshot %s\n", abspath);
 		return;
 	}
@@ -471,9 +608,20 @@ static int do_snapshot(void)
 		return -1;
 	}
 	for_each_protected(snap_one, &ctx);
-	fflush(ctx.mf);
-	fsync(fileno(ctx.mf));
-	fclose(ctx.mf);
+	if (fflush(ctx.mf) != 0 || fsync(fileno(ctx.mf)) != 0 || ferror(ctx.mf))
+		ctx.failed++;
+	if (fclose(ctx.mf) != 0)
+		ctx.failed++;
+	if (ctx.failed) {
+		/* a snapshot that cannot hold what it lists would make those
+		 * repairs impossible: the previous one is kept */
+		unlink(tmp);
+		syslog(LOG_CRIT, "snapshot REFUSED: %zu file(s) could not be stored "
+		       "(disk full?); the previous snapshot is kept", ctx.failed);
+		fprintf(stderr, "secure-sudo pheonixbox: snapshot refused: %zu file(s) "
+			"could not be stored; free space under " STORE "\n", ctx.failed);
+		return -1;
+	}
 	if (rename(tmp, MANIFEST) != 0) {
 		unlink(tmp);
 		return -1;
@@ -528,10 +676,16 @@ static int for_each_manifest(man_cb cb, void *ctx)
 			line[--len] = '\0';
 		if (len == 0 || line[0] == '#')
 			continue;
-		if (manifest_parse(line, &csha, &mode, &uid, &gid, &path) == 0) {
-			cb(csha, mode, uid, gid, path, ctx);
-			n++;
+		if (manifest_parse(line, &csha, &mode, &uid, &gid, &path) != 0)
+			continue;
+		if (strlen(csha) != 64 || !manifest_path_ok(path)) {
+			/* not written by a snapshot: never acted on */
+			syslog(LOG_CRIT, "manifest entry IGNORED (not a safe absolute path "
+			       "or hash): %.200s", path);
+			continue;
 		}
+		cb(csha, mode, uid, gid, path, ctx);
+		n++;
 	}
 	free(line);
 	fclose(f);
@@ -544,8 +698,14 @@ static int for_each_manifest(man_cb cb, void *ctx)
 static void lock_ro(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 		    const char *path, void *ctx)
 {
+	int fd = open_reg(path);
+
 	(void)csha; (void)uid; (void)gid; (void)ctx;
-	chmod(path, mode & ~(mode_t)(S_IWUSR | S_IWGRP | S_IWOTH));
+	if (fd < 0)
+		return;		/* not a regular file now: the scan repairs it */
+	if (fchmod(fd, mode & ~(mode_t)(S_IWUSR | S_IWGRP | S_IWOTH)) != 0)
+		syslog(LOG_ERR, "could not lock %s read-only", path);
+	close(fd);
 }
 
 static int is_enabled(void)
@@ -581,13 +741,22 @@ static int cmd_enable(void)
 static void restore_perms(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 			  const char *path, void *ctx)
 {
-	int rc;
+	int fd = open_reg(path), rc;
 
 	(void)csha; (void)ctx;
+	if (fd < 0) {
+		/* a symlink here could point at any file: its permissions are
+		 * never changed through it */
+		syslog(LOG_CRIT, "permissions NOT restored: %s is not a regular file "
+		       "any more", path);
+		return;
+	}
 	/* Put ownership and mode back exactly as captured, then ACLs. */
-	rc = chown(path, uid, gid);
+	rc = fchown(fd, uid, gid);
 	(void)rc;			/* best-effort; mode/ACL restore follows */
-	chmod(path, mode);
+	if (fchmod(fd, mode) != 0)
+		syslog(LOG_ERR, "could not restore the mode of %s", path);
+	close(fd);
 	acl_restore(path);
 }
 
@@ -621,22 +790,32 @@ static void scan_one(const char *csha, mode_t mode, uid_t uid, gid_t gid,
 	struct stat st;
 	int tampered = 0;
 
-	(void)uid; (void)gid;
 	c->checked++;
 
-	if (stat(path, &st) != 0) {
+	if (lstat(path, &st) != 0) {
 		tampered = 1;			/* deleted/replaced */
 		c->missing++;
+	} else if (!S_ISREG(st.st_mode)) {
+		tampered = 1;			/* a symlink (to anything) or other */
 	} else if (sha256_file(path, now) != 0 || strcmp(now, csha) != 0) {
 		tampered = 1;			/* contents changed */
 	} else if ((st.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH))) {
 		/* contents fine but someone re-added a write bit: re-lock. */
-		chmod(path, mode & ~(mode_t)(S_IWUSR | S_IWGRP | S_IWOTH));
+		lock_ro(csha, mode, uid, gid, path, NULL);
 	}
 
 	if (!tampered)
 		return;
-	if (blob_restore(path, mode) == 0) {
+	if (keep_evidence(path, csha) != 0) {
+		/* what is there would be lost: it is left for the operator */
+		syslog(LOG_CRIT, "NOT repaired: %s (its current bytes could not be kept)",
+		       path);
+		if (!c->quiet)
+			fprintf(stderr, "secure-sudo pheonixbox: NOT repaired %s: the "
+				"evidence copy could not be kept\n", path);
+		return;
+	}
+	if (blob_restore(path, csha, mode, uid, gid) == 0) {
 		c->repaired++;
 		/* Log every repair (forwardable off-box via syslog/rsyslog) so a
 		 * tamper event leaves a durable record even if quiet. */
@@ -773,6 +952,127 @@ static int conf_edit(const char *path, int add)
 	return 0;
 }
 
+/*
+ * check-config (TODO P2-2): pheonixbox.conf is checked strictly. It must be
+ * root-owned and not group/world writable (whoever can edit it chooses what
+ * is snapshotted and repaired); every line is blank, a '#' comment, or one
+ * absolute path with no whitespace, control characters or "."/".."
+ * components, listed once. A path that does not exist yet is a note, not an
+ * error. Returns the number of errors; each problem goes to @r.
+ */
+static int conf_check(FILE *r)
+{
+	FILE *f = fopen(CONF, "re");
+	char *line = NULL, **seen = NULL;
+	size_t cap = 0, nseen = 0, i;
+	ssize_t len;
+	struct stat st;
+	int errs = 0, ln = 0;
+
+	if (!f) {
+		if (errno != ENOENT) {
+			fprintf(r, "%s: cannot read: %s\n", CONF, strerror(errno));
+			return 1;
+		}
+		return 0;		/* nothing protected yet */
+	}
+	if (fstat(fileno(f), &st) == 0) {
+		if (st.st_uid != 0) {
+			fprintf(r, "%s: not owned by root\n", CONF);
+			errs++;
+		}
+		if (st.st_mode & (S_IWGRP | S_IWOTH)) {
+			fprintf(r, "%s: writable by group or others\n", CONF);
+			errs++;
+		}
+	}
+	while ((len = getline(&line, &cap, f)) >= 0) {
+		char *p = line, **g;
+		struct stat ps;
+
+		ln++;
+		while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+			line[--len] = '\0';
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p || *p == '#')
+			continue;
+		if ((size_t)len >= PATH_MAX) {
+			fprintf(r, "%s:%d: line too long\n", CONF, ln);
+			errs++;
+			continue;
+		}
+		if (*p != '/') {
+			fprintf(r, "%s:%d: not an absolute path: %.80s\n", CONF, ln, p);
+			errs++;
+			continue;
+		}
+		{
+			size_t pl = strlen(p);
+
+			while (pl > 1 && p[pl - 1] == '/')
+				p[--pl] = '\0';	/* "/etc/x/" is "/etc/x" */
+		}
+		if (!manifest_path_ok(p)) {
+			fprintf(r, "%s:%d: path has whitespace, a control character or a "
+				"./.. component: %.80s\n", CONF, ln, p);
+			errs++;
+			continue;
+		}
+		for (i = 0; i < nseen && strcmp(seen[i], p); i++)
+			;
+		if (i < nseen) {
+			fprintf(r, "%s:%d: %s is listed twice\n", CONF, ln, p);
+			errs++;
+			continue;
+		}
+		g = realloc(seen, (nseen + 1) * sizeof(*seen));
+		if (g && (g[nseen] = strdup(p))) {
+			seen = g;
+			nseen++;
+		} else if (g) {
+			seen = g;
+		}
+		if (lstat(p, &ps) != 0)
+			fprintf(r, "%s:%d: note: %s does not exist (yet); it protects "
+				"nothing until it does\n", CONF, ln, p);
+		else if (S_ISLNK(ps.st_mode))
+			fprintf(r, "%s:%d: note: %s is a symlink; symlinks are not "
+				"followed, so it protects nothing\n", CONF, ln, p);
+	}
+	for (i = 0; i < nseen; i++)
+		free(seen[i]);
+	free(seen);
+	free(line);
+	fclose(f);
+	return errs;
+}
+
+static int cmd_check_config(void)
+{
+	int e = conf_check(stdout);
+
+	if (e)
+		printf("%d configuration problem(s); `on` and `snapshot` refuse to run "
+		       "until they are fixed (add/remove still work)\n", e);
+	else
+		printf("configuration OK\n");
+	return e ? 1 : 0;
+}
+
+/* `on` and `snapshot` act on the config: not while it has an error. */
+static int refuse_bad_conf(const char *what)
+{
+	int e = conf_check(stderr);
+
+	if (!e)
+		return 0;
+	fprintf(stderr, "secure-sudo pheonixbox: %s refused: %d problem(s) in %s "
+		"(see above; fix them or `remove` the bad lines)\n", what, e, CONF);
+	syslog(LOG_ERR, "%s refused: %d configuration problem(s)", what, e);
+	return 78;
+}
+
 static int cmd_list(void)
 {
 	FILE *f = fopen(CONF, "re");
@@ -808,7 +1108,8 @@ static void usage(void)
 "  status               show whether protection is on and how many files are covered\n"
 "  add <path>           add a file or directory (recursive) to the protected set\n"
 "  remove <path>        remove a path from the protected set\n"
-"  list                 list the protected paths\n");
+"  list                 list the protected paths\n"
+"  check-config         check " CONF " strictly; 1 if any problem\n");
 }
 
 int main(int argc, char **argv)
@@ -827,8 +1128,13 @@ int main(int argc, char **argv)
 	openlog("secure-sudo-pheonixbox", LOG_PID, LOG_AUTHPRIV);
 	cmd = argv[1];
 
-	if (!strcmp(cmd, "on") || !strcmp(cmd, "enable"))
-		return cmd_enable();
+	if (!strcmp(cmd, "check-config"))
+		return cmd_check_config();
+	if (!strcmp(cmd, "on") || !strcmp(cmd, "enable")) {
+		int rc = refuse_bad_conf("on");
+
+		return rc ? rc : cmd_enable();
+	}
 	if (!strcmp(cmd, "off") || !strcmp(cmd, "disable"))
 		return cmd_disable();
 	if (!strcmp(cmd, "snapshot")) {
@@ -836,6 +1142,12 @@ int main(int argc, char **argv)
 			fprintf(stderr, "secure-sudo pheonixbox: disable first - a snapshot "
 				"while enabled would capture the locked state\n");
 			return 1;
+		}
+		{
+			int rc = refuse_bad_conf("snapshot");
+
+			if (rc)
+				return rc;
 		}
 		return do_snapshot() == 0 ? 0 : 1;
 	}

@@ -93,14 +93,35 @@ gives a slash-free, collision-free name per file.
 
 On each scan, for every manifest entry:
 
-* **missing** (stat fails) → restore from the snapshot blob;
+* **missing** (lstat fails) → restore from the snapshot blob;
+* **no longer a regular file** (a symlink, even to identical bytes) → restore;
 * **content changed** (SHA-256 differs) → restore from the snapshot blob;
 * **content fine but a write bit re-appeared** → re-strip write bits (re-lock);
 * **unchanged** → nothing.
 
-A restore decompresses the blob, briefly makes the file writable, overwrites it
-in place, `fsync`s, then re-applies the read-only mode. A file is never left
-writable after a repair.
+Before a restore, what is there now is kept as evidence: a compressed copy in
+`/var/lib/secure_sudo/pheonixbox/evidence/` and a CRITICAL syslog line with
+its SHA-256, size, owner, mode and mtime (for a symlink: where it pointed). If
+that copy cannot be kept (a full disk), the file is **not** repaired and the
+log says so.
+
+A restore decompresses the blob and uses it only if its SHA-256 is the one in
+the manifest (a swapped blob is refused). It writes a new file next to the
+target with the captured owner and the read-only mode, `fsync`s it, and
+renames it over the target, so a symlink planted at the path is replaced and
+never written through. A file is never left writable after a repair.
+
+The snapshot records, for each file, the hash of exactly the bytes it stored,
+and refuses to replace the previous snapshot if any file could not be stored
+in full. Manifest lines whose path is not a plain absolute path (whitespace,
+control characters, `.` or `..` components) are ignored and logged.
+
+`secure-sudo pheonixbox check-config` checks `/etc/secure_sudo/pheonixbox.conf`
+strictly: root-owned and not group/world writable; each line blank, a `#`
+comment, or one absolute path without whitespace, control characters or
+`.`/`..`, listed once (a path that does not exist yet is a note). `on` and
+`snapshot` refuse to run (exit 78) while it has an error; `add`, `remove`,
+`list`, `status` and `scan` still work.
 
 ## 6. Commands
 
@@ -116,6 +137,7 @@ sudo secure-sudo pheonixbox scan                       # scan+repair now (daemon
 sudo secure-sudo pheonixbox off                        # restore permissions, stop
 sudo secure-sudo pheonixbox snapshot                   # (while off) re-baseline after a real update
 sudo secure-sudo pheonixbox remove /usr/local/bin      # stop protecting a path
+sudo secure-sudo pheonixbox check-config               # check the path list strictly
 ```
 
 `secure-sudo pheonixbox …` simply hands off to the `secure-sudo-pheonixbox`

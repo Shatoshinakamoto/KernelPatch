@@ -169,7 +169,8 @@ def main():
             continue
         s = read(src)
         if "check-config" in done:
-            check("check-config" in s and ("ssc_refuse" in s or "refusing to start" in s),
+            check("check-config" in s and ("ssc_refuse" in s or "refusing to start" in s
+                                           or "refuse_bad_conf" in s),
                   "%s: has check-config and refuses to act on a bad config" % name)
         for c in a.get("configs", []):
             check(os.path.isfile(os.path.join(CONFS, c)), "%s: config template %s exists" % (name, c))

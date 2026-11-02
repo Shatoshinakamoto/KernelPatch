@@ -56,9 +56,18 @@ int sst_sha256_file(const char *path, char out[65])
 	size_t r;
 	int ok = 0;
 
-	f = fopen(path, "rbe");
-	if (!f)
+	int fd;
+
+	/* O_NOFOLLOW: a module or boot file replaced by a symlink is not
+	 * hashed through to whatever it points at (it reads as tampered) */
+	fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0)
 		return -1;
+	f = fdopen(fd, "rb");
+	if (!f) {
+		close(fd);
+		return -1;
+	}
 	c = EVP_MD_CTX_new();
 	if (c && EVP_DigestInit_ex(c, EVP_sha256(), NULL)) {
 		ok = 1;
@@ -249,9 +258,15 @@ int sst_restore_verified(const char *blob, const char *dst, const char *expect_s
 		return -1;
 	}
 	if (lstat(dst, &st) == 0 && S_ISREG(st.st_mode)) {
-		uid = st.st_uid;
-		gid = st.st_gid;
-		mode = st.st_mode & 07777;
+		/* What is there now may be the tamperer's work: its owner and
+		 * mode are kept only while they cannot hand the restored file to
+		 * someone else (root-owned, no setuid/setgid, not group/world
+		 * writable). Anything else comes back root-owned, mode cleaned. */
+		if (st.st_uid == 0) {
+			uid = 0;
+			gid = st.st_gid;
+		}
+		mode = st.st_mode & 0755;
 	}
 	if (snprintf(tmp, sizeof(tmp), "%s.ss-restore", dst) >= (int)sizeof(tmp)) {
 		snprintf(why, n, "path too long");
@@ -360,8 +375,9 @@ int sst_evidence(const char *feature, const char *path, const char *action,
 	struct stat st;
 	struct tm tm;
 	time_t now = time(NULL);
-	int have, fd, n;
-	char line[8 * PATH_MAX];
+	int have, fd, n, copy_failed = 0;
+	char line[8 * PATH_MAX], target[PATH_MAX] = "", jt[3 * PATH_MAX];
+	ssize_t tl;
 
 	snprintf(root, sizeof(root), "%s/%s", SSADDON_EVIDENCE_ROOT, feature);
 	if (mkdirs(root) != 0) {
@@ -378,10 +394,16 @@ int sst_evidence(const char *feature, const char *path, const char *action,
 		} else if (store_bucket(root, 1, bucket, sizeof(bucket)) != 0 ||
 			   store_put_compressed(path, bucket, "evidence", stored,
 						sizeof(stored)) != 0) {
-			ssl_err("EVIDENCE: could not keep a copy of %s", path);
+			ssl_err("EVIDENCE: could not keep a copy of %s (disk full?)", path);
 			stored[0] = '\0';
+			copy_failed = 1;
 		}
+	} else if (have && S_ISLNK(st.st_mode)) {
+		/* the link itself is the evidence: where it points, never what */
+		tl = readlink(path, target, sizeof(target) - 1);
+		target[tl > 0 ? tl : 0] = '\0';
 	}
+	jstr(target, jt, sizeof(jt));
 	gmtime_r(&now, &tm);
 	strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
 	jstr(path, jp, sizeof(jp));
@@ -396,13 +418,16 @@ int sst_evidence(const char *feature, const char *path, const char *action,
 			"{\"time\":\"%s\",\"feature\":\"%s\",\"action\":\"%s\",\"path\":\"%s\","
 			"\"state\":\"%s\",\"sha256\":\"%s\",\"expected_sha256\":\"%s\","
 			"\"size\":%lld,\"mode\":\"%04o\",\"uid\":%u,\"gid\":%u,"
-			"\"mtime\":%lld,\"ctime\":%lld,\"inode\":%llu,\"sample\":\"%s\"}\n",
+			"\"mtime\":%lld,\"ctime\":%lld,\"inode\":%llu,\"sample\":\"%s\""
+			"%s%s%s}\n",
 			ts, feature, action, jp,
 			S_ISREG(st.st_mode) ? "file" : S_ISLNK(st.st_mode) ? "symlink" : "other",
 			sha, expect_sha ? expect_sha : "", (long long)st.st_size,
 			(unsigned)(st.st_mode & 07777), (unsigned)st.st_uid, (unsigned)st.st_gid,
 			(long long)st.st_mtime, (long long)st.st_ctime,
-			(unsigned long long)st.st_ino, js);
+			(unsigned long long)st.st_ino, js,
+			*target ? ",\"link_target\":\"" : "", *target ? jt : "",
+			*target ? "\"" : "");
 	if (n < 0 || n >= (int)sizeof(line)) {
 		ssl_err("EVIDENCE: record too long for %s", path);
 		return -1;
@@ -420,5 +445,102 @@ int sst_evidence(const char *feature, const char *path, const char *action,
 	ssl_crit("EVIDENCE %s before %s: %s sha256=%s expected=%s%s%s", feature, action,
 		 path, have ? (*sha ? sha : "unreadable") : "missing",
 		 expect_sha ? expect_sha : "-", *stored ? " copy=" : "", stored);
+	/* a record without the bytes is not enough to act on: the caller
+	 * refuses to overwrite or delete what it could not keep */
+	return copy_failed ? -1 : 0;
+}
+
+int sst_path_within(const char *root, const char *path)
+{
+	size_t rl = strlen(root);
+	const char *p;
+
+	while (rl > 1 && root[rl - 1] == '/')
+		rl--;
+	if (root[0] != '/' || path[0] != '/' || strncmp(path, root, rl) != 0 ||
+	    path[rl] != '/' || !path[rl + 1])
+		return 0;
+	for (p = path; *p; p++) {
+		if ((unsigned char)*p < 0x20 || *p == 0x7f)
+			return 0;
+		if (p[0] == '/' && (p[1] == '/' ||
+		    (p[1] == '.' && (p[2] == '/' || !p[2] ||
+				     (p[2] == '.' && (p[3] == '/' || !p[3]))))))
+			return 0;
+	}
+	return 1;
+}
+
+/* ---- enforce arming ---- */
+static void arm_path(const char *statedir, char *out, size_t n)
+{
+	snprintf(out, n, "%s/enforce-armed", statedir);
+}
+
+int sst_armed(const char *statedir)
+{
+	char p[PATH_MAX];
+	struct stat st;
+
+	arm_path(statedir, p, sizeof(p));
+	return lstat(p, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid();
+}
+
+int sst_arm(const char *feature, const char *statedir, const char *how)
+{
+	char p[PATH_MAX], ts[32], line[256];
+	struct tm tm;
+	time_t now = time(NULL);
+	int fd, n;
+
+	arm_path(statedir, p, sizeof(p));
+	gmtime_r(&now, &tm);
+	strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+	n = snprintf(line, sizeof(line), "%s %s\n", ts, how);
+	mkdirs(statedir);
+	unlink(p);
+	fd = open(p, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+	if (fd < 0 || write(fd, line, (size_t)n) != n) {
+		ssl_err("cannot arm enforce mode (%s): %s", p, strerror(errno));
+		if (fd >= 0)
+			close(fd);
+		return -1;
+	}
+	close(fd);
+	ssl_crit("ENFORCE ARMED: %s will now act (%s)", feature, how);
 	return 0;
+}
+
+void sst_disarm(const char *feature, const char *statedir)
+{
+	char p[PATH_MAX];
+
+	arm_path(statedir, p, sizeof(p));
+	if (unlink(p) == 0)
+		ssl_warn("enforce disarmed: %s is back in monitor mode; it reports "
+			 "only until it is armed again", feature);
+}
+
+void sst_describe_arming(const char *statedir, int enforce, char *out, size_t n)
+{
+	char p[PATH_MAX], line[128] = "";
+	FILE *f;
+
+	if (!enforce) {
+		snprintf(out, n, "monitor mode");
+		return;
+	}
+	if (!sst_armed(statedir)) {
+		snprintf(out, n, "NOT ARMED: reporting only until a clean pass or `arm`");
+		return;
+	}
+	arm_path(statedir, p, sizeof(p));
+	f = fopen(p, "re");
+	if (f) {
+		if (!fgets(line, sizeof(line), f))
+			line[0] = '\0';
+		fclose(f);
+	}
+	line[strcspn(line, "\n")] = '\0';
+	snprintf(out, n, "armed since %s", *line ? line : "(unknown)");
 }
