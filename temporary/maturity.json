@@ -7,8 +7,33 @@
     "stable"
   ],
   "criteria": {
-    "beta": "pending operator approval (TODO P2-2 'operator-approved promotion criteria')",
-    "stable": "pending operator approval (TODO P2-2 'operator-approved promotion criteria')"
+    "approved_by": "Pheonix",
+    "date": "2026-11-02",
+    "choice": "standard: a 14-day soak for beta, then 30 days enforcing for stable",
+    "beta": {
+      "requires": [
+        "check-config",
+        "hardened-unit",
+        "resource-limits",
+        "failure-reporting",
+        "threat-model",
+        "upgrade-rollback",
+        "baseline-trust",
+        "evidence-preserved",
+        "adversarial-tests"
+      ],
+      "soak_days": 14,
+      "soak": "monitor (log) mode on a real host that is not a test machine, for at least 14 consecutive days, with the add-on's alerts shipped off the host",
+      "alerts": "every alert raised during the soak is explained in the promotion record: a real finding, a false positive fixed in the code or config, or an exclusion with its reason"
+    },
+    "stable": {
+      "requires": [
+        "beta"
+      ],
+      "enforce_days": 30,
+      "enforce": "after beta, the add-on runs in its acting mode (enforce / quarantine; armed) on that host for at least 30 consecutive days, every alert explained as for beta, with no unexplained kill, repair or quarantine",
+      "recovery_drill": "a recovery drill is done and recorded: undo one of its actions (restore a quarantined sample or repaired file from evidence, or roll the add-on back per docs/ADDONS.md 'Upgrade and rollback') and confirm the host is back to normal"
+    }
   },
   "requirements": {
     "check-config": "a check-config command; acting commands refuse a config with errors (exit 78)",

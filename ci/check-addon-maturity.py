@@ -19,8 +19,11 @@ that the tree agrees with it:
   - the installer enables no unit;
   - docs/ADDONS.md has a maturity row and a threat model per add-on and the
     upgrade/rollback section;
-  - an add-on above "experimental" has no open item and a recorded operator
-    approval of criteria that are no longer pending.
+  - the promotion criteria are operator-approved (who, when) and complete;
+  - an add-on above "experimental" has no open item and a promotion record
+    that meets them: who approved it and when, the soak host, a soak (and,
+    for stable, an enforcing period) at least as long as the criteria say,
+    every alert in it explained, and for stable a recorded recovery drill.
 
 Needs systemd-analyze (systemd >= 250) unless SS_NO_SYSTEMD_ANALYZE=1.
 Exit 0 if all pass. Prints one line per check, failures first.
@@ -32,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import date
 
 ROOT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else
                        os.path.join(os.path.dirname(__file__), ".."))
@@ -122,6 +126,60 @@ def verify_units(units):
                                            "exit %d" % p.returncode)).strip()
 
 
+def _days(a, b):
+    """Whole days from ISO date a to ISO date b, or None if either is bad."""
+    try:
+        return (date.fromisoformat(b) - date.fromisoformat(a)).days
+    except (TypeError, ValueError):
+        return None
+
+
+def criteria_problems(c):
+    """What is missing from the approved criteria (TODO P2-2 part 4)."""
+    out = []
+    if not (c.get("approved_by") and _days(c.get("date"), c.get("date")) == 0):
+        out.append("the criteria record who approved them and the date (YYYY-MM-DD)")
+    b, st = c.get("beta"), c.get("stable")
+    if not isinstance(b, dict) or not isinstance(b.get("soak_days"), int) or b["soak_days"] < 1:
+        out.append("beta has a soak_days of at least 1")
+    if not isinstance(st, dict) or not isinstance(st.get("enforce_days"), int) or st["enforce_days"] < 1:
+        out.append("stable has an enforce_days of at least 1")
+    if isinstance(st, dict) and not st.get("recovery_drill"):
+        out.append("stable requires a recovery drill")
+    return out
+
+
+def promotion_problems(level, c, pr):
+    """Why the promotion record @pr does not meet criteria @c for @level."""
+    out = []
+    steps = ["beta"] if level == "beta" else ["beta", "stable"]
+    for step in steps:
+        r = pr.get(step)
+        if not isinstance(r, dict):
+            out.append("no %s promotion record" % step)
+            continue
+        if not (r.get("approved_by") and _days(r.get("date"), r.get("date")) == 0):
+            out.append("%s: who approved it and when (YYYY-MM-DD)" % step)
+        if not r.get("host"):
+            out.append("%s: the host it ran on" % step)
+        if step == "beta":
+            d, need, what = _days(r.get("soak_start"), r.get("soak_end")), c["beta"]["soak_days"], "soak"
+        else:
+            d, need, what = (_days(r.get("enforce_start"), r.get("enforce_end")),
+                             c["stable"]["enforce_days"], "enforcing period")
+        if d is None or d < need:
+            out.append("%s: a %s of at least %d days (start/end dates; got %s)" % (step, what, need, d))
+        alerts = r.get("alerts")
+        if not isinstance(alerts, list) or any(
+                not (isinstance(a, dict) and a.get("alert") and a.get("explained")) for a in alerts):
+            out.append("%s: every alert listed with its explanation (an empty list if none)" % step)
+        if step == "stable":
+            rd = r.get("recovery_drill")
+            if not (isinstance(rd, dict) and _days(rd.get("date"), rd.get("date")) == 0 and rd.get("what")):
+                out.append("stable: the recovery drill's date and what was undone")
+    return out
+
+
 def main():
     try:
         m = json.loads(read(os.path.join(TMP, "maturity.json")))
@@ -130,6 +188,10 @@ def main():
         return 1
     levels, reqs, addons = m.get("levels", []), m.get("requirements", {}), m.get("addons", {})
     check(levels and levels[0] == "experimental", "the lowest maturity level is 'experimental'")
+    crit = m.get("criteria", {})
+    cp = criteria_problems(crit)
+    check(not cp, "the promotion criteria are operator-approved and complete%s" %
+          ("" if not cp else ": " + "; ".join(cp)))
 
     # every add-on directory and unit is listed
     listed_src = {a.get("source") for a in addons.values()}
@@ -182,12 +244,11 @@ def main():
             check(bool(a.get("default_mode_note")),
                   "%s: an acting default mode says why it is safe (default_mode_note)" % name)
         if lvl != "experimental":
-            pr = a.get("promotion", {})
             check(not opn, "%s: %s has no open requirement" % (name, lvl))
-            check(bool(pr.get("approved_by") and pr.get("date")),
-                  "%s: %s records the operator's approval" % (name, lvl))
-            check("pending" not in str(m.get("criteria", {}).get(lvl, "pending")),
-                  "%s: the %s criteria are approved, not pending" % (name, lvl))
+            if not cp:
+                pp = promotion_problems(lvl, crit, a.get("promotion", {}))
+                check(not pp, "%s: its promotion record meets the %s criteria%s" %
+                      (name, lvl, "" if not pp else ": " + "; ".join(pp)))
         row = re.search(r"^\|\s*`?%s`?\s*\|([^\n]*)" % re.escape(name), docs, re.M)
         check(row is not None and lvl in row.group(1),
               "%s: docs/ADDONS.md maturity table lists it as %s" % (name, lvl))
