@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-licenses.sh - the license policy holds for every source file.
 #
-#   * LICENSE is the unmodified Apache License 2.0 text.
+#   * LICENSE is the Apache License 2.0 text, appendix filled in, otherwise unmodified.
 #   * LICENSES/GPL-2.0 is present, because the in-kernel LSM is dual-licensed.
-#   * NOTICE names the copyright holder.
+#   * NOTICE, LICENSE and LICENSES/GPL-2.0 name the project, year and holder.
+#   * Every source file has an SPDX-FileCopyrightText line.
 #   * Every source file has exactly one SPDX-License-Identifier line near the
 #     top: "GPL-2.0 OR Apache-2.0" under kernel/ (code built into the kernel
 #     must be GPLv2-compatible), "Apache-2.0" everywhere else.
@@ -15,13 +17,28 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source=../lib/tap.sh
 . "$HERE/../lib/tap.sh"
 
-# sha256 of the canonical text at https://www.apache.org/licenses/LICENSE-2.0.txt
+# LICENSE is the canonical Apache-2.0 text with only its appendix boilerplate
+# filled in: put the placeholder back and the hash must match apache.org's.
+# sha256 of https://www.apache.org/licenses/LICENSE-2.0.txt
 APACHE_SHA=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
-eq "LICENSE is the unmodified Apache-2.0 text" \
-	"$(sha256sum "$ROOT/LICENSE" 2>/dev/null | cut -d' ' -f1)" "$APACHE_SHA"
-check "LICENSES/GPL-2.0 is the GPL version 2 text" \
-	grep -q "GNU GENERAL PUBLIC LICENSE" "$ROOT/LICENSES/GPL-2.0"
-check "LICENSES/GPL-2.0 is version 2" grep -q "Version 2, June 1991" "$ROOT/LICENSES/GPL-2.0"
+check "LICENSE appendix names the project" grep -qx '   secure_sudo' "$ROOT/LICENSE"
+check "LICENSE appendix names the holder and year" \
+	grep -qx '   Copyright 2026 Johnathan Edward Brown' "$ROOT/LICENSE"
+eq "LICENSE is otherwise the unmodified Apache-2.0 text" \
+	"$(sed -e '/^   secure_sudo$/d' \
+	       -e 's/^   Copyright 2026 Johnathan Edward Brown$/   Copyright [yyyy] [name of copyright owner]/' \
+	       "$ROOT/LICENSE" 2>/dev/null | sha256sum | cut -d' ' -f1)" "$APACHE_SHA"
+
+# LICENSES/GPL-2.0: a filled-in notice, a separator, then the verbatim text.
+# sha256 of the GPL v2 text as shipped in Debian /usr/share/common-licenses/GPL-2
+GPL2_SHA=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
+check "LICENSES/GPL-2.0 notice names the project" \
+	grep -q '^secure_sudo kernel LSM' "$ROOT/LICENSES/GPL-2.0"
+check "LICENSES/GPL-2.0 notice names the holder and year" \
+	grep -qx 'Copyright (C) 2026  Johnathan Edward Brown' "$ROOT/LICENSES/GPL-2.0"
+eq "LICENSES/GPL-2.0 carries the unmodified GPL v2 text" \
+	"$(sed '1,/^-\{20,\}$/d' "$ROOT/LICENSES/GPL-2.0" 2>/dev/null | sed '1{/^$/d}' | sha256sum | cut -d' ' -f1)" "$GPL2_SHA"
+check "NOTICE names the project" grep -qx 'secure_sudo' "$ROOT/NOTICE"
 check "NOTICE names the copyright holder" \
 	grep -q "^Copyright 2026 Johnathan Edward Brown$" "$ROOT/NOTICE"
 
@@ -35,7 +52,7 @@ mapfile -t FILES < <(cd "$ROOT" && find . -type f \
 # A header is the identifier at the start of a comment line, so a file that
 # merely mentions the tag (like this one) is not counted twice.
 HDR='^(#|//|/\*|<!--) ?SPDX-License-Identifier:'
-missing=(); wrong=(); many=()
+missing=(); wrong=(); many=(); nocopy=()
 for f in "${FILES[@]}"; do
 	case "$f" in
 	kernel/*) want='GPL-2.0 OR Apache-2.0' ;;
@@ -47,6 +64,8 @@ for f in "${FILES[@]}"; do
 	if [ -z "$line" ]; then missing+=("$f"); continue; fi
 	id="$(printf '%s' "$line" | sed -E 's/.*SPDX-License-Identifier: *//; s/ *\*\/ *$//; s/ *-->.*$//; s/ +$//')"
 	[ "$id" = "$want" ] || wrong+=("$f: '$id', want '$want'")
+	head -n 6 "$ROOT/$f" | grep -qE '(#|//|/\*|^ +) ?SPDX-FileCopyrightText: 2026 Johnathan Edward Brown' \
+		|| nocopy+=("$f")
 done
 ok_count=$(( ${#FILES[@]} - ${#missing[@]} - ${#wrong[@]} - ${#many[@]} ))
 if [ "${#FILES[@]}" -ge 100 ]; then ok "found ${#FILES[@]} source files to check"
@@ -55,6 +74,8 @@ if [ "${#missing[@]}" -eq 0 ]; then ok "every source file has an SPDX line in it
 else not_ok "no SPDX line: ${missing[*]}"; fi
 if [ "${#wrong[@]}" -eq 0 ]; then ok "every SPDX line names the right license ($ok_count files)"
 else for w in "${wrong[@]}"; do echo "# $w"; done; not_ok "${#wrong[@]} files name the wrong license"; fi
+if [ "${#nocopy[@]}" -eq 0 ]; then ok "every source file names the copyright holder"
+else not_ok "no SPDX-FileCopyrightText line: ${nocopy[*]}"; fi
 if [ "${#many[@]}" -eq 0 ]; then ok "no file has more than one SPDX line"
 else not_ok "several SPDX lines: ${many[*]}"; fi
 

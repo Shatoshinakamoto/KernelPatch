@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # secure_sudo add-ons (dnf5 actions plugin): re-baseline BootGuard/DriverGuard
 # after every transaction.
 post_transaction::::/usr/libexec/secure-sudo/addons-refresh dnf-transaction

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * secure-sudo-locus - Locus (v8 temporary add-on): the location allocator.
  *

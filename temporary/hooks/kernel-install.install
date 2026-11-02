@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # Installed as /etc/kernel/install.d/99-secure-sudo-addons.install (systemd
 # kernel-install: Fedora, Arch, ...). Arguments: add|remove VERSION ...
 exec /usr/libexec/secure-sudo/addons-refresh "kernel-${1:-unknown}-${2:-unknown}"

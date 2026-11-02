@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # recovery-exercises.sh - TODO P0-6 in a real guest: lint and load against
 # the running secure_sudo kernel, then four operator mistakes, each detected

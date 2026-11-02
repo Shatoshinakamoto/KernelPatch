@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 """Verify an exported secure_sudo evidence bundle without trusting its contents."""
 
 import argparse

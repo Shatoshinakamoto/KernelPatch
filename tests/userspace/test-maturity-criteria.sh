@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-maturity-criteria.sh - the add-on promotion criteria the operator
 # approved (TODO P2-2 part 4) are what ci/check-addon-maturity.py enforces:

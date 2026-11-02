@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # secure-sudo-pheonixbox - PheonixBox (#21): snapshot-based runtime tamper
 # protection with automatic repair.

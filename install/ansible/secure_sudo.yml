@@ -1,5 +1,6 @@
 ---
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # secure_sudo.yml - deploy the secure_sudo patched kernel + userspace.
 #
 # This is the YAML scaffold the TODO asks for. The kernel build itself is done

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-contain.sh - tests for userspace/daemon/helpers/contain.sh (TODO P1-7:
 # safe containment). The account tools (usermod, chage, getent, loginctl)

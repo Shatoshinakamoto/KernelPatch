@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # secure-sudo-gui - a pure Python 3 stdlib service; nothing to compile.
 #
 # The server reads index.html from its own directory, so the script and the

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-FileCopyrightText: 2026 Johnathan Edward Brown */
 /*
  * ssaddon_conf - strict config parsing for the secure_sudo temporary/ add-ons
  * (TODO P2-2: config validation).

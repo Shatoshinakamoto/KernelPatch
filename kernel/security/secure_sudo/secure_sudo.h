@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 OR Apache-2.0 */
+/* SPDX-FileCopyrightText: 2026 Johnathan Edward Brown */
 /*
  * secure_sudo.h - shared definitions for the secure_sudo LSM.
  *

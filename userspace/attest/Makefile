@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # secure-sudo-attest (TODO P2-1): TPM quote of the boot chain for remote
 # attestation, plus the host report helper and the off-box verifier.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # stig-harden.sh - run a DISA STIG (or the closest available hardening)
 # OpenSCAP evaluation on this host, and optionally apply the generated

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * vault_allow.c - `secure-sudo vault-allow ...`: manage the TimeVault exec
  * allowlist from the CLI itself (no external script needed).

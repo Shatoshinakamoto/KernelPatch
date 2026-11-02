@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * secure-sudo-biosguard - BiosGuard (temporary add-on): firmware tamper
  * DETECTION, log and notify ONLY.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-pam.sh - tests for pam_secure_sudo.so and pam_secure_otp.so and for the
 # PAM stacks the docs tell operators to use (TODO P0-2, P0-6 "PAM ordering").

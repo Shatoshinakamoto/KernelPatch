@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # secure-sudo-driverguard - built with the shared add-on logging + store helpers.
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security

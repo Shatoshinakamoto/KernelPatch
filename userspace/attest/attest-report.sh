@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # attest-report.sh - the host side of remote attestation (TODO P2-1). Run by
 # `secure-sudo attest ...`; prints JSON on stdout.

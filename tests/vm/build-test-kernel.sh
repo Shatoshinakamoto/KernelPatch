@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # build-test-kernel.sh - build a small kernel with secure_sudo built in for
 # the disposable QEMU tests (tests/vm/boot-test.sh). The source tree must be

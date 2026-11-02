@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # graft-lsm.sh - copy the secure_sudo LSM into a kernel source tree and
 # register it with Kconfig and the security Makefile. Idempotent. Used by
