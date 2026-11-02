@@ -93,6 +93,8 @@ static const char *const daemon_keys[] = {
 	"retain_days", "max_total_mb", "remote_syslog", "vault_action",
 	"vault_watch", "remote_syslog_transport", "remote_syslog_ca_file",
 	"remote_queue_max_mb", "node_sea_scan_dirs", "node_sea_scan_interval",
+	"alert_cmd", "alert_min_severity", "alert_dedup_seconds",
+	"alert_max_per_minute", "alert_timeout_seconds",
 	NULL
 };
 
@@ -380,6 +382,49 @@ const char *check_daemon_value(const char *key, const char *v,
 
 		if (!*v || *end || size < 1 || size > 1024) {
 			snprintf(why, n, "out of range (1..1024)");
+			return why;
+		}
+	} else if (!strcmp(key, "alert_min_severity")) {
+		if (strcmp(v, "info") && strcmp(v, "low") && strcmp(v, "medium") &&
+		    strcmp(v, "high") && strcmp(v, "critical")) {
+			snprintf(why, n, "not info, low, medium, high or critical");
+			return why;
+		}
+	} else if (!strcmp(key, "alert_dedup_seconds") ||
+		   !strcmp(key, "alert_max_per_minute") ||
+		   !strcmp(key, "alert_timeout_seconds")) {
+		char *end;
+		long x = strtol(v, &end, 10);
+		long lo = key[6] == 'd' ? 0 : 1;
+		long hi = key[6] == 'd' ? 86400 : key[6] == 'm' ? 600 : 300;
+
+		if (!*v || *end || x < lo || x > hi) {
+			snprintf(why, n, "out of range (%ld..%ld)", lo, hi);
+			return why;
+		}
+	} else if (!strcmp(key, "alert_cmd")) {
+		/* the daemon runs it without a shell: quotes must balance and
+		 * only its placeholders may appear (%s %t %d %r %o %u %m %j %h %n %%) */
+		const char *q;
+		char open = 0;
+
+		for (q = v; *q; q++) {
+			if (*q == '\\' && open != '\'' && q[1]) {
+				q++;
+				continue;
+			}
+			if (!open && (*q == '\'' || *q == '"'))
+				open = *q;
+			else if (open && *q == open)
+				open = 0;
+			else if (*q == '%' && (!q[1] || !strchr("stdromujhn%", q[1]))) {
+				snprintf(why, n, "unknown placeholder %%%c", q[1] ? q[1] : ' ');
+				return why;
+			} else if (*q == '%')
+				q++;
+		}
+		if (open) {
+			snprintf(why, n, "unbalanced %c quote", open);
 			return why;
 		}
 	} else if (!strcmp(key, "node_sea_scan_interval")) {

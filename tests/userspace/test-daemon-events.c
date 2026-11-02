@@ -168,6 +168,41 @@ static void seq_event(const struct cfg *c, const char *boot, unsigned seq)
 	handle_event(c, r);
 }
 
+
+/* Wait for every running alert command to finish (or be killed). */
+static void alerts_settle(const struct cfg *c)
+{
+	int i, busy, tries;
+
+	for (tries = 0; tries < 200; tries++) {
+		alerts_reap(c);
+		for (busy = 0, i = 0; i < ALERT_MAX_RUNNING; i++)
+			busy |= alert_run[i].pid > 0;
+		if (!busy)
+			return;
+		usleep(50 * 1000);
+	}
+}
+
+static int count_lines(const char *p)
+{
+	FILE *f = fopen(p, "re");
+	int n = 0, ch;
+
+	if (!f)
+		return 0;
+	while ((ch = fgetc(f)) != EOF)
+		n += ch == '\n';
+	fclose(f);
+	return n;
+}
+
+static void alert_line(char *out, size_t n, const char *type, const char *op,
+		       const char *object, const char *decision, const char *msg)
+{
+	rec(out, n, type, op, object, decision, "non_sudo_user", "1000", msg, "false");
+}
+
 int main(int argc, char **argv)
 {
 	struct cfg cfg = { .remote_queue_max_mb = 1 };
@@ -692,12 +727,168 @@ int main(int argc, char **argv)
 		hb[n] = '\0';
 		if (f)
 			fclose(f);
-		tap(strstr(hb, " net_state=off\n") != NULL,
+		tap(strstr(hb, " net_state=off ") != NULL,
 		    "P1-8: the heartbeat reports the network policy state");
 		NET_RESET();
 		net_on_stop();
 		tap(!strcmp(NET_CALLS(), "stop\n"),
 		    "P1-8: a clean stop runs the helper's on_stop policy");
+	}
+
+
+	/* ---- P2-3: severity, alert_cmd, dedup, rate limit, failures ---- */
+	{
+		char al[1024], tmpl[1024], hb2[1200], line[4096];
+		struct ss_ev ev;
+		FILE *f;
+		size_t hn;
+		int i;
+
+		alert_line(r, sizeof(r), "credential_change", "setuid", "credentials",
+			   "deny", "creds: non-sudo UID 1000 denied setuid");
+		tap(ev_parse(r, &ev) == 0 && ev_severity(&ev) == SEV_CRITICAL,
+		    "P2-3: a denied credential change is critical");
+		alert_line(r, sizeof(r), "credential_change", "setuid", "credentials",
+			   "observe", "x");
+		tap(ev_parse(r, &ev) == 0 && ev_severity(&ev) == SEV_LOW,
+		    "P2-3: ... observed (would-deny) is low");
+		alert_line(r, sizeof(r), "bpf", "bpf", "prog", "deny", "x");
+		tap(ev_parse(r, &ev) == 0 && ev_severity(&ev) == SEV_MEDIUM,
+		    "P2-3: a bpf denial is medium");
+		alert_line(r, sizeof(r), "brand_new_guard", "x", "y", "deny", "x");
+		tap(ev_parse(r, &ev) == 0 && ev_severity(&ev) == SEV_MEDIUM,
+		    "P2-3: an unknown event type that denied is medium");
+		snprintf(r, sizeof(r), "{\"schema_version\":1,\"source\":\"secure-sudod\","
+			 "\"realtime_ns\":1,\"event_type\":\"log_modified\",\"log\":\"x\"}");
+		tap(line_severity(r, strlen(r)) == SEV_CRITICAL,
+		    "P2-3: a daemon log_modified record is critical");
+		tap(line_severity("secure-sudod started", 20) == SEV_LOW,
+		    "P2-3: a plain text line is low");
+		tap(severity_pri(SEV_CRITICAL) == 82 && severity_pri(SEV_LOW) == 85 &&
+		    severity_pri(SEV_INFO) == 86,
+		    "P2-3: forwarded syslog PRI follows severity (authpriv.crit .. .info)");
+
+		tap(alert_cmd_check("/bin/x 'unbalanced", al, sizeof(al)) != 0 &&
+		    alert_cmd_check("/bin/x %q", al, sizeof(al)) != 0 &&
+		    alert_cmd_check("logger -t secure_sudo \"%s %t: %m\"", al, sizeof(al)) == 0,
+		    "P2-3: alert_cmd is checked (quotes, placeholders)");
+
+		snprintf(tmpl, sizeof(tmpl), "/bin/sh %s/alert.sh %%s %%t \"%%m\" %%n", argv[1]);
+		snprintf(cfg.alert_cmd, sizeof(cfg.alert_cmd), "%s", tmpl);
+		cfg.alert_min_severity = SEV_HIGH;
+		cfg.alert_dedup_seconds = 300;
+		cfg.alert_max_per_minute = 10;
+		cfg.alert_timeout = 2;
+		snprintf(path, sizeof(path), "%s/alerts", argv[1]);
+		unlink(path);
+
+		alert_line(r, sizeof(r), "credential_change", "setuid", "credentials",
+			   "deny", "creds: UID 1000 $(touch PWN) `touch PWN2`; touch PWN3");
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		f = fopen(path, "re");
+		line[0] = '\0';
+		if (f) {
+			if (!fgets(line, sizeof(line), f))
+				line[0] = '\0';
+			fclose(f);
+		}
+		tap(!strncmp(line, "4|critical|credential_change|creds: UID 1000 $(touch PWN)",
+			     strlen("4|critical|credential_change|creds: UID 1000 $(touch PWN)")),
+		    "P2-3: a critical record runs alert_cmd with its severity, type and message");
+		tap(!exists("PWN") && !exists("PWN2") && !exists("PWN3"),
+		    "P2-3: shell syntax in the message is an argument, never run");
+		tap(alerts_sent == 1 && !strcmp(alert_state, "ok"),
+		    "P2-3: the alert is counted as sent");
+
+		alert_line(r, sizeof(r), "bpf", "bpf", "prog", "deny", "medium one");
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		tap(count_lines(path) == 1, "P2-3: below alert_min_severity nothing runs");
+
+		alert_line(r, sizeof(r), "credential_change", "setuid", "credentials",
+			   "deny", "creds: UID 1000 again");
+		for (i = 0; i < 3; i++)
+			alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		tap(count_lines(path) == 1 && alerts_suppressed == 3,
+		    "P2-3: the same alert within alert_dedup_seconds is counted, not run");
+		for (i = 0; i < ALERT_DEDUP_SLOTS; i++)
+			if (alert_seen[i].last)
+				alert_seen[i].last -= 400;
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		f = fopen(path, "re");
+		line[0] = '\0';
+		if (f) {
+			while (fgets(line, sizeof(line), f))
+				;
+			fclose(f);
+		}
+		tap(count_lines(path) == 2 && strstr(line, "|3\n") != NULL,
+		    "P2-3: ... once the window passes it runs, with the count held back (%n)");
+
+		cfg.alert_max_per_minute = 3;
+		alert_window = 0;
+		alert_window_sent = alert_window_dropped = 0;
+		for (i = 0; i < 5; i++) {
+			char obj[32];
+
+			snprintf(obj, sizeof(obj), "obj%d", i);
+			alert_line(r, sizeof(r), "setid_exec", "execute", obj, "deny", "rate");
+			alert_consider(&cfg, r, strlen(r));
+		}
+		alerts_settle(&cfg);
+		tap(count_lines(path) == 5 && alerts_dropped == 2,
+		    "P2-3: at most alert_max_per_minute run; the rest are counted");
+		alert_window -= 61;
+		alerts_reap(&cfg);
+		tap(log_contains("\"event_type\":\"alert_rate_limited\",\"dropped\":2,") == 1,
+		    "P2-3: the dropped alerts are reported in an alert_rate_limited record");
+		cfg.alert_max_per_minute = 10;
+
+		snprintf(al, sizeof(al), "%s/alert-fail", argv[1]);
+		write_file(al, "1");
+		alert_line(r, sizeof(r), "tpm_guard", "open", "/dev/tpm0", "deny", "fail");
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		unlink(al);
+		tap(!strcmp(alert_state, "failing") && alerts_failed == 1 &&
+		    log_contains("\"event_type\":\"alert_failed\",\"alert_for\":\"tpm_guard\","
+				 "\"failure\":\"exited_nonzero\",\"status\":1") == 1,
+		    "P2-3: a failing alert_cmd is an alert_failed record and the state is failing");
+		write_health_heartbeat();
+		f = fopen(HEALTH_FILE, "re");
+		hn = f ? fread(hb2, 1, sizeof(hb2) - 1, f) : 0;
+		hb2[hn] = '\0';
+		if (f)
+			fclose(f);
+		tap(strstr(hb2, " alert_state=failing alerts_sent=") &&
+		    strstr(hb2, " alerts_failed=1 ") && strstr(hb2, " alerts_dropped=2\n"),
+		    "P2-3: the heartbeat carries the alert state and counters");
+
+		snprintf(al, sizeof(al), "%s/alert-slow", argv[1]);
+		write_file(al, "1");
+		alert_line(r, sizeof(r), "firmware_guard", "write", "fw", "deny", "slow");
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		unlink(al);
+		tap(log_contains("\"alert_for\":\"firmware_guard\",\"failure\":\"timed_out\"") == 1,
+		    "P2-3: an alert_cmd past alert_timeout_seconds is killed and reported");
+
+		alert_line(r, sizeof(r), "configuration_lock", "write", "knob", "deny", "ok again");
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		tap(!strcmp(alert_state, "ok"), "P2-3: the next good alert clears failing");
+
+		snprintf(r, sizeof(r), "{\"schema_version\":1,\"source\":\"secure-sudod\","
+			 "\"realtime_ns\":1,\"event_type\":\"alert_failed\",\"x\":1}");
+		hn = (size_t)count_lines(path);
+		alert_consider(&cfg, r, strlen(r));
+		alerts_settle(&cfg);
+		tap((size_t)count_lines(path) == hn,
+		    "P2-3: alert records never raise alerts themselves (no loops)");
+		cfg.alert_cmd[0] = '\0';
 	}
 
 	printf("1..%d\n", n_test);

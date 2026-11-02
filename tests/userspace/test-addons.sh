@@ -436,32 +436,79 @@ check "... one killed at its memory limit says so" grep -qF 'secure-sudo-tamperw
 # shellcheck disable=SC2016  # the $(...) is the attack: it must stay literal
 MONITOR_SERVICE_RESULT='x$(touch '"$T"'/pwned)' "$FR" "u';touch $T/pwned2;'" > /dev/null 2>&1
 check "... and a hostile unit name or result cannot run a command" sh -c "[ ! -e '$T/pwned' ] && [ ! -e '$T/pwned2' ]"
-# notify_cmd with a message full of quotes: each ' becomes 4 bytes when quoted;
-# this used to write past the command buffer
+# notify_cmd runs without a shell (TODO P2-3). A message full of quotes used
+# to be quoted for one and wrote past the command buffer; a message with $(...)
+# inside a double-quoted template word was run by it.
 cat > "$T/notify-long.c" <<'NLONG'
 #include <string.h>
+#include <stdlib.h>
 #include "ssaddon_log.h"
-int main(void)
+int main(int argc, char **argv)
 {
 	char m[1000];
+	int i, n = argc > 2 ? atoi(argv[2]) : 1;
 
 	memset(m, '\'', sizeof(m) - 1);
 	m[sizeof(m) - 1] = '\0';
 	ssl_init("longnotify");
-	ssl_notify(SSL_CRIT, "%s", m);
+	for (i = 0; i < n; i++)
+		ssl_notify(SSL_CRIT, "%s", argc > 1 ? argv[1] : m);
 	return 0;
 }
 NLONG
-# (the message twice: two quoted copies do not fit in the command)
-printf 'log_dir = %s/log\nnotify_cmd = /bin/true %%m %%m\n' "$T" > "$T/logging.conf"
+printf '#!/bin/sh\nprintf "%%s\\n" "$#" "$1" >> "%s/argv"\n' "$T" > "$T/argv.sh"
+printf 'log_dir = %s/log\nnotify_cmd = /bin/sh %s/argv.sh "%%f says: %%m"\n' "$T" "$T" > "$T/logging.conf"
 asan=""; echo 'int main(void){return 0;}' > "$T/a.c"
 gcc -fsanitize=address "$T/a.c" -o "$T/a" 2>/dev/null && "$T/a" 2>/dev/null && asan="-fsanitize=address"
-if addon_cc "$T/notify-long" "$T/notify-long.c" $asan; then
+if addon_cc "$T/notify-long" "$T/notify-long.c" $asan -DNOTIFY_TIMEOUT_SECS=2; then
 	ASAN_OPTIONS=detect_leaks=0 "$T/notify-long" > "$T/nl.out" 2>&1; rc=$?
-	check "a notification too long to quote safely is not run (it used to write past the buffer)${asan:+; built with ASan}" sh -c "
-		[ $rc = 0 ] && grep -qF 'notify_cmd not run: the command would be longer than' '$T/log/longnotify.log'"
+	check "a message of 999 quotes reaches the command whole, as one argument${asan:+ (ASan)}" sh -c "
+		[ $rc = 0 ] && [ \"\$(sed -n 1p '$T/argv')\" = 1 ] && [ \"\$(sed -n 2p '$T/argv' | wc -c)\" = \$((17 + 999 + 1)) ]"
+	rm -f "$T/argv"
+	# shellcheck disable=SC2016  # the $(...) and backticks are the attack
+	"$T/notify-long" 'x $(touch '"$T"'/pwn1) `touch '"$T"'/pwn2` ; touch '"$T"'/pwn3' > /dev/null 2>&1
+	check "shell syntax in a message is passed as text, never run" sh -c "
+		[ ! -e '$T/pwn1' ] && [ ! -e '$T/pwn2' ] && [ ! -e '$T/pwn3' ] && grep -qF 'touch' '$T/argv'"
+	rm -f "$T/argv"
+	"$T/notify-long" 'same message' 5 > /dev/null 2>&1
+	eq "the same notification five times in a row runs the command once" "$(grep -c '^1$' "$T/argv")" 1
+	rm -f "$T/argv"
+	"$T/notify-long" 'line one
+line two' > /dev/null 2>&1
+	check "a newline in a message reaches the command as \\x0a, not a line break" grep -qF 'line one\x0aline two' "$T/argv"
+	printf 'log_dir = %s/log\nnotify_cmd = /bin/false %%m\n' "$T" > "$T/logging.conf"
+	"$T/notify-long" 'will fail' > /dev/null 2>&1
+	check "a notify_cmd that exits non-zero is logged ERROR" grep -qF 'notify_cmd FAILED: exited 1' "$T/log/longnotify.log"
+	printf 'log_dir = %s/log\nnotify_cmd = /nonexistent/notify %%m\n' "$T" > "$T/logging.conf"
+	"$T/notify-long" 'cannot start' > /dev/null 2>&1
+	check "... one that cannot start is logged ERROR" grep -qF 'notify_cmd FAILED: /nonexistent/notify could not be started' "$T/log/longnotify.log"
+	printf 'log_dir = %s/log\nnotify_cmd = /bin/sleep 30\n' "$T" > "$T/logging.conf"
+	S0=$(date +%s); "$T/notify-long" 'slow' > /dev/null 2>&1; S1=$(date +%s)
+	check "... and one that hangs is killed after the timeout and logged" sh -c "
+		[ $((S1 - S0)) -lt 10 ] && grep -qF 'notify_cmd FAILED: killed after 2 s' '$T/log/longnotify.log'"
+	printf 'log_dir = %s/log\nnotify_cmd = /bin/sh %s/argv.sh %%m\n' "$T" "$T" > "$T/logging.conf"
+	cat > "$T/notify-many.c" <<'NMANY'
+#include <stdio.h>
+#include "ssaddon_log.h"
+int main(void)
+{
+	int i;
+
+	ssl_init("manynotify");
+	for (i = 0; i < 15; i++)
+		ssl_notify(SSL_CRIT, "distinct %d", i);
+	return 0;
+}
+NMANY
+	if addon_cc "$T/notify-many" "$T/notify-many.c"; then
+		rm -f "$T/argv"; "$T/notify-many" > /dev/null 2>&1
+		eq "at most 10 different notifications run in a minute" "$(grep -c '^1$' "$T/argv")" 10
+		check "... and all 15 are still in the log" sh -c "[ \$(grep -c 'NOTIFY: distinct' '$T/log/manynotify.log') = 15 ]"
+	else
+		not_ok "the notify rate-limit harness builds ($(head -1 "$T/build.err"))"
+	fi
 else
-	not_ok "the long-notification test harness builds ($(head -1 "$T/build.err"))"
+	not_ok "the notification test harness builds ($(head -1 "$T/build.err"))"
 fi
 logconf
 

@@ -98,6 +98,11 @@ struct cfg {
 	char vault_action[16];		/* quarantine | wipe */
 	char vault_watch[1024];		/* comma-separated dirs */
 	long node_scan_minutes;		/* 0 = off (#11 node-scan) */
+	char alert_cmd[1024];		/* P2-3: argv template, no shell; "" = off */
+	int alert_min_severity;		/* SEV_*; -1 = alerting refused (bad config) */
+	long alert_dedup_seconds;
+	long alert_max_per_minute;
+	long alert_timeout;		/* seconds before a running alert is killed */
 };
 
 static struct cfg *g_cfg;
@@ -118,6 +123,15 @@ static unsigned long long event_gaps;	/* gap records written since start */
 static unsigned long long events_missing; /* records those gaps cover */
 static time_t remote_next_flush;	/* main loop: next queue flush */
 static unsigned int remote_backoff;	/* seconds; 0 = collector healthy */
+
+/* P2-3 (defined with the event parser): severity of a record, alerts. */
+static int line_severity(const char *line, size_t len);
+static int severity_pri(int sev);
+static void alert_consider(const struct cfg *c, const char *line, size_t len);
+static int alert_cmd_check(const char *tmpl, char *why, size_t n);
+static int sev_parse(const char *s);
+static char alert_state[16];
+static unsigned long long alerts_sent, alerts_failed, alerts_suppressed, alerts_dropped;
 
 /* Forward declaration: used by kill_offenders() before its definition. */
 static void syslog_line(const char *fmt, ...)
@@ -152,10 +166,17 @@ static void load_cfg(struct cfg *c)
 	strcpy(c->vault_action, "quarantine");
 	strcpy(c->vault_watch, "/etc,/usr/local/bin,/opt,/usr/local/sbin");
 	c->node_scan_minutes = 60;
+	c->alert_cmd[0] = '\0';
+	c->alert_min_severity = 3;	/* high */
+	c->alert_dedup_seconds = 300;
+	c->alert_max_per_minute = 10;
+	c->alert_timeout = 10;
 
 	f = fopen(CONFIG, "re");
-	if (!f)
+	if (!f) {
+		snprintf(alert_state, sizeof(alert_state), "off");
 		return;
+	}
 	while (fgets(line, sizeof(line), f)) {
 		char *eq = strchr(line, '=');
 		char *key, *val;
@@ -206,9 +227,44 @@ static void load_cfg(struct cfg *c)
 				c->node_scan_minutes = m;
 			else
 				fprintf(stderr, "secure-sudod: invalid node_sea_scan_interval\n");
+		} else if (!strcmp(key, "alert_cmd")) {
+			snprintf(c->alert_cmd, sizeof(c->alert_cmd), "%s", val);
+		} else if (!strcmp(key, "alert_min_severity")) {
+			int sv = sev_parse(val);
+
+			c->alert_min_severity = sv;
+			if (sv < 0)
+				fprintf(stderr, "secure-sudod: invalid alert_min_severity "
+					"(info|low|medium|high|critical): alerts are off\n");
+		} else if (!strcmp(key, "alert_dedup_seconds") ||
+			   !strcmp(key, "alert_max_per_minute") ||
+			   !strcmp(key, "alert_timeout_seconds")) {
+			char *end;
+			long v = strtol(val, &end, 10);
+			int dd = key[6] == 'd', mx = key[6] == 'm';
+			long lo = dd ? 0 : 1, hi = dd ? 86400 : mx ? 600 : 300;
+
+			if (*val && !*end && v >= lo && v <= hi)
+				*(dd ? &c->alert_dedup_seconds : mx ?
+				  &c->alert_max_per_minute : &c->alert_timeout) = v;
+			else
+				fprintf(stderr, "secure-sudod: invalid %s (%ld-%ld)\n",
+					key, lo, hi);
 		}
 	}
 	fclose(f);
+	{
+		char why[160];
+
+		if (alert_cmd_check(c->alert_cmd, why, sizeof(why)) != 0) {
+			fprintf(stderr, "secure-sudod: alert_cmd refused: %s\n", why);
+			c->alert_min_severity = -1;
+		}
+		snprintf(alert_state, sizeof(alert_state), "%s",
+			 c->alert_min_severity < 0 ? "config_error" :
+			 !c->alert_cmd[0] ? "off" :
+			 !strcmp(alert_state, "failing") ? "failing" : "ok");
+	}
 }
 
 /* ---- #9 logging ---- */
@@ -407,13 +463,14 @@ static int remote_write(struct remote_conn *rc, const char *line, size_t len)
 	char timestamp[40];
 	struct tm tm;
 	time_t now = time(NULL);
-	int m, framed;
+	int m, framed, pri;
 
 	while (len && line[len - 1] == '\n')
 		len--;
+	pri = severity_pri(line_severity(line, len));
 	if (!rc->tls) {
-		m = snprintf(msg, sizeof(msg), "<85>secure_sudo: %.*s",
-			     (int)len, line);
+		m = snprintf(msg, sizeof(msg), "<%d>secure_sudo: %.*s",
+			     pri, (int)len, line);
 		if (m > 0 && (size_t)m < sizeof(msg) &&
 		    send(rc->fd, msg, (size_t)m, 0) == m) {
 			snprintf(remote_state, sizeof(remote_state), "udp_unconfirmed");
@@ -427,8 +484,8 @@ static int remote_write(struct remote_conn *rc, const char *line, size_t len)
 	gmtime_r(&now, &tm);
 	strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
 	gethostname(hostname, sizeof(hostname) - 1);
-	m = snprintf(msg, sizeof(msg), "<85>1 %s %s secure_sudo - - - %.*s",
-		     timestamp, hostname, (int)len, line);
+	m = snprintf(msg, sizeof(msg), "<%d>1 %s %s secure_sudo - - - %.*s",
+		     pri, timestamp, hostname, (int)len, line);
 	framed = snprintf(frame, sizeof(frame), "%d ", m);
 	if (m <= 0 || (size_t)m >= sizeof(msg) || framed <= 0 ||
 	    (size_t)framed + (size_t)m >= sizeof(frame)) {
@@ -925,6 +982,7 @@ static void write_log(const struct cfg *c, const char *line, size_t len)
 {
 	write_local_log(c, line, len);
 	forward_remote(c, line, len);
+	alert_consider(c, line, len);
 }
 
 /* Delete logs older than retain_days and trim oldest until under max_total_mb. */
@@ -1023,7 +1081,7 @@ static int write_health_heartbeat(void)
 {
 	char tmp[sizeof(HEALTH_FILE) + 8];
 	int fd, n, saved;
-	char buf[768];
+	char buf[1024];
 
 	snprintf(tmp, sizeof(tmp), "%s.tmp", HEALTH_FILE);
 	n = snprintf(buf, sizeof(buf),
@@ -1032,13 +1090,17 @@ static int write_health_heartbeat(void)
 		     "remote_state=%s remote_sent=%llu remote_failures=%llu "
 		     "remote_queue_records=%llu remote_queue_bytes=%llu "
 		     "remote_queue_dropped=%llu local_log_failures=%llu "
-		     "event_gaps=%llu events_missing=%llu net_state=%s\n",
+		     "event_gaps=%llu events_missing=%llu net_state=%s "
+		     "alert_state=%s alerts_sent=%llu alerts_failed=%llu "
+		     "alerts_suppressed=%llu alerts_dropped=%llu\n",
 		     (long)getpid(), (long long)time(NULL),
 		     g_cfg ? g_cfg->remote_transport : "unknown",
 		     retention_state, remote_state,
 		     remote_sent, remote_failures, remote_queue_records,
 		     remote_queue_bytes, remote_queue_dropped,
-		     local_log_failures, event_gaps, events_missing, net_state);
+		     local_log_failures, event_gaps, events_missing, net_state,
+		     alert_state, alerts_sent, alerts_failed, alerts_suppressed,
+		     alerts_dropped);
 	if (n <= 0 || (size_t)n >= sizeof(buf)) {
 		errno = EOVERFLOW;
 		return -1;
@@ -1383,6 +1445,438 @@ static int ev_parse(const char *rec, struct ss_ev *e)
 		if (*p++ != ',')
 			return -1;
 	}
+}
+
+/*
+ * ---- P2-3: severity, alerts, deduplication, rate limits ----
+ *
+ * Every record the daemon writes (kernel and daemon records alike) gets a
+ * severity from its typed fields, never from the message: info, low,
+ * medium, high or critical (docs/EVENTS.md has the table). The severity sets
+ * the syslog PRI of the forwarded copy, so a collector can route on it
+ * without parsing JSON, and decides whether `alert_cmd` runs.
+ *
+ * alert_cmd is split into words here (single and double quotes group, a
+ * backslash escapes the next character) and run directly with execvp: no
+ * shell ever sees event text, so a path or process name in a record cannot
+ * become a command. Placeholders in a word are replaced by the record's
+ * values, with control bytes written as \xNN. A first word without a slash
+ * is looked up in a fixed PATH (/usr/local/sbin ... /bin), never the
+ * daemon's environment.
+ *
+ * Alerts for the same thing (event type, operation, decision, reason,
+ * object, target UID) within alert_dedup_seconds are counted, not sent; the
+ * next one sent carries the count (%n). At most alert_max_per_minute run per
+ * minute, and at most ALERT_MAX_RUNNING at once; the rest are counted and
+ * reported in an alert_rate_limited record. A command that cannot start,
+ * exits non-zero, or runs past alert_timeout_seconds (then killed) is an
+ * alert_failed record, counted in the heartbeat, and makes
+ * `secure-sudo health` degraded until an alert succeeds again.
+ */
+enum { SEV_INFO, SEV_LOW, SEV_MEDIUM, SEV_HIGH, SEV_CRITICAL };
+static const char *const sev_names[] = { "info", "low", "medium", "high", "critical" };
+
+static int sev_parse(const char *s)
+{
+	int i;
+
+	for (i = SEV_INFO; i <= SEV_CRITICAL; i++)
+		if (!strcmp(s, sev_names[i]))
+			return i;
+	return -1;
+}
+
+struct sev_rule {
+	const char *type;
+	int deny;		/* severity of a deny (or any daemon record) */
+	int other;		/* any other decision */
+};
+
+/* Kernel event types (ss_event_typed*) and daemon record types. A type not
+ * listed is medium when denied, low otherwise. */
+static const struct sev_rule sev_rules[] = {
+	{ "credential_change",		SEV_CRITICAL,	SEV_LOW },
+	{ "configuration_lock",		SEV_CRITICAL,	SEV_INFO },
+	{ "firmware_guard",		SEV_CRITICAL,	SEV_LOW },
+	{ "tpm_guard",			SEV_CRITICAL,	SEV_LOW },
+	{ "setid_exec",			SEV_HIGH,	SEV_LOW },
+	{ "sudo_cooldown",		SEV_HIGH,	SEV_HIGH },
+	{ "driver_blacklist",		SEV_HIGH,	SEV_LOW },
+	{ "binary_vault",		SEV_HIGH,	SEV_LOW },
+	{ "time_vault",			SEV_HIGH,	SEV_LOW },
+	{ "process_runtime_guard",	SEV_HIGH,	SEV_LOW },
+	{ "bpf",			SEV_MEDIUM,	SEV_LOW },
+	{ "perf",			SEV_MEDIUM,	SEV_LOW },
+	{ "command_blacklist",		SEV_MEDIUM,	SEV_LOW },
+	{ "tmp_exec",			SEV_MEDIUM,	SEV_LOW },
+	{ "home_write",			SEV_MEDIUM,	SEV_LOW },
+	{ "node_guard",			SEV_MEDIUM,	SEV_LOW },
+	{ "network_guard",		SEV_MEDIUM,	SEV_LOW },
+	{ "radio_guard",		SEV_MEDIUM,	SEV_LOW },
+	{ "sysctl_guard",		SEV_MEDIUM,	SEV_LOW },
+	{ "ram_guard",			SEV_LOW,	SEV_LOW },
+	{ "policy_measurement",		SEV_INFO,	SEV_INFO },
+	{ "event_log",			SEV_INFO,	SEV_INFO },
+	/* daemon records (source "secure-sudod"): "deny" is their severity */
+	{ "log_modified",		SEV_CRITICAL,	SEV_CRITICAL },
+	{ "timevault_manifest_modified", SEV_CRITICAL,	SEV_CRITICAL },
+	{ "event_gap",			SEV_HIGH,	SEV_HIGH },
+	{ "event_sequence_error",	SEV_HIGH,	SEV_HIGH },
+	{ "timevault_manifest_unreadable", SEV_HIGH,	SEV_HIGH },
+	{ "timevault_disengaged",	SEV_HIGH,	SEV_HIGH },
+	{ "alert_failed",		SEV_MEDIUM,	SEV_MEDIUM },
+	{ "alert_rate_limited",		SEV_MEDIUM,	SEV_MEDIUM },
+	{ "event_stream",		SEV_INFO,	SEV_INFO },
+	{ "log_checkpoint",		SEV_INFO,	SEV_INFO },
+	{ "timevault_baseline",		SEV_INFO,	SEV_INFO },
+	{ "timevault_merkle",		SEV_INFO,	SEV_INFO },
+};
+
+/* The severity of a parsed record. Daemon records have no decision. */
+static int ev_severity(const struct ss_ev *e)
+{
+	size_t i;
+	int deny = !strcmp(e->decision, "deny") || !e->boot_id[0];
+
+	for (i = 0; i < sizeof(sev_rules) / sizeof(sev_rules[0]); i++)
+		if (!strcmp(e->event_type, sev_rules[i].type))
+			return deny ? sev_rules[i].deny : sev_rules[i].other;
+	return deny && e->boot_id[0] ? SEV_MEDIUM : SEV_LOW;
+}
+
+/* Severity of a raw log line; a line that is not a record is low. */
+static int line_severity(const char *line, size_t len)
+{
+	char buf[2048];
+	struct ss_ev e;
+
+	if (len >= sizeof(buf))
+		return SEV_LOW;
+	memcpy(buf, line, len);
+	buf[len] = '\0';
+	if (ev_parse(buf, &e) != 0 || !e.event_type[0])
+		return SEV_LOW;
+	return ev_severity(&e);
+}
+
+/* RFC 5424 PRI: facility authpriv (10), syslog severity from ours. */
+static int severity_pri(int sev)
+{
+	static const int syslog_sev[] = { 6, 5, 4, 3, 2 };
+
+	return 10 * 8 + syslog_sev[sev < SEV_INFO || sev > SEV_CRITICAL ? SEV_LOW : sev];
+}
+
+#ifndef ALERT_MAX_RUNNING
+#define ALERT_MAX_RUNNING 4
+#endif
+#define ALERT_ARGS 32
+#define ALERT_DEDUP_SLOTS 128
+
+struct alert_dedup {
+	unsigned long long key;
+	time_t last;
+	unsigned long suppressed;
+};
+
+static struct alert_dedup alert_seen[ALERT_DEDUP_SLOTS];
+static struct {
+	pid_t pid;
+	time_t started;
+	char what[64];
+} alert_run[ALERT_MAX_RUNNING];
+static time_t alert_window;		/* start of the current minute window */
+static unsigned long alert_window_sent, alert_window_dropped;
+static char alert_state[16] = "off";	/* off | ok | failing | config_error */
+static int alert_in_record;		/* daemon_record from inside alerting */
+
+static unsigned long long fnv1a(unsigned long long h, const char *s)
+{
+	for (; *s; s++)
+		h = (h ^ (unsigned char)*s) * 0x100000001b3ULL;
+	return (h ^ 0xff) * 0x100000001b3ULL;	/* field separator */
+}
+
+/* Split @tmpl into words in @buf; quotes group, backslash escapes. Returns
+ * the number of words, or -1 for an unterminated quote / too many words. */
+static int alert_split(const char *tmpl, char *buf, size_t n, char *words[], int max)
+{
+	size_t o = 0;
+	int w = 0;
+	const char *p = tmpl;
+
+	while (*p) {
+		char q = 0;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		if (w >= max - 1)
+			return -1;
+		words[w++] = buf + o;
+		while (*p && (q || (*p != ' ' && *p != '\t'))) {
+			if (!q && (*p == '\'' || *p == '"')) {
+				q = *p++;
+				continue;
+			}
+			if (q && *p == q) {
+				q = 0;
+				p++;
+				continue;
+			}
+			if (*p == '\\' && q != '\'' && p[1])
+				p++;
+			if (o + 1 >= n)
+				return -1;
+			buf[o++] = *p++;
+		}
+		if (q)
+			return -1;
+		buf[o++] = '\0';
+	}
+	words[w] = NULL;
+	return w;
+}
+
+/* Append @v to @out with control bytes and DEL as \xNN. */
+static size_t alert_put(char *out, size_t o, size_t n, const char *v)
+{
+	for (; *v && o + 5 < n; v++) {
+		unsigned char ch = (unsigned char)*v;
+
+		if (ch < 0x20 || ch == 0x7f)
+			o += (size_t)snprintf(out + o, n - o, "\\x%02x", ch);
+		else
+			out[o++] = (char)ch;
+	}
+	out[o] = '\0';
+	return o;
+}
+
+/* Check alert_cmd's shape: "" (off), or absolute first word, balanced
+ * quotes, known placeholders. 0 if usable; else why. */
+static int alert_cmd_check(const char *tmpl, char *why, size_t n)
+{
+	char buf[1024], *words[ALERT_ARGS];
+	const char *p;
+	int w;
+
+	if (!tmpl[0])
+		return 0;
+	w = alert_split(tmpl, buf, sizeof(buf), words, ALERT_ARGS);
+	if (w <= 0) {
+		snprintf(why, n, "unbalanced quotes or more than %d words", ALERT_ARGS - 1);
+		return -1;
+	}
+	for (p = tmpl; *p; p++)
+		if (*p == '%') {
+			if (!p[1] || !strchr("stdromujhn%", p[1])) {
+				snprintf(why, n, "unknown placeholder %%%c", p[1] ? p[1] : ' ');
+				return -1;
+			}
+			p++;
+		}
+	return 0;
+}
+
+static void daemon_record(const struct cfg *c, const char *type,
+			  const char *fmt, ...);
+
+static void alert_note_failure(const struct cfg *c, const char *what,
+			       const char *how, int status)
+{
+	alerts_failed++;
+	snprintf(alert_state, sizeof(alert_state), "failing");
+	alert_in_record = 1;
+	daemon_record(c, "alert_failed", "\"alert_for\":\"%s\",\"failure\":\"%s\","
+		      "\"status\":%d,\"alerts_failed\":%llu", what, how, status,
+		      alerts_failed);
+	alert_in_record = 0;
+	syslog_line("secure-sudod: alert_cmd for %s %s (status %d)", what, how, status);
+}
+
+/* Reap finished alert commands; kill ones past the timeout. Main loop. */
+static void alerts_reap(const struct cfg *c)
+{
+	time_t now = time(NULL);
+	int i, st;
+
+	for (i = 0; i < ALERT_MAX_RUNNING; i++) {
+		pid_t r;
+
+		if (alert_run[i].pid <= 0)
+			continue;
+		r = waitpid(alert_run[i].pid, &st, WNOHANG);
+		if (r == 0) {
+			if (now - alert_run[i].started >= c->alert_timeout) {
+				kill(alert_run[i].pid, SIGKILL);
+				waitpid(alert_run[i].pid, &st, 0);
+				alert_run[i].pid = 0;
+				alert_note_failure(c, alert_run[i].what, "timed_out", -1);
+			}
+			continue;
+		}
+		alert_run[i].pid = 0;
+		if (r < 0)
+			continue;
+		if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
+			alerts_sent++;
+			snprintf(alert_state, sizeof(alert_state), "ok");
+		} else {
+			alert_note_failure(c, alert_run[i].what,
+					   WIFEXITED(st) && WEXITSTATUS(st) == 127 ?
+					   "could_not_start" : "exited_nonzero",
+					   WIFEXITED(st) ? WEXITSTATUS(st) :
+					   128 + WTERMSIG(st));
+		}
+	}
+	/* a minute window closed with alerts held back: say how many */
+	if (alert_window && now - alert_window >= 60) {
+		if (alert_window_dropped) {
+			alert_in_record = 1;
+			daemon_record(c, "alert_rate_limited", "\"dropped\":%lu,"
+				      "\"window_seconds\":60,\"max_per_minute\":%ld",
+				      alert_window_dropped, c->alert_max_per_minute);
+			alert_in_record = 0;
+		}
+		alert_window = now;
+		alert_window_sent = alert_window_dropped = 0;
+	}
+}
+
+/* Consider one record for an alert. */
+static void alert_consider(const struct cfg *c, const char *line, size_t len)
+{
+	char rec[2048], buf[1024], *words[ALERT_ARGS], args[ALERT_ARGS][1100];
+	char *argv[ALERT_ARGS], num[24], host[256] = "localhost", what[64];
+	struct alert_dedup *slot = NULL, *oldest = &alert_seen[0];
+	unsigned long long key = 0xcbf29ce484222325ULL;
+	unsigned long suppressed;
+	struct ss_ev e;
+	time_t now = time(NULL);
+	int sev, w, i, free_slot = -1;
+	pid_t pid;
+
+	if (!c->alert_cmd[0] || c->alert_min_severity < 0 || alert_in_record ||
+	    len >= sizeof(rec))
+		return;
+	memcpy(rec, line, len);
+	rec[len] = '\0';
+	if (ev_parse(rec, &e) != 0 || !e.event_type[0] ||
+	    !strncmp(e.event_type, "alert_", 6))
+		return;
+	sev = ev_severity(&e);
+	if (sev < c->alert_min_severity)
+		return;
+
+	snprintf(num, sizeof(num), "%lld", e.target_uid);
+	key = fnv1a(fnv1a(fnv1a(fnv1a(fnv1a(fnv1a(key, e.event_type), e.operation),
+			  e.decision), e.reason), e.object), num);
+	for (i = 0; i < ALERT_DEDUP_SLOTS; i++) {
+		if (alert_seen[i].key == key && alert_seen[i].last) {
+			slot = &alert_seen[i];
+			break;
+		}
+		if (alert_seen[i].last < oldest->last)
+			oldest = &alert_seen[i];
+	}
+	if (slot && now - slot->last < c->alert_dedup_seconds && now >= slot->last) {
+		slot->suppressed++;
+		alerts_suppressed++;
+		return;
+	}
+	if (!alert_window)
+		alert_window = now;
+	if (alert_window_sent >= (unsigned long)c->alert_max_per_minute) {
+		alert_window_dropped++;
+		alerts_dropped++;
+		return;
+	}
+	for (i = 0; i < ALERT_MAX_RUNNING; i++)
+		if (alert_run[i].pid <= 0) {
+			free_slot = i;
+			break;
+		}
+	if (free_slot < 0) {
+		alert_window_dropped++;
+		alerts_dropped++;
+		return;
+	}
+	if (!slot) {
+		slot = oldest;
+		slot->key = key;
+		slot->suppressed = 0;
+	}
+	suppressed = slot->suppressed;
+	slot->suppressed = 0;
+	slot->last = now;
+
+	w = alert_split(c->alert_cmd, buf, sizeof(buf), words, ALERT_ARGS);
+	if (w <= 0)
+		return;			/* refused when the config was read */
+	gethostname(host, sizeof(host) - 1);
+	for (i = 0; i < w; i++) {
+		const char *p;
+		size_t o = 0;
+
+		args[i][0] = '\0';
+		for (p = words[i]; *p && o + 1 < sizeof(args[i]); p++) {
+			const char *v = NULL;
+			char tmp[24];
+
+			if (*p != '%' || !p[1]) {
+				args[i][o++] = *p;
+				args[i][o] = '\0';
+				continue;
+			}
+			switch (*++p) {
+			case 's': v = sev_names[sev]; break;
+			case 't': v = e.event_type; break;
+			case 'd': v = e.decision[0] ? e.decision : "none"; break;
+			case 'r': v = e.reason; break;
+			case 'o': v = e.object; break;
+			case 'm': v = e.message[0] ? e.message : e.event_type; break;
+			case 'u': v = e.target_uid >= 0 ? num : ""; break;
+			case 'j': v = rec; break;
+			case 'h': v = host; break;
+			case 'n': snprintf(tmp, sizeof(tmp), "%lu", suppressed); v = tmp; break;
+			default:  v = "%"; break;
+			}
+			o = alert_put(args[i], o, sizeof(args[i]), v);
+		}
+		argv[i] = args[i];
+	}
+	argv[w] = NULL;
+	snprintf(what, sizeof(what), "%s", e.event_type);
+
+	pid = fork();
+	if (pid == 0) {
+		int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+
+		if (fd >= 0) {
+			dup2(fd, 0);
+			dup2(fd, 1);
+			dup2(fd, 2);
+		}
+		for (fd = 3; fd < 1024; fd++)
+			close(fd);
+		setsid();
+		signal(SIGPIPE, SIG_DFL);
+		setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	if (pid < 0) {
+		alert_note_failure(c, what, "could_not_start", -1);
+		return;
+	}
+	alert_run[free_slot].pid = pid;
+	alert_run[free_slot].started = now;
+	snprintf(alert_run[free_slot].what, sizeof(alert_run[free_slot].what), "%s", what);
+	alert_window_sent++;
+	if (!strcmp(alert_state, "off"))
+		snprintf(alert_state, sizeof(alert_state), "ok");
 }
 
 /* The kernel's brute-force block (ss_cooldown.c): 1 and the UID, else 0. */
@@ -2664,6 +3158,7 @@ static void drain_events(const struct cfg *c, int fd)
 			write_local_log(c, line, (size_t)(nl - line));
 			handle_event(c, line);
 			forward_remote(c, line, (size_t)(nl - line));
+			alert_consider(c, line, (size_t)(nl - line));
 		}
 		line = nl + 1;
 	}
@@ -2736,6 +3231,7 @@ int main(void)
 		if (rc > 0 && (pfd.revents & POLLIN))
 			drain_events(&cfg, pfd.fd);
 		maybe_flush_remote(&cfg, time(NULL));
+		alerts_reap(&cfg);
 
 		if (now - last_checkpoint >= CHECKPOINT_SECS) {
 			last_checkpoint = now;

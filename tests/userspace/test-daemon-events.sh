@@ -28,6 +28,17 @@ sleep 1
 exit 3
 STUB
 chmod 0755 "$T/cli-stub.sh"
+# Stands in for an operator's alert_cmd (P2-3): records "argc|args", fails or
+# hangs on demand.
+cat > "$T/alert.sh" <<ALERT
+#!/bin/sh
+[ -e "$T/alert-slow" ] && exec sleep 30
+n=\$#; out="\$n"
+for a in "\$@"; do out="\$out|\$a"; done
+printf '%s\n' "\$out" >> "$T/alerts"
+[ -e "$T/alert-fail" ] && exit 1
+exit 0
+ALERT
 # Stands in for apply-net.sh (P1-8): records its arguments, exits with net-rc.
 cat > "$T/net-wrapper.sh" <<NETW
 #!/bin/sh

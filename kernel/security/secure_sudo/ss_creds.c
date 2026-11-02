@@ -49,6 +49,8 @@
 #include <linux/uaccess.h>
 #include <linux/limits.h>
 #include <linux/security.h>
+#include <linux/ratelimit.h>
+#include <linux/atomic.h>
 #include <linux/lsm_hooks.h>
 
 #include "secure_sudo.h"
@@ -71,6 +73,32 @@ static bool gid_changed(const struct cred *new, const struct cred *old)
 	       !gid_eq(new->fsgid, old->fsgid);
 }
 
+/*
+ * A denied identity change is the core control's event (TODO P2-3): it goes
+ * to the event ring, and from there to the local log, the collector and any
+ * alert, not only to dmesg. The four hooks share one rate limit (20 records
+ * per 5 s), so a user looping on setuid() cannot push other records out of
+ * the ring; what it holds back is counted and reported in the next record.
+ */
+static DEFINE_RATELIMIT_STATE(ss_creds_rs, 5 * HZ, 20);
+static atomic_t ss_creds_missed = ATOMIC_INIT(0);
+
+static void ss_creds_denied(const char *operation, kuid_t uid)
+{
+	unsigned int u = from_kuid(&init_user_ns, uid), missed;
+
+	if (!__ratelimit(&ss_creds_rs)) {
+		atomic_inc(&ss_creds_missed);
+		return;
+	}
+	missed = atomic_xchg(&ss_creds_missed, 0);
+	pr_warn("non-sudo UID %u denied %s change\n", u, operation);
+	ss_event_typed_self("credential_change", "current_user", operation,
+			    "credentials", "deny", "non_sudo_user",
+			    "creds: non-sudo UID %u denied %s (%u earlier denials "
+			    "not recorded)", u, operation, missed);
+}
+
 static int ss_task_fix_setuid(struct cred *new, const struct cred *old,
 			      int flags)
 {
@@ -91,8 +119,7 @@ static int ss_task_fix_setuid(struct cred *new, const struct cred *old,
 	if (!uid_changed(new, old))
 		return 0;
 
-	pr_warn_ratelimited("non-sudo UID %u denied setuid change\n",
-			    from_kuid(&init_user_ns, old->uid));
+	ss_creds_denied("setuid", old->uid);
 	return -EPERM;				/* deny the identity switch */
 }
 
@@ -106,8 +133,7 @@ static int ss_task_fix_setgid(struct cred *new, const struct cred *old,
 	if (!gid_changed(new, old))
 		return 0;
 
-	pr_warn_ratelimited("non-sudo UID %u denied setgid change\n",
-			    from_kuid(&init_user_ns, old->uid));
+	ss_creds_denied("setgid", old->uid);
 	return -EPERM;
 }
 
@@ -118,8 +144,7 @@ static int ss_task_fix_setgroups(struct cred *new, const struct cred *old)
 	if (ss_cred_is_sudo(old))
 		return 0;
 
-	pr_warn_ratelimited("non-sudo UID %u denied setgroups change\n",
-			    from_kuid(&init_user_ns, old->uid));
+	ss_creds_denied("setgroups", old->uid);
 	return -EPERM;
 }
 
@@ -136,8 +161,7 @@ static int ss_userns_create(const struct cred *cred)
 	if (ss_cred_is_sudo(cred))
 		return 0;
 
-	pr_warn_ratelimited("non-sudo UID %u denied user-namespace creation\n",
-			    from_kuid(&init_user_ns, cred->uid));
+	ss_creds_denied("userns_create", cred->uid);
 	return -EPERM;
 }
 

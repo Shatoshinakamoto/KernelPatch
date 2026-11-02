@@ -41,9 +41,13 @@ Three things are shared by all of them:
   project uses. The root can be a fixed configured path or one requested at
   runtime from **Locus**.
 * **Off-box notification** (`notify_cmd`): set `notify_cmd` in `logging.conf` to
-  run a command on a critical event (the message, level, and feature are passed
-  as safely-quoted `%m`/`%l`/`%f`). Examples: `logger`, `wall`, or your own
-  alerting script.
+  run a command on a critical event, with the message, level and feature as
+  `%m`/`%l`/`%f`. No shell is used: the line is split into words and run
+  directly, so message text can never become a command (pipes and redirects
+  do not work; point it at a script). Repeats of one message within 300 s are
+  sent once, at most 10 run a minute, and a command that fails or runs past
+  10 s is logged ERROR. Examples: `logger`, `wall`, or your own alerting
+  script. See [EVENTS.md](EVENTS.md) for alerting on kernel events.
 
 ---
 
@@ -349,8 +353,8 @@ remote_port = 514
 With `remote_enabled = 1`, every line is also sent as RFC 5424 syslog to your
 collector (rsyslog/syslog-ng, a SIEM, or a LAN log box) — the off-box backup, so
 evidence survives a compromised host. With `notify_cmd` set, important events
-also run that command (message/level/feature passed as safely-quoted
-`%m`/`%l`/`%f`). The core PheonixBox feature also logs its tamper/repair and
+also run that command (message/level/feature as `%m`/`%l`/`%f`, run
+without a shell). The core PheonixBox feature also logs its tamper/repair and
 enable/disable events via `syslog(3)`, which your system syslog can forward the
 same way.
 

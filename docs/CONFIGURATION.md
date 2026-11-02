@@ -406,6 +406,24 @@ duplicates; a successful write followed by a collector-side failure can still
 lose an event. UDP remains explicitly unconfirmed. The local log is written
 before either forwarding path and continues when the collector is unavailable.
 
+Each forwarded record keeps its original text; its syslog priority is
+`authpriv` with a severity taken from the record (critical `<82>` down to info
+`<86>`). The severity table is in [EVENTS.md](EVENTS.md#3-severity).
+
+Alerting (P2-3; full description, placeholders and failure handling in
+[EVENTS.md](EVENTS.md#5-alerts)):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `alert_cmd` | *(empty: off)* | Command run for each alert, **without a shell** (quotes group words; placeholders `%s %t %d %r %o %u %m %j %h %n %%`). A bare first word is looked up in a fixed `PATH`. |
+| `alert_min_severity` | `high` | Lowest severity that alerts: `info`, `low`, `medium`, `high` or `critical`. |
+| `alert_dedup_seconds` | `300` | Repeats of the same alert within this window are counted, not run (0–86400). |
+| `alert_max_per_minute` | `10` | Alerts run per minute at most (1–600); the rest are dropped and reported in an `alert_rate_limited` record. |
+| `alert_timeout_seconds` | `10` | A command still running after this is killed and reported (1–300). |
+
+A failing, hanging or unstartable command writes an `alert_failed` record
+(logged and forwarded) and makes `secure-sudo health` degraded.
+
 TLS uses server authentication only; client certificates and client private
 keys are not configured. For collector CA rotation, install an overlap bundle
 containing both old and new trust anchors at `remote_syslog_ca_file`, then
