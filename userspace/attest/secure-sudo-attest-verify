@@ -17,7 +17,10 @@ no TPM and no secure_sudo install.
       cannot quietly swap the TPM.
 
       With --ek-ca ROOT.pem [--ek-intermediate ICA.pem] (bundle from
-      `attest quote --ek`), the TPM's EK certificate must chain to that CA
+      `attest quote --ek`; RSA 2048, ECC P-256 or ECC P-384 EK; missing
+      intermediates are fetched from the AIA URL unless --no-aia; --ek-cert
+      FILE for a certificate kept outside NV; --ek-template to pick one),
+      the TPM's EK certificate must chain to that CA
       and the AK is then bound to that EK by credential activation: enroll
       writes HOST.json.challenge, the host answers it with
       `secure-sudo attest activate`, and
@@ -755,30 +758,50 @@ def check_ima(bundle, pcrs, out, reference=None, unknown_fail=False):
 #
 # Trust on first use believes that the AK at enrollment lives in the host's
 # real TPM. With the EK, that becomes a check: the TPM manufacturer's EK
-# certificate (in TPM NV) says "this RSA key is the endorsement key of a
-# genuine TPM", and credential activation proves the AK is in that same TPM.
-# The verifier encrypts a random secret to the EK, bound to the AK's name
+# certificate (in TPM NV) says "this key is the endorsement key of a genuine
+# TPM", and credential activation proves the AK is in that same TPM. The
+# verifier encrypts a random secret to the EK, bound to the AK's name
 # (TPM2_MakeCredential, done here in software); the TPM releases it through
 # TPM2_ActivateCredential only if an object with exactly that name is loaded
 # next to that EK. An AK that is restricted, fixedTPM and in the same TPM is
 # what the attestation trusts, so the binding is complete.
+#
+# Supported EK templates (TCG EK Credential Profile): L-1 RSA 2048, L-2 ECC
+# P-256 and H-3 ECC P-384 - the same list as secure-sudo-attest.
 
 ALG_RSA = 0x0001
 ALG_AES = 0x0006
 ALG_CFB = 0x0043
+ALG_SHA384 = 0x000C
+ECC_P384 = 0x0004
 ATTR_FIXEDPARENT = 0x00000010
 ATTR_SENSITIVEDATAORIGIN = 0x00000020
 ATTR_USERWITHAUTH = 0x00000040
 ATTR_ADMINWITHPOLICY = 0x00000080
 ATTR_DECRYPT = 0x00020000
-# PolicySecret(TPM_RH_ENDORSEMENT): the TCG EK Credential Profile's EK policy
-EK_POLICY = bytes.fromhex("837197674484b3f81a90cc8d46a5d724fd52d76e06520b64f2a1da1b331469aa")
-EK_ATTRS = (ATTR_FIXEDTPM | ATTR_FIXEDPARENT | ATTR_SENSITIVEDATAORIGIN |
-            ATTR_ADMINWITHPOLICY | ATTR_RESTRICTED | ATTR_DECRYPT)
+EK_LOW_ATTRS = (ATTR_FIXEDTPM | ATTR_FIXEDPARENT | ATTR_SENSITIVEDATAORIGIN |
+                ATTR_ADMINWITHPOLICY | ATTR_RESTRICTED | ATTR_DECRYPT)
+# PolicySecret(TPM_RH_ENDORSEMENT) (low range) and the high-range PolicyB
+POLICY_A_SHA256 = bytes.fromhex("837197674484b3f81a90cc8d46a5d724fd52d76e06520b64f2a1da1b331469aa")
+POLICY_B_SHA384 = bytes.fromhex("b26e7d28d11a50bc53d882bcf5fd3a1a074148bb35d3b4e4"
+                                "cb1c0ad9bde419cacb47ba09699646150f9fc000f3f80e12")
+EK_TEMPLATES = {
+    # id: (type, nameAlg, attributes, authPolicy, AES bits, curve, unique size)
+    "rsa2048": (ALG_RSA, ALG_SHA256, EK_LOW_ATTRS, POLICY_A_SHA256, 128, None, 256),
+    "ecc-p256": (ALG_ECC, ALG_SHA256, EK_LOW_ATTRS, POLICY_A_SHA256, 128, ECC_P256, 32),
+    "ecc-p384": (ALG_ECC, ALG_SHA384, EK_LOW_ATTRS | ATTR_USERWITHAUTH, POLICY_B_SHA384,
+                 256, ECC_P384, 48),
+}
+CURVES = {ECC_P256: ("P-256", "prime256v1", "2a8648ce3d030107", 32),
+          ECC_P384: ("P-384", "secp384r1", "2b81040022", 48)}
+HASHES = {ALG_SHA256: hashlib.sha256, ALG_SHA384: hashlib.sha384}
 
 
-def parse_ek_public(b):
-    """TPM2B_PUBLIC of an RSA 2048 EK (default template) -> n, name."""
+def parse_ek_public(b, template):
+    """TPM2B_PUBLIC of an EK under a known template -> dict."""
+    if template not in EK_TEMPLATES:
+        raise Bad("unknown EK template %s" % template)
+    typ_w, alg_w, attrs_w, pol_w, aes_w, curve_w, _ = EK_TEMPLATES[template]
     r = R(b)
     tpmt = r.take(r.u16())
     if r.o != len(b):
@@ -786,19 +809,30 @@ def parse_ek_public(b):
     t = R(tpmt)
     typ, name_alg, attrs = t.u16(), t.u16(), t.u32()
     policy = t.tpm2b()
-    if typ != ALG_RSA or name_alg != ALG_SHA256:
-        raise Bad("the endorsement key is not an RSA key with a SHA-256 name")
-    if attrs != EK_ATTRS or policy != EK_POLICY:
-        raise Bad("the endorsement key does not use the standard EK template")
-    if (t.u16(), t.u16(), t.u16()) != (ALG_AES, 128, ALG_CFB):
-        raise Bad("the endorsement key's symmetric algorithm is not AES-128-CFB")
+    if (typ, name_alg, attrs, policy) != (typ_w, alg_w, attrs_w, pol_w):
+        raise Bad("the endorsement key does not use the %s EK template" % template)
+    if (t.u16(), t.u16(), t.u16()) != (ALG_AES, aes_w, ALG_CFB):
+        raise Bad("the endorsement key's symmetric algorithm is not AES-%d-CFB" % aes_w)
     if t.u16() != ALG_NULL:
         raise Bad("the endorsement key has a signing scheme")
-    bits, exp = t.u16(), t.u32()
-    n = t.tpm2b()
-    if bits != 2048 or len(n) != 256 or exp not in (0, 65537):
-        raise Bad("the endorsement key is not RSA 2048 with exponent 65537")
-    return {"n": n, "name": struct.pack(">H", ALG_SHA256) + hashlib.sha256(tpmt).digest()}
+    ek = {"template": template, "type": typ, "name_alg": name_alg, "aes_bits": aes_w,
+          "name": struct.pack(">H", name_alg) + HASHES[name_alg](tpmt).digest()}
+    if typ == ALG_RSA:
+        bits, exp = t.u16(), t.u32()
+        n = t.tpm2b()
+        if bits != 2048 or len(n) != 256 or exp not in (0, 65537):
+            raise Bad("the endorsement key is not RSA 2048 with exponent 65537")
+        ek["n"] = n
+    else:
+        curve, kdf = t.u16(), t.u16()
+        if curve != curve_w or kdf != ALG_NULL:
+            raise Bad("the endorsement key is not on curve %s" % CURVES[curve_w][0])
+        x, y = t.tpm2b(), t.tpm2b()
+        size = CURVES[curve][3]
+        if len(x) != size or len(y) != size:
+            raise Bad("the endorsement key's point has the wrong size")
+        ek.update(curve=curve, x=x, y=y)
+    return ek
 
 
 def _der(tag, body):
@@ -816,13 +850,22 @@ def _der_uint(v):
     return _der(0x02, (b"\0" + b) if b[0] & 0x80 else b)
 
 
-def rsa_spki_pem(n, e=65537):
-    rsa_oid = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010101")) + b"\x05\x00")
-    key = _der(0x30, _der_uint(n) + _der_uint(e.to_bytes(3, "big")))
-    der = _der(0x30, rsa_oid + _der(0x03, b"\0" + key))
+def ek_spki_der(ek):
+    """SubjectPublicKeyInfo DER of the EK (uncompressed point for ECC)."""
+    if ek["type"] == ALG_RSA:
+        alg = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010101")) + b"\x05\x00")
+        key = _der(0x30, _der_uint(ek["n"]) + _der_uint((65537).to_bytes(3, "big")))
+    else:
+        alg = _der(0x30, _der(0x06, bytes.fromhex("2a8648ce3d0201")) +
+                   _der(0x06, bytes.fromhex(CURVES[ek["curve"]][2])))
+        key = b"\x04" + ek["x"] + ek["y"]
+    return _der(0x30, alg + _der(0x03, b"\0" + key))
+
+
+def _pem(der, label="PUBLIC KEY"):
     b = base64.b64encode(der).decode()
-    return "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % "\n".join(
-        b[i:i + 64] for i in range(0, len(b), 64))
+    return "-----BEGIN %s-----\n%s\n-----END %s-----\n" % (
+        label, "\n".join(b[i:i + 64] for i in range(0, len(b), 64)), label)
 
 
 def _openssl(args, data=None):
@@ -831,19 +874,80 @@ def _openssl(args, data=None):
     return p.returncode, p.stdout, p.stderr
 
 
-def check_ek_cert(ek, cert_der, roots, intermediates, out):
-    """The certificate is for this EK and chains to one of the given CAs."""
+def _cert_issuer_urls(pem_path):
+    """The CA Issuers URLs in a certificate's Authority Information Access."""
+    rc, o, _ = _openssl(["x509", "-in", pem_path, "-noout", "-ext", "authorityInfoAccess"])
+    if rc != 0:
+        return []
+    urls = []
+    for ln in o.decode(errors="replace").splitlines():
+        ln = ln.strip()
+        if ln.startswith("CA Issuers - URI:"):
+            u = ln[len("CA Issuers - URI:"):].strip()
+            if u.startswith(("http://", "https://")):
+                urls.append(u)
+    return urls
+
+
+def fetch_intermediates(leaf_pem, d, limit=4, timeout=10):
+    """Follow AIA caIssuers from the leaf up: each fetched certificate is
+    only an untrusted intermediate (the chain must still end at --ek-ca).
+    -> (list of PEM paths, list of notes)."""
+    import urllib.request
+    paths, notes, cur, seen = [], [], leaf_pem, set()
+    for i in range(limit):
+        urls = [u for u in _cert_issuer_urls(cur) if u not in seen]
+        if not urls:
+            break
+        u = urls[0]
+        seen.add(u)
+        try:
+            with urllib.request.urlopen(u, timeout=timeout) as resp:
+                body = resp.read(1 << 20)
+        except (OSError, ValueError) as e:
+            notes.append("could not fetch %s (%s)" % (u, e))
+            break
+        raw = os.path.join(d, "aia%d.bin" % i)
+        with open(raw, "wb") as f:
+            f.write(body)
+        pem = os.path.join(d, "aia%d.pem" % i)
+        form = "PEM" if b"-----BEGIN CERTIFICATE-----" in body else "DER"
+        rc, _, _ = _openssl(["x509", "-inform", form, "-in", raw, "-out", pem])
+        if rc != 0:
+            notes.append("%s is not a certificate" % u)
+            break
+        paths.append(pem)
+        notes.append("fetched %s" % u)
+        rc, subj, _ = _openssl(["x509", "-in", pem, "-noout", "-subject"])
+        rc2, iss, _ = _openssl(["x509", "-in", pem, "-noout", "-issuer"])
+        if subj.split(b"=", 1)[-1] == iss.split(b"=", 1)[-1]:
+            break                   # self-signed: the top
+        cur = pem
+    return paths, notes
+
+
+def check_ek_cert(ek, cert_der, roots, intermediates, out, aia=True):
+    """The certificate is for this EK and chains to one of the given CAs,
+    fetching missing intermediates from its AIA URL when allowed."""
     with tempfile.TemporaryDirectory() as d:
         cp = os.path.join(d, "ek.der")
         with open(cp, "wb") as f:
             f.write(cert_der)
-        rc, mo, _ = _openssl(["x509", "-inform", "DER", "-in", cp, "-noout", "-modulus"])
-        mod = mo.decode().strip().partition("=")[2].lower() if rc == 0 else ""
-        out.append((mod == ek["n"].hex(), "the EK certificate certifies this endorsement key"))
         rc, pem, _ = _openssl(["x509", "-inform", "DER", "-in", cp])
+        if rc != 0:
+            out.append((False, "the EK certificate is a readable X.509 certificate"))
+            return None
         pp = os.path.join(d, "ek.pem")
         with open(pp, "wb") as f:
             f.write(pem)
+        rc, pk, _ = _openssl(["x509", "-in", pp, "-noout", "-pubkey"])
+        rc2, pkd, _ = _openssl(["pkey", "-pubin", "-outform", "DER"], pk) if rc == 0 else (1, b"", b"")
+        if ek["type"] == ALG_RSA:
+            rc3, mo, _ = _openssl(["x509", "-in", pp, "-noout", "-modulus"])
+            same = rc3 == 0 and mo.decode().strip().partition("=")[2].lower() == ek["n"].hex()
+        else:
+            same = rc2 == 0 and pkd == ek_spki_der(ek)
+        out.append((same, "the EK certificate certifies this endorsement key (%s)" % ek["template"]))
 
         def cat(paths, name):
             q = os.path.join(d, name)
@@ -852,54 +956,123 @@ def check_ek_cert(ek, cert_der, roots, intermediates, out):
                     with open(x, "rb") as g:
                         f.write(g.read() + b"\n")
             return q
-        args = ["verify", "-CAfile", cat(roots, "roots.pem")]
-        if intermediates:
-            args += ["-untrusted", cat(intermediates, "inter.pem")]
-        rc, vo, ve = _openssl(args + [pp])
+
+        def verify(inter):
+            args = ["verify", "-CAfile", cat(roots, "roots.pem")]
+            if inter:
+                args += ["-untrusted", cat(inter, "inter.pem")]
+            return _openssl(args + [pp])
+        inter = list(intermediates)
+        rc, vo, ve = verify(inter)
+        notes = []
+        if rc != 0 and aia:
+            got, notes = fetch_intermediates(pp, d)
+            if got:
+                inter += got
+                rc, vo, ve = verify(inter)
         why = "" if rc == 0 else " (%s)" % (ve or vo).decode(errors="replace").strip().splitlines()[-1][:120]
-        out.append((rc == 0, "the EK certificate chains to a trusted TPM manufacturer CA" + why))
+        how = "; intermediate from the certificate's AIA URL" if rc == 0 and notes and \
+            any(n.startswith("fetched") for n in notes) else ""
+        if rc != 0 and notes:
+            why += " [" + "; ".join(notes) + "]"
+        out.append((rc == 0, "the EK certificate chains to a trusted TPM manufacturer CA" + how + why))
         rc, so, _ = _openssl(["x509", "-in", pp, "-noout", "-issuer", "-serial"])
         return so.decode(errors="replace").strip().replace("\n", "; ")
 
 
-def kdfa(key, label, ctx_u, ctx_v, bits):
-    """TPM 2.0 Part 1, 11.4.10.2: KDFa with HMAC-SHA256 in counter mode."""
+def kdfa(hfn, key, label, ctx_u, ctx_v, bits):
+    """TPM 2.0 Part 1, 11.4.10.2: KDFa, HMAC in counter mode."""
     import hmac as _hmac
     lab = label.encode() + b"\0"
     out, i = b"", 1
     while len(out) * 8 < bits:
         out += _hmac.new(key, struct.pack(">I", i) + lab + ctx_u + ctx_v +
-                         struct.pack(">I", bits), hashlib.sha256).digest()
+                         struct.pack(">I", bits), hfn).digest()
         i += 1
     return out[:bits // 8]
 
 
+def kdfe(hfn, z, label, party_u, party_v, bits):
+    """TPM 2.0 Part 1, 11.4.10.3: KDFe (the SP 800-56A concatenation KDF)."""
+    lab = label.encode() + b"\0"
+    out, i = b"", 1
+    while len(out) * 8 < bits:
+        out += hfn(struct.pack(">I", i) + z + lab + party_u + party_v).digest()
+        i += 1
+    return out[:bits // 8]
+
+
+def _ecc_seed(ek, d):
+    """ECDH with a fresh ephemeral key on the EK's curve (Part 1, C.6.4):
+    -> (seed, TPM2B_ENCRYPTED_SECRET carrying the ephemeral point)."""
+    name, _, _, size = CURVES[ek["curve"]]
+    hfn = HASHES[ek["name_alg"]]
+    kp = os.path.join(d, "ek.pem")
+    with open(kp, "w") as f:
+        f.write(_pem(ek_spki_der(ek)))
+    ep = os.path.join(d, "eph.pem")
+    rc, _, err = _openssl(["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:" + name,
+                           "-out", ep])
+    if rc != 0:
+        raise Bad("openssl could not make an ephemeral %s key: %s" % (name, err.decode(errors="replace")[:200]))
+    rc, z, err = _openssl(["pkeyutl", "-derive", "-inkey", ep, "-peerkey", kp])
+    if rc != 0 or len(z) != size:
+        raise Bad("openssl ECDH with the EK failed: %s" % err.decode(errors="replace")[:200])
+    rc, pub, _ = _openssl(["pkey", "-in", ep, "-pubout", "-outform", "DER"])
+    pt = pub[-(2 * size + 1):]
+    if rc != 0 or pt[0] != 4:
+        raise Bad("openssl gave no uncompressed ephemeral point")
+    qx, qy = pt[1:1 + size], pt[1 + size:]
+    seed = kdfe(hfn, z, "IDENTITY", qx, ek["x"], hfn().digest_size * 8)
+    point = struct.pack(">H", size) + qx + struct.pack(">H", size) + qy
+    return seed, struct.pack(">H", len(point)) + point
+
+
 def make_credential(ek, ak_name, secret):
-    """TPM2_MakeCredential for an RSA EK, in software. -> (credential, secret)
-    blobs: TPM2B_ID_OBJECT and TPM2B_ENCRYPTED_SECRET."""
+    """TPM2_MakeCredential in software, for an RSA or ECC EK. -> (credential,
+    secret) blobs: TPM2B_ID_OBJECT and TPM2B_ENCRYPTED_SECRET."""
     import hmac as _hmac
-    seed = secrets.token_bytes(16)         # the EK's AES-128 key size
+    hfn = HASHES[ek["name_alg"]]
+    keylen = ek["aes_bits"] // 8
     with tempfile.TemporaryDirectory() as d:
-        kp = os.path.join(d, "ek.pem")
-        with open(kp, "w") as f:
-            f.write(rsa_spki_pem(ek["n"]))
-        rc, enc_seed, err = _openssl([
-            "pkeyutl", "-encrypt", "-pubin", "-inkey", kp,
-            "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256",
-            "-pkeyopt", "rsa_mgf1_md:sha256",
-            "-pkeyopt", "rsa_oaep_label:" + b"IDENTITY\0".hex()], seed)
-        if rc != 0 or len(enc_seed) != 256:
-            raise Bad("openssl could not encrypt to the EK: %s" % err.decode(errors="replace")[:200])
-        sym = kdfa(seed, "STORAGE", ak_name, b"", 128)
-        rc, enc_id, err = _openssl(["enc", "-aes-128-cfb", "-K", sym.hex(), "-iv", "00" * 16,
-                                    "-nosalt"], struct.pack(">H", len(secret)) + secret)
+        if ek["type"] == ALG_RSA:
+            seed = secrets.token_bytes(keylen)
+            kp = os.path.join(d, "ek.pem")
+            with open(kp, "w") as f:
+                f.write(_pem(ek_spki_der(ek)))
+            md = "sha256" if ek["name_alg"] == ALG_SHA256 else "sha384"
+            rc, enc_seed, err = _openssl([
+                "pkeyutl", "-encrypt", "-pubin", "-inkey", kp,
+                "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:" + md,
+                "-pkeyopt", "rsa_mgf1_md:" + md,
+                "-pkeyopt", "rsa_oaep_label:" + b"IDENTITY\0".hex()], seed)
+            if rc != 0 or len(enc_seed) != 256:
+                raise Bad("openssl could not encrypt to the EK: %s" % err.decode(errors="replace")[:200])
+            enc_secret = struct.pack(">H", len(enc_seed)) + enc_seed
+        else:
+            seed, enc_secret = _ecc_seed(ek, d)
+        sym = kdfa(hfn, seed, "STORAGE", ak_name, b"", ek["aes_bits"])
+        rc, enc_id, err = _openssl(["enc", "-aes-%d-cfb" % ek["aes_bits"], "-K", sym.hex(),
+                                    "-iv", "00" * 16, "-nosalt"],
+                                   struct.pack(">H", len(secret)) + secret)
         if rc != 0:
-            raise Bad("openssl aes-128-cfb failed: %s" % err.decode(errors="replace")[:200])
-    hk = kdfa(seed, "INTEGRITY", b"", b"", 256)
-    mac = _hmac.new(hk, enc_id + ak_name, hashlib.sha256).digest()
+            raise Bad("openssl aes-cfb failed: %s" % err.decode(errors="replace")[:200])
+    hk = kdfa(hfn, seed, "INTEGRITY", b"", b"", hfn().digest_size * 8)
+    mac = _hmac.new(hk, enc_id + ak_name, hfn).digest()
     idobj = struct.pack(">H", len(mac)) + mac + enc_id
-    return (struct.pack(">H", len(idobj)) + idobj,
-            struct.pack(">H", len(enc_seed)) + enc_seed)
+    return struct.pack(">H", len(idobj)) + idobj, enc_secret
+
+
+def bundle_eks(e):
+    """The EKs in a bundle's "ek" field: [{template, public, cert}]. Also reads
+    the single-RSA-EK form older hosts send."""
+    if not isinstance(e, dict):
+        return []
+    if isinstance(e.get("eks"), list):
+        return [x for x in e["eks"] if isinstance(x, dict) and x.get("public")]
+    if e.get("ek_public"):
+        return [{"template": "rsa2048", "public": e["ek_public"], "cert": e.get("ek_cert")}]
+    return []
 
 
 def ek_enroll(a, b, akpub, prev, out):
@@ -910,40 +1083,81 @@ def ek_enroll(a, b, akpub, prev, out):
             keep = {k: v for k, v in prev.items() if k.startswith("ek_")}
             return keep, None              # same AK: the old binding still holds
         return {}, None
-    e = b.get("ek")
-    if not isinstance(e, dict) or not e.get("ek_public"):
+    cands = bundle_eks(b.get("ek"))
+    if a.ek_cert:
+        # a certificate got elsewhere (Intel PTT, for one, serves its EK
+        # certificates online instead of storing them in NV)
+        with open(a.ek_cert, "rb") as f:
+            raw = f.read()
+        if b"-----BEGIN CERTIFICATE-----" in raw:
+            rc, raw, _ = _openssl(["x509", "-outform", "DER"], raw)
+            if rc != 0:
+                raise Bad("--ek-cert is not a certificate")
+        extra = base64.b64encode(raw).decode()
+        cands = [dict(c, cert=c.get("cert") or extra) for c in cands]
+    if not cands:
         out.append((False, "the bundle carries the TPM's endorsement key (attest quote --ek)"))
         return {}, None
-    try:
-        ek = parse_ek_public(base64.b64decode(e["ek_public"], validate=True))
-    except (Bad, ValueError) as x:
-        out.append((False, "the endorsement key is a standard RSA 2048 EK (%s)" % x))
-        return {}, None
-    out.append((True, "the endorsement key is a standard RSA 2048 EK"))
-    if prev.get("ek_name"):
-        out.append((prev["ek_name"] == ek["name"].hex(),
-                    "the endorsement key is the one already enrolled (same TPM)"))
-    issuer = None
-    if a.ek_ca:
+    parsed, bad = [], []
+    for c in cands:
         try:
-            cert = base64.b64decode(e.get("ek_cert") or "", validate=True)
-        except ValueError:
-            cert = b""
-        if not cert:
-            out.append((False, "the TPM has a manufacturer EK certificate (NV 0x01c00002)"))
+            parsed.append((parse_ek_public(base64.b64decode(c["public"], validate=True),
+                                           c.get("template", "")), c))
+        except (Bad, ValueError) as x:
+            bad.append("%s: %s" % (c.get("template"), x))
+    if not parsed:
+        out.append((False, "the TPM has an endorsement key under a known template (%s)" % "; ".join(bad)))
+        return {}, None
+    if a.ek_template:
+        parsed = [pc for pc in parsed if pc[0]["template"] == a.ek_template]
+        if not parsed:
+            out.append((False, "the TPM has a %s endorsement key" % a.ek_template))
             return {}, None
-        issuer = check_ek_cert(ek, cert, a.ek_ca, a.ek_intermediate or [], out)
+    if prev.get("ek_name"):
+        parsed.sort(key=lambda pc: pc[0]["name"].hex() != prev["ek_name"])
+    chosen, issuer = None, None
+    if a.ek_ca:
+        tried = []
+        for ek, c in parsed:
+            try:
+                cert = base64.b64decode(c.get("cert") or "", validate=True)
+            except ValueError:
+                cert = b""
+            if not cert:
+                continue
+            sub = []
+            iss = check_ek_cert(ek, cert, a.ek_ca, a.ek_intermediate or [], sub, aia=not a.no_aia)
+            tried.append(sub)
+            if all(ok for ok, _ in sub):
+                chosen, issuer = ek, iss
+                out.extend(sub)
+                break
+        if not chosen:
+            if not tried:
+                out.append((False, "the TPM has a manufacturer EK certificate (NV 0x01c00002, "
+                            "0x01c0000a or 0x01c00016)"))
+            for sub in tried:
+                out.extend(sub)
+            return {}, None
+    else:
+        chosen = parsed[0][0]
+    out.append((True, "the endorsement key is a standard %s EK" % chosen["template"]))
+    if prev.get("ek_name"):
+        out.append((prev["ek_name"] == chosen["name"].hex(),
+                    "the endorsement key is the one already enrolled (same TPM)"))
     secret = secrets.token_bytes(32)
-    cred, sec = make_credential(ek, bytes.fromhex(akpub["name"]), secret)
+    cred, sec = make_credential(chosen, bytes.fromhex(akpub["name"]), secret)
+    pub = next(c["public"] for ek, c in parsed if ek is chosen)
     rec = {
-        "ek_name": ek["name"].hex(),
-        "ek_public": e["ek_public"],
+        "ek_name": chosen["name"].hex(),
+        "ek_template": chosen["template"],
+        "ek_public": pub,
         "ek_certificate": "verified: " + issuer if issuer else "none (--ek-no-cert)",
         "ek_activation": "pending",
         "ek_secret_sha256": hashlib.sha256(secret).hexdigest(),
     }
     challenge = {"challenge_version": 1, "host": None, "ak_name": akpub["name"],
-                 "ek_name": rec["ek_name"],
+                 "ek_name": rec["ek_name"], "ek_template": chosen["template"],
                  "credential_b64": base64.b64encode(cred).decode(),
                  "secret_b64": base64.b64encode(sec).decode()}
     return rec, challenge
@@ -1240,6 +1454,9 @@ def main():
     e.add_argument("--ek-ca", action="append", metavar="PEM")
     e.add_argument("--ek-intermediate", action="append", metavar="PEM")
     e.add_argument("--ek-no-cert", action="store_true")
+    e.add_argument("--no-aia", action="store_true")
+    e.add_argument("--ek-cert", metavar="FILE")
+    e.add_argument("--ek-template", choices=sorted(EK_TEMPLATES))
     e.add_argument("--challenge", metavar="FILE")
     e.set_defaults(fn=cmd_enroll)
     pp = s.add_parser("policy")
