@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * policy_state.c - policy preview, snapshots and change history (TODO P1-6).
  *

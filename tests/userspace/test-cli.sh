@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-cli.sh - tests for `secure-sudo lint` and `secure-sudo load` (TODO
 # P0-2 CLI/config parsing, P0-6 policy preflight and load report).

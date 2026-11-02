@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #define main secure_sudod_entrypoint
 #include "../../userspace/daemon/secure-sudod.c"
 #undef main

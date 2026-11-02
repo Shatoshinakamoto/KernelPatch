@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * pam_secure_sudo.so - feed sudo/su auth results to the secure_sudo LSM.
  *

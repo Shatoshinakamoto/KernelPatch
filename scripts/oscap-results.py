@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 """oscap-results.py - read OpenSCAP results by rule ID (TODO P0-2).
 
 Reads an XCCDF/ARF results file (oscap xccdf eval --results/--results-arf)

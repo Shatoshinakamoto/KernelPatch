@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-attest.sh - remote attestation (TODO P2-1) end to end against software
 # TPMs: secure-sudo-attest signs a quote, attest-report.sh builds the bundle,

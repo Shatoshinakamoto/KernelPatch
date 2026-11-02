@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-FileCopyrightText: 2026 Johnathan Edward Brown */
 /* cli.h - shared bits of the secure-sudo CLI (secure-sudo.c + subcommands). */
 #ifndef SECURE_SUDO_CLI_H
 #define SECURE_SUDO_CLI_H

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * ssaddon_conf - strict config parsing for the temporary/ add-ons.
  * See ssaddon_conf.h for the rules.

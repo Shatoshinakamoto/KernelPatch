@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * ss_driver.c - Protection #6: driver blacklist (Bring-Your-Own-Vulnerable-
  * Driver defence).

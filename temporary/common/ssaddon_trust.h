@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-FileCopyrightText: 2026 Johnathan Edward Brown */
 /*
  * ssaddon_trust - baseline trust and evidence for the temporary/ add-ons
  * (TODO P2-2 part 2).

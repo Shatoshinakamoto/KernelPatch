@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # verify-kernel-source.sh - check a kernel.org release archive against its
 # detached OpenPGP signature BEFORE anything extracts it (TODO P0-4).

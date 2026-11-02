@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * ss_home.c - Protection #4: confine a non-sudo user's *writes* to their home
  * directory (plus the normally-writable scratch/device trees and a configured

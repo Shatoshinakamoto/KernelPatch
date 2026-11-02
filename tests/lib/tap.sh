@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 # shellcheck shell=bash
 # Minimal TAP helpers shared by the shell test suites. Source, don't run.
 TAP_N=0

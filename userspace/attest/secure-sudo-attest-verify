@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 """secure-sudo-attest-verify - check a secure_sudo attestation bundle on a
 machine you trust (TODO P2-1). Needs python3 and the openssl command only;
 no TPM and no secure_sudo install.

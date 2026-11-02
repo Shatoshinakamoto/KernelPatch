@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-install.sh - tests for install/install.sh (TODO P0-5): preflight
 # changes nothing and blocks what cannot work, the file manifest, upgrades

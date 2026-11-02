@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # guest-snapshot.sh - before/after record of everything install.sh may touch,
 # for the clean-removal check in run-install-test.sh. Runs in the guest.

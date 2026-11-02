@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # install-temporary.sh - OPT-IN installer for the secure_sudo temporary/ add-ons
 # (ProcGuard, DriverGuard, BiosGuard, BootGuard, Locus, tamperwatch, management

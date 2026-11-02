@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 /*
  * test-otp.c - tests for the OTP helper (userspace/otp/secure-sudo-otp.c),
  * TODO P0-2: RFC 4226/6238 vectors, base32, the clock-skew window, replay

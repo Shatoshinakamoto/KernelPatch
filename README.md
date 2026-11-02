@@ -223,6 +223,7 @@ Licensed under the [Apache License, Version 2.0](LICENSE). The in-kernel LSM
 code built into the Linux kernel has to be GPLv2-compatible, and Apache-2.0
 on its own is not, so those files also carry GPL-2.0
 ([LICENSES/GPL-2.0](LICENSES/GPL-2.0)) and may be used under either. Every
-source file names its license in an `SPDX-License-Identifier` line, and
+source file names its license and copyright holder in
+`SPDX-License-Identifier` and `SPDX-FileCopyrightText` lines, and
 `tests/userspace/test-licenses.sh` fails the build gate if one is missing or
 wrong. See [NOTICE](NOTICE).

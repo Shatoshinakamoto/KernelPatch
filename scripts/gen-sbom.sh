@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # gen-sbom.sh - SPDX 2.3 JSON software bill of materials for a secure_sudo
 # build (TODO P0-4): every secure_sudo source file with its SHA-256, the

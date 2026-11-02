@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # test-netpolicy.sh - net_mode's nftables rules against real traffic (TODO
 # P1-8). A small network is built from network namespaces and veth pairs,

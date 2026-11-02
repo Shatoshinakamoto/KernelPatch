@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security
 LDLIBS   ?= -lssl -lcrypto

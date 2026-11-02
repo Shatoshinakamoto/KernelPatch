@@ -1,5 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
 #
 # addons-refresh REASON - after a legitimate change to /boot or the module
 # tree (a package transaction, a kernel install or removal), re-baseline
