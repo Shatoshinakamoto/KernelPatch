@@ -41,6 +41,7 @@ secure-sudo-driverguard baseline >/dev/null
 M=$(find "$MD" -name '*.ko*' | head -1); cp "$M" /root/mod.orig; echo junk >> "$M"
 runit secure-sudo-driverguard.service
 r "driverguard enforce repairs $M under its sandbox" '[ "$(res secure-sudo-driverguard.service)" = success ] && cmp -s "$M" /root/mod.orig'
+r "... keeping the tampered bytes as evidence (P2-2 part 2)" 'grep -qF "\"action\":\"repair\",\"path\":\"$M\"" /var/lib/secure_sudo/addons/evidence/driverguard.jsonl'
 
 # --- locus
 systemctl start secure-sudo-locus.service

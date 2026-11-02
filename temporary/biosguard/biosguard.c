@@ -35,12 +35,16 @@
 
 #include "ssaddon_log.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_trust.h"
 
 #ifndef BIOS_CONF
 #define BIOS_CONF	"/etc/secure_sudo/addons/biosguard.conf"
 #endif
 #define CONF		BIOS_CONF
-#define STATEDIR	"/var/lib/secure_sudo/addons/biosguard"
+#ifndef BIOS_STATEDIR
+#define BIOS_STATEDIR	"/var/lib/secure_sudo/addons/biosguard"
+#endif
+#define STATEDIR	BIOS_STATEDIR
 #define MANIFEST	STATEDIR "/fingerprint"
 #define DMI_DIR		"/sys/class/dmi/id"
 #define ACPI_DIR	"/sys/firmware/acpi/tables"
@@ -117,8 +121,12 @@ static size_t build_fingerprint(FILE *mf)
 	return n;
 }
 
+static int load_trust(int *trust, FILE *r);
+
 static int cmd_baseline(void)
 {
+	int trust;
+
 	FILE *mf;
 	char tmp[] = STATEDIR "/.fp.XXXXXX";
 	size_t n;
@@ -148,6 +156,8 @@ static int cmd_baseline(void)
 		return 1;
 	}
 	chmod(MANIFEST, 0600);
+	load_trust(&trust, NULL);
+	sst_announce("biosguard", MANIFEST, "baseline", trust);
 	ssl_info("baseline: %zu firmware sources fingerprinted", n);
 	printf("biosguard: baseline captured %zu firmware sources\n", n);
 	return 0;
@@ -214,7 +224,18 @@ static int fingerprint_diff(void)
 
 static int cmd_scan(void)
 {
-	int mism = fingerprint_diff();
+	char why[512];
+	int trust, mism;
+
+	load_trust(&trust, NULL);
+	if (!sst_manifest_trusted(MANIFEST, trust, why, sizeof(why))) {
+		/* a fingerprint that may have been rewritten proves nothing */
+		ssl_notify(SSL_CRIT, "FIRMWARE fingerprint NOT TRUSTED (%s): the scan "
+			   "cannot vouch for the firmware", why);
+		printf("biosguard: fingerprint not trusted (%s)\n", why);
+		return 3;
+	}
+	mism = fingerprint_diff();
 
 	if (mism < 0)
 		return 1;
@@ -235,19 +256,37 @@ static int cmd_status(void)
 {
 	printf("BiosGuard (detect + log + notify only; no repair)\n");
 	printf("baseline:  %s\n", access(MANIFEST, F_OK) == 0 ? "present" : "none");
+	{
+		char t[640];
+		int trust;
+
+		load_trust(&trust, NULL);
+		sst_describe(MANIFEST, trust, t, sizeof(t));
+		printf("trust:     %s\n", t);
+	}
 	printf("sources:   %s DMI ids + %s ACPI tables\n", DMI_DIR, ACPI_DIR);
 	printf("on tamper: logged CRITICAL + notify_cmd (see logging.conf). Firmware "
 	       "is never written by this tool.\n");
 	return 0;
 }
 
-/* BiosGuard has no settings of its own yet: any line in biosguard.conf is an
- * error rather than a setting that silently does nothing. */
+/* biosguard.conf: one setting, the trust in the recorded fingerprint. */
+static int load_trust(int *trust, FILE *r)
+{
+	const struct ssc_key keys[] = {
+		{ "baseline_trust", SSC_ENUM, trust, 0, 0, 0, sst_modes },
+		SSC_END
+	};
+
+	*trust = SST_LOCAL;
+	return ssc_parse(CONF, keys, NULL, NULL, r);
+}
+
 static int conf_errors(FILE *r)
 {
-	const struct ssc_key none[] = { SSC_END };
+	int t;
 
-	return ssc_parse(CONF, none, NULL, NULL, r) + ssl_check_conf(r);
+	return load_trust(&t, r) + ssl_check_conf(r);
 }
 
 static void usage(void)

@@ -366,13 +366,13 @@ work still open below.
 
 | Add-on | Level | Default mode | Acts by | Still open before promotion |
 |--------|-------|--------------|---------|-----------------------------|
-| `procguard` | experimental | monitor | killing processes; removing a respawning executable | evidence on removal, adversarial tests, approved criteria, host soak |
-| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | evidence on quarantine, adversarial tests, approved criteria, host soak |
-| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | baseline trust source, evidence on repair, adversarial tests, approved criteria, host soak |
-| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | baseline trust source, evidence on restore, adversarial tests, approved criteria, host soak |
-| `biosguard` | experimental | detect | nothing (log + notify) | baseline trust source, adversarial tests, approved criteria, host soak |
+| `procguard` | experimental | monitor | killing processes; removing a respawning executable | adversarial tests, approved criteria, host soak |
+| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | adversarial tests, approved criteria, host soak |
+| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | adversarial tests, approved criteria, host soak |
+| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | adversarial tests, approved criteria, host soak |
+| `biosguard` | experimental | detect | nothing (log + notify) | adversarial tests, approved criteria, host soak |
 | `locus` | experimental | serve | nothing destructive (hands out directory names) | adversarial tests, approved criteria, host soak |
-| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | evidence on quarantine, adversarial tests, approved criteria, host soak |
+| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | adversarial tests, approved criteria, host soak |
 | `failure` | experimental | report | nothing (reports another unit's failure) | adversarial tests, approved criteria, host soak |
 | `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | strict config check, baseline trust source, evidence on repair, adversarial tests, approved criteria, host soak |
 
@@ -384,9 +384,11 @@ BootGuard's default is `enforce` because that mode only *stages* a restore; the
 restore is applied by a separate unit at the next boot, and the installer
 enables neither the timer nor the restore unit.
 
-Done for every add-on in this step: strict config checking, a sandboxed and
+Done for every add-on: strict config checking, a sandboxed and
 resource-limited unit, failure reporting, a threat model (below) and upgrade
-and rollback steps (below). The promotion criteria themselves (what "beta" and
+and rollback steps (below). Done where it applies: an independent trust source
+for the baselines and evidence kept before every repair, restore, removal or
+quarantine ([Baseline trust and evidence](#baseline-trust-and-evidence)). The promotion criteria themselves (what "beta" and
 "stable" require, and the soak period) are not decided yet: they need the
 operator's approval, and `maturity.json` records them as pending until then.
 
@@ -419,6 +421,63 @@ While a config has an error the acting commands (`daemon`, `scan`, `baseline`,
 missing file is not an error: the built-in defaults apply. The console runs the
 owning guard's `check-config` after every config change it makes and puts the
 previous file back if the change is rejected.
+
+## Baseline trust and evidence
+
+DriverGuard, BootGuard and BiosGuard act on a baseline they recorded
+themselves, so by default it is only as trustworthy as the host. Each now has
+`baseline_trust`:
+
+* `local` (default): the host's own copy is trusted, as before.
+* `signed`: the guard acts on its baseline (`manifest`, BiosGuard's
+  `fingerprint`) only when `<baseline>.sig` is a valid Ed25519 signature over
+  it by the operator's key. The host holds only the public half, at
+  `/etc/secure_sudo/addons/baseline-signing.pub` (root-owned, not group/world
+  writable). Without a valid signature the guard reports and never repairs,
+  stages or restores, and the run exits 3, so the unit fails and the failure
+  is reported. A staged BootGuard restore is checked again at boot.
+
+Set it up once, with the private key kept off the host:
+
+```sh
+# on the operator's machine (or removable media)
+openssl genpkey -algorithm ed25519 -out baseline-signing.key
+openssl pkey -in baseline-signing.key -pubout -out baseline-signing.pub
+# on the host
+install -m0644 baseline-signing.pub /etc/secure_sudo/addons/
+# set baseline_trust = signed in driverguard.conf / bootguard.conf / biosguard.conf
+# after every baseline or refresh, copy the manifest out, sign it, copy the .sig back:
+openssl pkeyutl -sign -rawin -inkey baseline-signing.key \
+    -in manifest -out manifest.sig
+```
+
+Every new baseline (`baseline`, a package hook's `refresh`) deletes the old
+signature and is logged CRITICAL with its SHA-256, entry count and the key's
+fingerprint, so the record is off the host as soon as it is made. After a
+kernel or package update the guard therefore stops repairing until the
+operator signs the new baseline. That is the point: a baseline nobody has
+looked at is not trusted. `status` shows the trust state.
+
+Two protections apply in both modes:
+
+* **Restores are checked against the baseline.** A backup is decompressed in
+  memory and written back only if its SHA-256 equals the baseline's. If the
+  newest backup does not match, older hourly ones (and the fixed bucket) are
+  tried; if none does, nothing is written. The file goes through a temporary
+  name in the same directory, created exclusively (a planted symlink there is
+  not followed), with the original owner and mode, then renamed into place.
+* **Evidence is kept.** Before DriverGuard repairs, BootGuard restores,
+  ProcGuard removes, or tamperwatch or the console quarantines, the current
+  file's bytes are kept compressed under
+  `/var/lib/secure_sudo/addons/evidence/<feature>/`, and one JSON line is
+  appended to `evidence/<feature>.jsonl`: time, action, path, SHA-256, the
+  baseline's SHA-256, size, mode, owner, mtime, ctime, inode and the copy.
+  It is also logged CRITICAL (and shipped off-box).
+
+Not yet covered: PheonixBox's own snapshots (it is core; tracked in
+`maturity.json`), and a root attacker who replaces the public key; for that,
+compare the key fingerprint in the off-box log, or use remote attestation
+([ATTESTATION.md](ATTESTATION.md)).
 
 ## Service hardening and failure reporting
 
@@ -478,9 +537,9 @@ mode is opt-in and each config is checked strictly.
   refuses to run; PID 1, kernel threads, its own ancestors and the installed
   secure_sudo programs are never killed; nothing is removed from a system
   directory (now enforced by the unit's read-only system dirs too).
-* **Open:** the original path and the quarantined sample are logged, but not
-  the content hash, owner, mode or times (the evidence record, P2-2 part 2),
-  and the adversarial tests (P2-2 part 3) are not written.
+* **Evidence:** before an executable is removed, its hash, owner, mode, times
+  and the quarantined copy are recorded (`evidence/procguard.jsonl`).
+* **Open:** the adversarial tests (P2-2 part 3).
 
 #### tamperwatch
 
@@ -499,8 +558,12 @@ mode is opt-in and each config is checked strictly.
 * **Defends:** a module file on disk changed outside a package transaction,
   repaired from its backup in enforce mode.
 * **Does not defend:** a module already loaded (that is the kernel LSM's job),
-  or a baseline rewritten by root: today the baseline and backups are only as
-  trustworthy as the host (P2-2 part 2 adds an independent trust source).
+  or a baseline rewritten by root while `baseline_trust = local` (the
+  default). With `signed`, a rewritten baseline is not acted on; a root
+  attacker can still replace the public key, which the off-box log shows
+  (every new baseline is logged with its hash and the key fingerprint).
+  A backup is only written back if its bytes match the baseline, so a
+  swapped backup is refused.
 * **Harm if wrong:** putting back an old module over a legitimate update.
   Mitigations: monitor by default; scans defer while a package manager holds
   its lock, and the package hooks re-baseline after an update.
@@ -511,7 +574,8 @@ mode is opt-in and each config is checked strictly.
   from its backup at the next boot.
 * **Does not defend:** firmware or the ESP outside `boot_dir`, a change that
   never touches the files (a different boot entry in NVRAM), or a rewritten
-  baseline (P2-2 part 2).
+  baseline while `baseline_trust = local`. The staged restore re-checks the
+  baseline's trust at boot, and writes back only backups that match it.
 * **Harm if wrong:** booting an older kernel or initrd after a legitimate
   update. Mitigations: restores are staged, never live (`apply-now` needs
   `--i-understand-the-risk`); scans defer during a package transaction; the
@@ -522,8 +586,9 @@ mode is opt-in and each config is checked strictly.
 * **Defends:** detects a change in the DMI identity or ACPI tables and reports
   it CRITICAL; it never writes firmware.
 * **Does not defend:** firmware changes that leave DMI and ACPI unchanged
-  (measured boot, P2-1, is the stronger check), or a rewritten fingerprint
-  (P2-2 part 2).
+  (measured boot, P2-1, is the stronger check), or a fingerprint rewritten
+  while `baseline_trust = local` (with `signed`, an unsigned or edited
+  fingerprint fails the scan with a CRITICAL notification).
 * **Harm if wrong:** a false alarm after a legitimate firmware update; nothing
   is changed.
 
@@ -577,7 +642,8 @@ hooks, keeps every config you edited, and enables nothing new. Then:
    (`systemctl restart secure-sudo-procguard` and so on).
 3. Baselines (`/var/lib/secure_sudo/addons/*/manifest`, BiosGuard's
    `fingerprint`) and backups are kept across upgrades; re-baseline only if the
-   release notes say the format changed.
+   release notes say the format changed. With `baseline_trust = signed`, sign
+   any baseline the upgrade rewrote.
 
 **Rollback.** Keep the previous release tarball. To go back, stop the add-on
 units, install the previous tree with its own `install-temporary.sh`, then

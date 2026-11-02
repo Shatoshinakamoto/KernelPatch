@@ -315,9 +315,13 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     gate), strict config checking with `check-config` in every add-on, hardened
     and resource-limited units with failure reporting (tested under real
     systemd in a VM), a threat model per add-on, and upgrade/rollback steps.
-    Open: baseline trust source and evidence retention (part 2), the
-    adversarial tests above (part 3), promotion criteria for the operator to
-    approve (part 4), PheonixBox `check-config`.
+    *Part 2:* operator-signed baselines (`baseline_trust = signed`),
+    restores verified against the baseline hash, evidence records before
+    every repair, restore, removal or quarantine (docs/ADDONS.md "Baseline
+    trust and evidence").
+    Open: the adversarial tests above (part 3), promotion criteria for the
+    operator to approve (part 4), PheonixBox `check-config` and baseline
+    trust.
 
 - [ ] **P2-3: Improve alerting and fleet integration.**
   - Define a documented event format and supported integrations for common

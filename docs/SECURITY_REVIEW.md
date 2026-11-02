@@ -1242,6 +1242,36 @@ the tree to `temporary/maturity.json` (`ci/check-addon-maturity.py`).
 
 ---
 
+### 70. Add-on repairs trusted any backup and any baseline, and kept no evidence (v8–v12, found 2026-11-01 by P2-2) — SI-7 / AU-9 / CP-10
+
+DriverGuard and BootGuard wrote back the newest backup without checking it
+against the baseline hash, so anyone who could replace a backup blob chose
+what was installed as a kernel module or into /boot at the next boot. The
+restore also opened the target with `O_TRUNC` and followed a symlink there.
+The baselines themselves were only as trustworthy as the host, and a repair
+or removal destroyed the only copy of what the attacker had put there.
+
+Now (`temporary/common/ssaddon_trust.c`):
+
+1. A restore is decompressed in memory and written only if its SHA-256 equals
+   the baseline's. Older backups are tried past one that does not match.
+   It goes through an exclusively created temporary file (never through a
+   planted symlink) with the original owner and mode, then a rename.
+2. `baseline_trust = signed` makes DriverGuard, BootGuard and BiosGuard act
+   only on a baseline carrying a valid Ed25519 signature by the operator's
+   off-host key; every new baseline is logged CRITICAL with its hash and the
+   key fingerprint. The boot-time restore re-checks it.
+3. Before every repair, restore, removal or quarantine the original bytes are
+   kept and a JSON evidence record (hash, expected hash, size, mode, owner,
+   times, inode, copy) is appended and logged.
+
+Also fixed: ProcGuard's `sync_cmd` substitution had the same
+write-past-the-buffer pattern as #69 and did not escape a quote in the
+sample path; it now refuses both. Tested by `tests/userspace/test-addons.sh`
+(84 checks).
+
+---
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

@@ -160,15 +160,16 @@ out:
 	return rc;
 }
 
-int store_restore_compressed(const char *blobpath, const char *dstpath)
+int store_load_compressed(const char *blobpath, unsigned char **out, size_t *len)
 {
 	FILE *f;
 	uint64_t orig = 0;
 	long csz;
 	unsigned char *cbuf = NULL, *obuf = NULL;
 	uLongf olen;
-	int fd, rc = -1;
 
+	*out = NULL;
+	*len = 0;
 	f = fopen(blobpath, "rbe");
 	if (!f)
 		return -1;
@@ -193,24 +194,39 @@ int store_restore_compressed(const char *blobpath, const char *dstpath)
 	}
 	fclose(f);
 	olen = orig;
-	if (uncompress(obuf, &olen, cbuf, (uLong)csz) != Z_OK || olen != orig)
-		goto out;
-	fd = open(dstpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	if (fd < 0)
-		goto out;
-	if (write(fd, obuf, (size_t)orig) == (ssize_t)orig) {
-		fsync(fd);
-		rc = 0;
+	if (uncompress(obuf, &olen, cbuf, (uLong)csz) != Z_OK || olen != orig) {
+		free(cbuf);
+		free(obuf);
+		return -1;
 	}
-	close(fd);
-out:
 	free(cbuf);
+	*out = obuf;
+	*len = (size_t)orig;
+	return 0;
+}
+
+int store_restore_compressed(const char *blobpath, const char *dstpath)
+{
+	unsigned char *obuf;
+	size_t orig;
+	int fd, rc = -1;
+
+	if (store_load_compressed(blobpath, &obuf, &orig) != 0)
+		return -1;
+	fd = open(dstpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd >= 0) {
+		if (write(fd, obuf, orig) == (ssize_t)orig) {
+			fsync(fd);
+			rc = 0;
+		}
+		close(fd);
+	}
 	free(obuf);
 	return rc;
 }
 
-int store_find_latest(const char *root, const char *label, const char *srcpath,
-		      char *out, size_t n)
+int store_find_before(const char *root, const char *label, const char *srcpath,
+		      const char *below, char *out, size_t n, char *bucket, size_t bn)
 {
 	DIR *d = opendir(root);
 	struct dirent *de;
@@ -218,6 +234,12 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
 	char best_bucket[32] = "";
 	int found = 0;
 
+	/* the fixed bucket is tried last: after it there is nothing older */
+	if (below && !strcmp(below, "fixed")) {
+		if (d)
+			closedir(d);
+		return -1;
+	}
 	if (!d)
 		return -1;
 	if (sha256_first8(srcpath, sha8) != 0)
@@ -239,6 +261,8 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
 			continue;
 		if (stat(cand, &st) != 0 || !S_ISREG(st.st_mode))
 			continue;
+		if (below && strcmp(de->d_name, below) >= 0)
+			continue;		/* already tried: look further back */
 		if (!found || strcmp(de->d_name, best_bucket) > 0) {
 			snprintf(best_bucket, sizeof(best_bucket), "%s", de->d_name);
 			found = 1;
@@ -248,9 +272,13 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
 	if (found) {
 		if (snprintf(out, n, "%s/%s/%s", root, best_bucket, want) >= (int)n)
 			return -1;
+		if (bucket)
+			snprintf(bucket, bn, "%s", best_bucket);
 		return 0;
 	}
 	/* No hourly bucket had it: fall back to the fixed (rotation-off) bucket. */
+	if (bucket)
+		snprintf(bucket, bn, "fixed");
 	{
 		char cand[PATH_MAX];
 		struct stat st;
@@ -263,6 +291,12 @@ int store_find_latest(const char *root, const char *label, const char *srcpath,
 		}
 	}
 	return -1;
+}
+
+int store_find_latest(const char *root, const char *label, const char *srcpath,
+		      char *out, size_t n)
+{
+	return store_find_before(root, label, srcpath, NULL, out, n, NULL, 0);
 }
 
 /* ---- Locus client ---- */

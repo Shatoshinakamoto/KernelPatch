@@ -53,6 +53,7 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_trust.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef PG_CONF
@@ -303,9 +304,22 @@ static void run_sync(const struct cfg *c, const char *sample)
 
 	if (!c->sync_cmd[0])
 		return;
+	if (strchr(sample, '\'')) {		/* it is quoted below */
+		ssl_warn("sync_cmd not run: the sample path contains a quote: %s", sample);
+		return;
+	}
 	for (p = c->sync_cmd; *p && o < sizeof(cmd) - 1; p++) {
 		if (p[0] == '%' && p[1] == 'f') {
-			o += snprintf(cmd + o, sizeof(cmd) - o, "'%s'", sample);
+			size_t l = strlen(sample) + 2;
+
+			/* never cut the quoted path short (this used to run past
+			 * the end of cmd[]) */
+			if (o + l >= sizeof(cmd)) {
+				ssl_warn("sync_cmd not run: the command would be longer "
+					 "than %zu bytes", sizeof(cmd) - 1);
+				return;
+			}
+			o += (size_t)snprintf(cmd + o, sizeof(cmd) - o, "'%s'", sample);
 			p++;
 		} else {
 			cmd[o++] = *p;
@@ -341,6 +355,10 @@ static void handle_infection(const struct cfg *c, const char *path)
 		return;
 	}
 	ssl_crit("INFECTION quarantined: %s -> %s", path, sample);
+	/* hash, owner, mode and times of the original, before it goes */
+	sst_evidence("procguard", path,
+		     c->remove_on_infection && !in_system_dir(path) ? "remove" : "quarantine",
+		     NULL, sample);
 
 	if (c->remove_on_infection && in_system_dir(path)) {
 		ssl_warn("INFECTION left on disk: %s is in a system directory (a "

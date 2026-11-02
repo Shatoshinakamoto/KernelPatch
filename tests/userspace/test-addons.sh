@@ -24,8 +24,9 @@ addon_cc() { # out src extra-defines...
 	local out="$1" src="$2"; shift 2
 	gcc -O2 -Wall -Wextra -Werror -I"$COMMON" \
 		-DSSL_CONF="\"$T/logging.conf\"" -DSSL_DEF_DIR="\"$T/log\"" \
-		-DLOCUS_CLIENT_CONF="\"$T/locus-client.conf\"" "$@" \
-		-o "$out" "$src" "$COMMON/ssaddon_log.c" "$COMMON/ssaddon_store.c" "$COMMON/ssaddon_conf.c" \
+		-DLOCUS_CLIENT_CONF="\"$T/locus-client.conf\"" -DSSADDON_EVIDENCE_ROOT="\"$T/evidence\"" \
+		-DSSADDON_SIGNING_KEY="\"$T/sign.pub\"" "$@" \
+		-o "$out" "$src" "$COMMON/ssaddon_log.c" "$COMMON/ssaddon_store.c" "$COMMON/ssaddon_conf.c" "$COMMON/ssaddon_trust.c" \
 		-lcrypto -lz 2> "$T/build.err"
 }
 
@@ -332,7 +333,7 @@ check "... (the shared port is caught once the rest is valid)" sh -c "[ $(ccheck
 "$LC" serve > /dev/null 2>&1; rc=$?
 eq "... and Locus refuses to serve" "$rc" 78
 printf 'scan_interval = 5\n' > "$T/biosguard.conf"
-check "biosguard.conf: BiosGuard has no settings, so any key is an error" sh -c "[ $(ccheck "$BI") = 1 ] && grep -qF \"unknown setting 'scan_interval'\" '$T/cc.out'"
+check "biosguard.conf: an unknown key is an error" sh -c "[ $(ccheck "$BI") = 1 ] && grep -qF \"unknown setting 'scan_interval'\" '$T/cc.out'"
 install -m0644 "$ROOT/temporary/config/biosguard.conf" "$T/biosguard.conf"
 
 # the console: its own gui.conf, and a change it makes that a guard rejects
@@ -397,5 +398,131 @@ else
 	not_ok "the long-notification test harness builds ($(head -1 "$T/build.err"))"
 fi
 logconf
+
+# ------------------------------------- P2-2 part 2: baseline trust and evidence
+echo "# Baseline trust, verified restores and evidence (ssaddon_trust)"
+logconf
+X="$T/mods/kernel/drivers/x.ko"
+# a stored blob (ssaddon_store format) holding other bytes than the baseline's
+mkblob() { python3 -c 'import struct,sys,zlib; d=sys.argv[2].encode(); open(sys.argv[1],"wb").write(struct.pack("<Q",len(d))+zlib.compress(d))' "$1" "$2"; }
+dgconf enforce
+echo mod-v3 > "$X"; chmod 0640 "$X"; "$DG" baseline > /dev/null 2>&1
+check "a new baseline is announced with its SHA-256 (on record off-box)" sh -c "
+	grep -qE 'BASELINE driverguard \(baseline\): $T/dg/manifest sha256=[0-9a-f]{64}, 1 entries; trust=local' '$DGLOG'"
+GOOD="$(sha256sum "$X" | cut -d' ' -f1)"
+echo evil > "$X"; chmod 0640 "$X"; EVIL="$(sha256sum "$X" | cut -d' ' -f1)"
+ln -sf "$T/victim" "$X.ss-restore"; echo victim > "$T/victim"
+"$DG" scan > "$T/out" 2>&1
+check "enforce repair: the module is back, with its owner and mode kept" sh -c "
+	[ \"\$(cat '$X')\" = mod-v3 ] && [ \"\$(stat -c %a '$X')\" = 640 ] && grep -qF 'sha256 verified' '$DGLOG'"
+check "... and a symlink planted at the temporary name was not written through" sh -c "
+	[ \"\$(cat '$T/victim')\" = victim ] && [ ! -e '$X.ss-restore' ]"
+check "... and the tampered bytes were kept as evidence first (hash, owner, mode, times, copy)" python3 -c "
+import json, os
+r = [json.loads(l) for l in open('$T/evidence/driverguard.jsonl')][-1]
+assert r['action'] == 'repair' and r['path'] == '$X' and r['sha256'] == '$EVIL', r
+assert r['expected_sha256'] == '$GOOD' and r['mode'] == '0640' and r['uid'] == 0 and r['size'] == 5
+assert r['mtime'] > 0 and os.path.isfile(r['sample'])"
+# a backup that does not match the baseline is never written back
+B="$(find "$T/dg/backups/fixed" -name 'drv.*.z' | head -1)"
+cp "$B" "$T/good.blob"; mkblob "$B" "attacker module"
+echo evil > "$X"; "$DG" scan > "$T/out" 2>&1
+check "a swapped backup is refused: the file is not overwritten with it" sh -c "
+	[ \"\$(cat '$X')\" = evil ] && grep -qF 'does not match the baseline' '$DGLOG' &&
+	grep -qF 'DRIVER not repaired: $X' '$DGLOG'"
+# rotating backups: the newest one is bad, an older one is good
+mkdir -p "$T/dg/backups/2026010100" "$T/dg/backups/2026010200"
+cp "$T/good.blob" "$T/dg/backups/2026010100/$(basename "$B")"
+mkblob "$T/dg/backups/2026010200/$(basename "$B")" "newer attacker module"
+"$DG" scan > "$T/out" 2>&1
+check "... and the restore walks back to the newest backup that matches" sh -c "
+	[ \"\$(cat '$X')\" = mod-v3 ] && grep -qF 'restored $X from an older backup: 1 newer one(s) did not match' '$DGLOG'"
+rm -rf "$T/dg/backups/2026010100" "$T/dg/backups/2026010200"; cp "$T/good.blob" "$B"
+
+# baseline_trust = signed: an operator key the host only has the public half of
+openssl genpkey -algorithm ed25519 -out "$T/sign.key" 2>/dev/null
+openssl pkey -in "$T/sign.key" -pubout -out "$T/sign.pub" 2>/dev/null; chmod 0644 "$T/sign.pub"
+sign() { openssl pkeyutl -sign -rawin -inkey "$T/sign.key" -in "$1" -out "$1.sig" 2>/dev/null; }
+dgconf enforce; echo 'baseline_trust = signed' >> "$T/driverguard.conf"
+echo evil > "$X"; "$DG" scan > "$T/out" 2>&1; rc=$?
+check "signed mode, unsigned baseline: reported, nothing repaired, the unit fails (3)" sh -c "
+	[ $rc = 3 ] && [ \"\$(cat '$X')\" = evil ] && grep -qF 'DRIVER baseline NOT TRUSTED (the baseline is not signed' '$DGLOG'"
+"$DG" status > "$T/out" 2>&1
+check "... and status says why" grep -qF 'baseline trust:    signed - NOT TRUSTED: the baseline is not signed' "$T/out"
+sign "$T/dg/manifest"
+"$DG" scan > "$T/out" 2>&1; rc=$?
+check "signed by the operator's key: the repair goes ahead" sh -c "[ $rc = 0 ] && [ \"\$(cat '$X')\" = mod-v3 ]"
+echo '# edited' >> "$T/dg/manifest"; echo evil > "$X"
+"$DG" scan > "$T/out" 2>&1; rc=$?
+check "an edited baseline no longer verifies: nothing repaired" sh -c "
+	[ $rc = 3 ] && [ \"\$(cat '$X')\" = evil ] && grep -qF 'signature does not verify' '$DGLOG'"
+openssl genpkey -algorithm ed25519 -out "$T/other.key" 2>/dev/null
+openssl pkeyutl -sign -rawin -inkey "$T/other.key" -in "$T/dg/manifest" -out "$T/dg/manifest.sig" 2>/dev/null
+"$DG" scan > /dev/null 2>&1; rc=$?
+eq "a baseline signed with another key is refused" "$rc" 3
+sign "$T/dg/manifest"; chmod 0664 "$T/sign.pub"
+"$DG" scan > /dev/null 2>&1; rc=$?
+check "a signing key writable by group or others is not trusted" sh -c "[ $rc = 3 ] && grep -qF 'writable by group or others' '$DGLOG'"
+chmod 0644 "$T/sign.pub"
+"$DG" scan > /dev/null 2>&1
+SS_ADDONS_BIN="$T/bin" sh "$ROOT/temporary/hooks/addons-refresh" kernel-update
+check "a refresh (package hook) drops the old signature and names the key to sign with" sh -c "
+	[ ! -e '$T/dg/manifest.sig' ] && grep -qE 'BASELINE driverguard \(kernel-update\): .* trust=signed, sign it with the key [0-9a-f]{16}' '$DGLOG'"
+dgconf monitor
+
+# BootGuard: the staged restore is checked against the baseline at boot
+bgconf enforce
+echo kernel-v4 > "$T/boot/vmlinuz"; "$BG" baseline > /dev/null 2>&1
+echo evil4 > "$T/boot/vmlinuz"; "$BG" scan > /dev/null 2>&1
+check "the staged restore records each file's baseline hash" sh -c "
+	grep -qP '^\Q$T/boot/vmlinuz\E\t[0-9a-f]{64}$' '$T/bg/restore.list'"
+BB=""
+for b in "$T"/bg/backups/fixed/boot.*.z; do
+	python3 -c 'import struct,sys,zlib; d=open(sys.argv[1],"rb").read(); n=struct.unpack("<Q",d[:8])[0]; sys.exit(0 if zlib.decompress(d[8:])==b"kernel-v4\n" else 1)' "$b" && BB="$b"
+done
+cp "$BB" "$T/bgood.blob"; mkblob "$BB" "evil kernel"
+"$BG" restore-staged > /dev/null 2>&1
+check "a swapped boot backup is refused at boot" sh -c "
+	[ \"\$(cat '$T/boot/vmlinuz')\" = evil4 ] && grep -qF 'BOOT restore FAILED: $T/boot/vmlinuz' '$BGLOG'"
+cp "$T/bgood.blob" "$BB"
+"$BG" scan > /dev/null 2>&1
+"$BG" restore-staged > /dev/null 2>&1
+check "... a good one is applied, and what it replaced is kept as evidence" sh -c "
+	[ \"\$(cat '$T/boot/vmlinuz')\" = kernel-v4 ] && grep -qF '\"action\":\"restore\",\"path\":\"$T/boot/vmlinuz\"' '$T/evidence/bootguard.jsonl'"
+echo evil5 > "$T/boot/vmlinuz"; printf '%s\t%s\n' "$T/boot/vmlinuz" "$BB" > "$T/bg/restore.list"; : > "$T/bg/PENDING"
+"$BG" restore-staged > /dev/null 2>&1
+check "a restore staged by an older release (no hash) is checked against the baseline" sh -c "
+	[ \"\$(cat '$T/boot/vmlinuz')\" = kernel-v4 ] && [ ! -e '$T/bg/PENDING' ]"
+echo evil6 > "$T/boot/vmlinuz"; "$BG" scan > /dev/null 2>&1
+echo 'baseline_trust = signed' >> "$T/bootguard.conf"
+"$BG" restore-staged > /dev/null 2>&1; rc=$?
+check "signed mode, unsigned baseline: the boot restore is refused and kept for the operator" sh -c "
+	[ $rc = 3 ] && [ \"\$(cat '$T/boot/vmlinuz')\" = evil6 ] && [ -e '$T/bg/PENDING' ] &&
+	grep -qF 'BOOT restore REFUSED: the baseline is not trusted' '$BGLOG'"
+sign "$T/bg/manifest"; "$BG" restore-staged > /dev/null 2>&1
+eq "... and applied once the operator signs the baseline" "$(cat "$T/boot/vmlinuz")" kernel-v4
+bgconf monitor
+
+# ProcGuard and tamperwatch keep evidence of what they remove or quarantine
+check "ProcGuard: the removed implant's hash, owner and mode are on record" python3 -c "
+import json
+r = [json.loads(l) for l in open('$T/evidence/procguard.jsonl') if '\"$T/evil/evil\"' in l]
+assert r and r[0]['action'] == 'remove' and len(r[0]['sha256']) == 64 and r[0]['sample'], r"
+if grep -q 'killed tamperer' "$TWLOG" 2>/dev/null; then
+	check "tamperwatch: the tamperer's executable is on record before the kill" grep -qF '"action":"quarantine","path":"'"$T"'/evil/mybash"' "$T/evidence/tamperwatch.jsonl"
+fi
+cat > "$T/gui-ev.py" <<'GUIEV'
+import importlib.machinery, importlib.util, json, sys
+loader = importlib.machinery.SourceFileLoader("gui", sys.argv[1])
+spec = importlib.util.spec_from_loader("gui", loader)
+g = importlib.util.module_from_spec(spec); loader.exec_module(g)
+r = g.record_evidence(sys.argv[2], "quarantine", "/x.gz")
+print(json.dumps(r))
+GUIEV
+SS_EVIDENCE_ROOT="$T/evidence" python3 -B "$T/gui-ev.py" "$GUI" "$T/evil/mybash" > /dev/null 2>&1
+check "the console keeps the same record before its quarantine kill" python3 -c "
+import json
+r = [json.loads(l) for l in open('$T/evidence/gui.jsonl')][-1]
+assert r['feature'] == 'gui' and r['path'] == '$T/evil/mybash' and len(r['sha256']) == 64 and r['sample'] == '/x.gz'"
 
 tap_done

@@ -46,6 +46,7 @@
 #include "ssaddon_log.h"
 #include "ssaddon_store.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_trust.h"
 
 /* Overridable for the tests only (tests/userspace/test-addons.sh). */
 #ifndef TW_PBOX_CONF
@@ -220,10 +221,13 @@ static void quarantine_offender(const struct cfg *c, pid_t pid, const char *exe)
 		ssl_err("cannot create quarantine bucket under %s", root);
 		return;
 	}
-	if (store_put_compressed(exe, bucket, "tamper", sample, sizeof(sample)) == 0)
+	if (store_put_compressed(exe, bucket, "tamper", sample, sizeof(sample)) == 0) {
 		ssl_crit("quarantined tamperer exe %s -> %s", exe, sample);
-	else
+		sst_evidence("tamperwatch", exe, "quarantine", NULL, sample);
+	} else {
 		ssl_err("failed to quarantine exe %s", exe);
+		sst_evidence("tamperwatch", exe, "quarantine", NULL, NULL);
+	}
 	if (kill(pid, SIGKILL) == 0)
 		ssl_crit("killed tamperer pid %d (%s)", pid, exe);
 }
