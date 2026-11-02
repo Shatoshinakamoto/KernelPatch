@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * pam-harness.c - run one PAM authentication against a private config
  * directory, for tests/userspace/test-pam.sh (TODO P0-2/P0-6).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 """check-addon-maturity.py [ROOT] - hold the temporary/ add-ons to their
 published maturity status (TODO P2-2).
 

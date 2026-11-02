@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # stig-gate.sh - the STIG regression gate (TODO P0-2/P0-3).
 #

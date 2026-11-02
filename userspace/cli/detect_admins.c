@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * detect_admins.c - `secure-sudo detect-admins [-n]`: find every admin group
  * on this box and make its members count as sudo users.

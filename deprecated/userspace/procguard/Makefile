@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 # secure-sudo-procguard - built with the shared add-on logging + store helpers.
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security

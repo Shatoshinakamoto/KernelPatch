@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # run-install-test.sh - the full install / trial boot / rollback / removal
 # exercise in a real distro VM (TODO P0-3, P0-5, P0-6).

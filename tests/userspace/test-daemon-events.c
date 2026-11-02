@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * test-daemon-events.c - how secure-sudod reads kernel events and acts on
  * them (cooldown kill, TimeVault quarantine/wipe). Built by

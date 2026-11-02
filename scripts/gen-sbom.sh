@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # gen-sbom.sh - SPDX 2.3 JSON software bill of materials for a secure_sudo
 # build (TODO P0-4): every secure_sudo source file with its SHA-256, the
@@ -120,7 +120,7 @@ while IFS= read -r f; do
 	files+=("{\"SPDXID\":$(json "$fid"),\"fileName\":$(json "./$f"),\"checksums\":[{\"algorithm\":\"SHA1\",\"checksumValue\":\"$(sha1sum "$ROOT/$f" | cut -d' ' -f1)\"},{\"algorithm\":\"SHA256\",\"checksumValue\":\"$(sha256sum "$ROOT/$f" | cut -d' ' -f1)\"}],\"licenseConcluded\":\"NOASSERTION\",\"copyrightText\":\"NOASSERTION\"}")
 	rel "SPDXRef-Package-secure-sudo" CONTAINS "$fid"
 done < <(list_sources)
-pkgs+=("{\"SPDXID\":\"SPDXRef-Package-secure-sudo\",\"name\":\"secure_sudo\",\"versionInfo\":$(json "$version"),\"supplier\":\"NOASSERTION\",\"downloadLocation\":\"NOASSERTION\",\"filesAnalyzed\":true,\"packageVerificationCode\":{\"packageVerificationCodeValue\":\"$(list_sources | while IFS= read -r f; do sha1sum "$ROOT/$f" | cut -d' ' -f1; done | LC_ALL=C sort | tr -d '\n' | sha1sum | cut -d' ' -f1)\"},\"licenseConcluded\":\"NOASSERTION\",\"licenseDeclared\":\"GPL-2.0-only\",\"copyrightText\":\"NOASSERTION\",\"primaryPackagePurpose\":\"SOURCE\",\"comment\":$(json "source tree sha256 $th")}")
+pkgs+=("{\"SPDXID\":\"SPDXRef-Package-secure-sudo\",\"name\":\"secure_sudo\",\"versionInfo\":$(json "$version"),\"supplier\":\"NOASSERTION\",\"downloadLocation\":\"NOASSERTION\",\"filesAnalyzed\":true,\"packageVerificationCode\":{\"packageVerificationCodeValue\":\"$(list_sources | while IFS= read -r f; do sha1sum "$ROOT/$f" | cut -d' ' -f1; done | LC_ALL=C sort | tr -d '\n' | sha1sum | cut -d' ' -f1)\"},\"licenseConcluded\":\"NOASSERTION\",\"licenseDeclared\":\"Apache-2.0 AND (GPL-2.0-only OR Apache-2.0)\",\"copyrightText\":\"Copyright 2026 Johnathan Edward Brown\",\"primaryPackagePurpose\":\"SOURCE\",\"comment\":$(json "source tree sha256 $th")}")
 rel SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-secure-sudo
 
 # The kernel source, as verified by scripts/verify-kernel-source.sh.

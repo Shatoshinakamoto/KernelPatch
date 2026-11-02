@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # recovery-exercises.sh - TODO P0-6 in a real guest: lint and load against
 # the running secure_sudo kernel, then four operator mistakes, each detected

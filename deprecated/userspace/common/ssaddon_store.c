@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * ssaddon_store - hourly-rotating compressed storage + Locus client.
  * See ssaddon_store.h for the interface and design notes.

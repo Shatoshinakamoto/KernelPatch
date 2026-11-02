@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # boot-test.sh - boot a secure_sudo kernel in a throwaway QEMU guest and run
 # the in-kernel functional tests (tests/vm/ss-functest.c) against it.

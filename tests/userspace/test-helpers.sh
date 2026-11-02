@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-helpers.sh - tests for the daemon's helpers (TODO P0-2): apply-net.sh
 # (#10 network modes) and quarantine.sh (#13 TimeVault quarantine).

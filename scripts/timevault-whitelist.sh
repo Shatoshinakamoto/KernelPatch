@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # timevault-whitelist.sh - manage the secure_sudo TimeVault exec allowlist.
 #

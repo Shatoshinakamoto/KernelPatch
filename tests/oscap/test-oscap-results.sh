@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # Tests for scripts/oscap-results.py and tests/oscap/stig-gate.sh (TODO P0-2):
 # rule-ID comparison, the release/diagnostic split, --skip-rules fix

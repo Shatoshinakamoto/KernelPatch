@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 OR Apache-2.0 */
 /*
  * secure_sudo.h - shared definitions for the secure_sudo LSM.
  *

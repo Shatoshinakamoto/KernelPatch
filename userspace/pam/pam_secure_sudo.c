@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * pam_secure_sudo.so - feed sudo/su auth results to the secure_sudo LSM.
  *

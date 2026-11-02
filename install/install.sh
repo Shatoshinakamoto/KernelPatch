@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # install.sh - build and install the secure_sudo patched kernel + userspace on
 # Debian/Ubuntu, Fedora/RHEL, Arch and openSUSE (derivatives detected via

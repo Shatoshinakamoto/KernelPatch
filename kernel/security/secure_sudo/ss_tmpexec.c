@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 /*
  * ss_tmpexec.c - Protection #12: stop non-sudo users executing code out of the
  * world-writable scratch trees.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # run-stig-test.sh - the DISA STIG release run in a real VM (TODO P0-3).
 #

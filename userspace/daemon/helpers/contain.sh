@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # contain.sh - incident containment (TODO P1-7), run by `secure-sudo contain`.
 #

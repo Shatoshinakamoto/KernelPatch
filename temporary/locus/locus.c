@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * secure-sudo-locus - Locus (v8 temporary add-on): the location allocator.
  *

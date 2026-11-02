@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * node_scan.c - `secure-sudo node-scan`: find Node.js runtimes that are not
  * at a standard path and register them for the Node child guard (#11).

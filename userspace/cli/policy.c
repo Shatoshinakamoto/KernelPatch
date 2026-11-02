@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * policy.c - the policy model shared by `load` and `lint` (TODO P0-6).
  *

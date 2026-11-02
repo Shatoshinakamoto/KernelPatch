@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 /*
  * ss_cooldown.c - Protection #8: sudo brute-force cooldown.
  *

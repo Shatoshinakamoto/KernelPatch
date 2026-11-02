@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* cli.h - shared bits of the secure-sudo CLI (secure-sudo.c + subcommands). */
 #ifndef SECURE_SUDO_CLI_H
 #define SECURE_SUDO_CLI_H

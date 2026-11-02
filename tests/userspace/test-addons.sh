@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 #
 # test-addons.sh - guardrail tests for the temporary/ add-ons that act on
 # their own (TODO P1-7: "every destructive automation has tested

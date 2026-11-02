@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0 OR Apache-2.0
 /*
  * ss_firmware.c - Protection #3: block firmware / flash access by non-sudo
  * users (GPU VBIOS, motherboard BIOS/Q-Flash, Intel ME, raw memory).

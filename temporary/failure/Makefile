@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 # secure-sudo-addon-failure - reports a failed add-on unit through the shared logging.
 CC       ?= cc
 CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash
 # Minimal TAP helpers shared by the shell test suites. Source, don't run.
 TAP_N=0

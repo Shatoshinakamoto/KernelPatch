@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 /*
  * policy_state.c - policy preview, snapshots and change history (TODO P1-6).
  *
