@@ -371,15 +371,15 @@ work still open below.
 
 | Add-on | Level | Default mode | Acts by | Still open before promotion |
 |--------|-------|--------------|---------|-----------------------------|
-| `procguard` | experimental | monitor | killing processes; removing a respawning executable | approved criteria, host soak |
-| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | approved criteria, host soak |
-| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | approved criteria, host soak |
-| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | approved criteria, host soak |
-| `biosguard` | experimental | detect | nothing (log + notify) | approved criteria, host soak |
-| `locus` | experimental | serve | nothing destructive (hands out directory names) | approved criteria, host soak |
-| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | approved criteria, host soak |
-| `failure` | experimental | report | nothing (reports another unit's failure) | approved criteria, host soak |
-| `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | baseline trust source, approved criteria, host soak |
+| `procguard` | experimental | monitor | killing processes; removing a respawning executable | 14-day host soak, then promotion |
+| `tamperwatch` | experimental | log | killing the writer of a protected file (quarantine mode) | 14-day host soak, then promotion |
+| `driverguard` | experimental | monitor | overwriting a changed module file from its backup | 14-day host soak, then promotion |
+| `bootguard` | experimental | enforce (staged) | overwriting changed /boot files at the next boot | 14-day host soak, then promotion |
+| `biosguard` | experimental | detect | nothing (log + notify) | 14-day host soak, then promotion |
+| `locus` | experimental | serve | nothing destructive (hands out directory names) | 14-day host soak, then promotion |
+| `gui` | experimental | loopback | editing configs, running scans, quarantining on request | 14-day host soak, then promotion |
+| `failure` | experimental | report | nothing (reports another unit's failure) | 14-day host soak, then promotion |
+| `pheonixbox` | experimental | off | repairing a changed protected file from its stored copy | baseline trust source, 14-day host soak, then promotion |
 
 PheonixBox is a core feature (installed by `install.sh`, run by `secure-sudod`,
 [PHEONIXBOX.md](PHEONIXBOX.md)), but TODO P2-2 holds it to the same gate, so it
@@ -394,9 +394,50 @@ resource-limited unit, failure reporting, a threat model (below), upgrade
 and rollback steps (below) and adversarial tests
 ([Adversarial tests](#adversarial-tests)). Done where it applies: an independent trust source
 for the baselines and evidence kept before every repair, restore, removal or
-quarantine ([Baseline trust and evidence](#baseline-trust-and-evidence)). The promotion criteria themselves (what "beta" and
-"stable" require, and the soak period) are not decided yet: they need the
-operator's approval, and `maturity.json` records them as pending until then.
+quarantine ([Baseline trust and evidence](#baseline-trust-and-evidence)).
+
+### Promotion criteria
+
+Approved by the operator (Pheonix) on 2026-11-02 (the "standard" option) and
+recorded in `maturity.json` under `criteria`:
+
+* **beta**: every requirement above done (or not applicable, with the reason),
+  then a **14-day soak**: at least 14 consecutive days in monitor (log) mode
+  on a real host that is not a test machine, with its alerts shipped off the
+  host. Every alert raised in the soak is explained in the promotion record:
+  a real finding, a false positive fixed in the code or config, or an
+  exclusion with its reason.
+* **stable**: beta, then at least **30 consecutive days in its acting mode**
+  (enforce or quarantine, armed) on that host, every alert explained the same
+  way and no unexplained kill, repair or quarantine, plus a **recovery
+  drill**: undo one of its actions (restore a quarantined sample or a repaired
+  file from its evidence, or roll the add-on back as in
+  [Upgrade and rollback](#upgrade-and-rollback)) and confirm the host is back
+  to normal.
+
+The gate enforces this. An add-on whose `level` is above experimental must
+have no open requirement and a `promotion` record that meets the criteria,
+or `ci/check-addon-maturity.py` fails:
+
+```json
+"promotion": {
+  "beta": {
+    "approved_by": "Pheonix", "date": "2026-12-01", "host": "srv1",
+    "soak_start": "2026-11-10", "soak_end": "2026-11-24",
+    "alerts": [{"alert": "killed /opt/x/agent", "explained": "missing from the allowlist; added"}]
+  },
+  "stable": {
+    "approved_by": "Pheonix", "date": "2027-01-05", "host": "srv1",
+    "enforce_start": "2026-12-02", "enforce_end": "2027-01-01", "alerts": [],
+    "recovery_drill": {"date": "2027-01-02", "what": "restored a quarantined sample from evidence"}
+  }
+}
+```
+
+To promote an add-on: run the soak, keep its log, fill in the record, move
+`host-soak` and `promotion-approved` to `done`, set `level`, and update the
+table above. No add-on has been through a soak yet, so all are still
+experimental.
 
 ## Config checking
 
