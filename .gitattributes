@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Everything here runs on Linux: keep LF line endings in every checkout and
+# export, including Windows ones with core.autocrlf=true (a CRLF shell script
+# fails with "$'\r': command not found"). Binary files are detected and left
+# as they are.
+* text=auto eol=lf
+*.gz  binary
+*.xz  binary
+*.png binary
+*.der binary
+*.gpg binary
