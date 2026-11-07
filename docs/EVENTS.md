@@ -137,6 +137,13 @@ written as `\xNN`:
 | `%n` | alerts held back as duplicates since the last one |
 | `%%` | a literal `%` |
 
+**Sandbox.** The command runs as root inside secure-sudod's systemd sandbox
+(`secure-sudod.service`): `ProtectHome=yes` hides `/home`, `/root` and
+`/run/user`, and `NoNewPrivileges=yes` means setuid or setgid helpers (for
+example a `sendmail` that hands mail to a setgid `postdrop`) do not gain their
+privileges. Have it write under `/run`, `/var` or `/tmp`, or send over the
+network, or relax the unit with a drop-in if you must.
+
 A path or process name in a record, such as `$(reboot)` or `; rm -rf /`,
 reaches the command as text. Pipes, redirects and `$VARS` do not work in
 `alert_cmd` itself; to use them, point `alert_cmd` at a script. Example:
@@ -226,7 +233,9 @@ On a host running the secure_sudo kernel, as root:
 
 ```sh
 # a non-sudo user holding CAP_SETUID tries to become root: the kernel denies it
-setpriv --reuid=plain --regid=plain --clear-groups --inh-caps=+setuid \
+# (group first, as root: setpriv changes the UID before the GID, and the GID
+# change of a non-sudo UID is itself refused, as a "setgid" record)
+setpriv --regid=plain --clear-groups -- setpriv --reuid=plain --inh-caps=+setuid \
         --ambient-caps=+setuid python3 -c 'import os; os.setuid(0)'
 grep '"event_type":"credential_change"' /var/log/secure_sudo/$(date +%F).log | tail -1
 secure-sudo health          # Alerts: ok (1 sent, ...)
