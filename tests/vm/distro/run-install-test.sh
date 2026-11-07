@@ -163,8 +163,9 @@ gstep g1-scan 'secure-sudo node-scan /opt/ss-g1 && secure-sudo list node_sea_bin
 check "G1: node-scan finds the app and registers it in the kernel" sh -c "[ $GRC -eq 0 ] && grep -qx '/opt/ss-g1/app' '$LAST'"
 gstep g1-guard 'su plain -s /bin/sh -c "/opt/ss-g1/app -c /usr/bin/true"; echo rc=$?'
 check "G1: now the kernel's Node guard refuses the child" inlast '^rc=126'
-gstep g1-cleanup 'rm -rf /opt/ss-g1 && secure-sudo node-scan /opt/ss-g1; secure-sudo list node_sea_binaries'
-check "G1: with the app gone, a scan unregisters it" sh -c "! grep -q ss-g1 '$LAST'"
+gstep g1-cleanup 'rm -rf /opt/ss-g1 && secure-sudo node-scan /opt/ss-g1; echo ---list---; secure-sudo list node_sea_binaries'
+# Only the list after the marker counts: the scan itself names the app as "(gone)".
+check "G1: with the app gone, a scan unregisters it" sh -c "grep -qx -- ---list--- '$LAST' && ! sed '1,/^---list---\$/d' '$LAST' | grep -q ss-g1"
 
 # ------------- 4b2. one event traced from the kernel to an alert (P2-3)
 bash "$VM" put "$W" "$HERE/alert-trace-guest.sh" /root/alert-trace-guest.sh
@@ -191,8 +192,9 @@ o=m[-1]&15; print("%06d"%((struct.unpack(">I",m[o:o+4])[0]&0x7fffffff)%1000000))
 	reboot_vm
 	gstep g3-after-reboot "secure-sudo otp key-store; echo $(totp "$seed") | secure-sudo otp verify --pam; echo rc=\$?"
 	check "G3: after a reboot the TPM still unseals it" sh -c "grep -qx tpm2 '$LAST' && grep -qx 'rc=0' '$LAST'"
-	gstep g3-cleanup 'secure-sudo otp disable && ls -A /var/lib/secure_sudo/otp'
-	check "G3: otp disable removes the sealed key" sh -c "[ $GRC -eq 0 ] && ! grep -q . '$LAST'"
+	gstep g3-cleanup 'secure-sudo otp disable && echo ---ls--- && ls -A /var/lib/secure_sudo/otp'
+	# Only the listing after the marker counts: "otp disable" prints a message.
+	check "G3: otp disable removes the sealed key" sh -c "[ $GRC -eq 0 ] && grep -qx -- ---ls--- '$LAST' && ! sed '1,/^---ls---\$/d' '$LAST' | grep -q ."
 
 	# G4: the installer's TPM lockout password and disableClear, on the
 	# guest's (software) TPM. The kernel side (tpm_openers once locked) is in
@@ -243,6 +245,11 @@ check "the boot menu no longer lists the secure_sudo kernel" G "! grep -q 'secur
 check "grubenv has no saved or one-shot entry left" G "! grub-editenv list | grep -qE '^(saved_entry|next_entry)=.'"
 check "the install record is gone" G "! test -e /var/lib/secure_sudo/install"
 check "PAM files are back to their original content" G "cmp -s /etc/pam.d/sudo /root/pam-sudo.orig"
+# The policy history and snapshots (P1-6) are kept on purpose, and uninstall
+# says so. Deleting them is the operator's step, done here before comparing.
+check "uninstall keeps the policy history and says so" inlast 'kept /var/lib/secure_sudo/policy'
+check "... and it is there" G 'test -s /var/lib/secure_sudo/policy/history.jsonl'
+G 'rm -rf /var/lib/secure_sudo/policy && rmdir /var/lib/secure_sudo 2>/dev/null; true'
 gstep compare-after "$SNAP > /root/after.sha; bash /root/guest-snapshot.sh compare /root/before.sha /root/after.sha /root/pkgs-before"
 check "clean removal: every file install.sh placed is gone and every file it changed is back" test "$GRC" -eq 0
 # The differences, in the TAP stream too: CI logs show them without the

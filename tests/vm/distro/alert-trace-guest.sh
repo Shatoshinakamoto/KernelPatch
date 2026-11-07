@@ -22,7 +22,9 @@ SS=/root/ss/KernelPatch-merged
 # shellcheck source=/dev/null
 . "$SS/tests/lib/tap.sh"
 CONF=/etc/secure_sudo/secure-sudo.conf
-W=/root/p23
+# Not under /root: secure-sudod runs with ProtectHome=yes, and alert_cmd
+# inherits its sandbox, so an alert command cannot write there.
+W=/run/ss-p23
 LOGDIR=/var/log/secure_sudo
 rm -rf "$W"; mkdir -p "$W"
 cp "$CONF" "$W/conf.orig"
@@ -61,8 +63,11 @@ check "secure-sudod runs with alerting on" systemctl is-active -q secure-sudod
 
 # 2. the kernel event
 PU=$(id -u plain)
+# setpriv changes the UID before the GID, and secure_sudo refuses the GID
+# change of a non-sudo UID (a setgid denial, not the setuid one this test is
+# about). So drop the GID and groups as root first, then the UID.
 deny() {
-	setpriv --reuid=plain --regid=plain --clear-groups --inh-caps=+setuid \
+	setpriv --regid=plain --clear-groups -- setpriv --reuid=plain --inh-caps=+setuid \
 		--ambient-caps=+setuid python3 -c '
 import os, sys
 try:
