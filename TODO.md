@@ -351,7 +351,8 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     daemon `alert_cmd` (no shell, dedup, rate limit, timeout, failures in the
     log and health); add-on `notify_cmd` without a shell; the trace test
     `tests/vm/distro/alert-trace-guest.sh` in the distro VM run
-    (SECURITY_REVIEW #73). Open: the VM run proving the trace on each distro.
+    (SECURITY_REVIEW #73). Traced end to end on Ubuntu 24.04 with kernel
+    6.12.114 on 2026-11-07 (install test 71/71). Open: the other distros.
 
 - [ ] **P2-4: Make boot and firmware assurance stronger.**
   - Evaluate an initramfs-stage BootGuard restore/verification path and test
