@@ -17,6 +17,18 @@
 # noexec).
 set -euo pipefail
 
+# Optional flags (nothing else changes what this installer does):
+#   --initramfs         also install the BootGuard initramfs-stage restore hook
+#                       (initramfs-tools systems) and rebuild the initramfs
+#   --remove-initramfs  remove that hook again and rebuild the initramfs
+MODE=install
+case "${1:-}" in
+	"") ;;
+	--initramfs) MODE=initramfs ;;
+	--remove-initramfs) MODE=remove-initramfs ;;
+	*) echo "usage: install-temporary.sh [--initramfs | --remove-initramfs]" >&2; exit 2 ;;
+esac
+
 SRC="$(cd "$(dirname "$0")" && pwd)"
 BINDIR="${BINDIR:-/usr/bin}"
 UNITDIR="${UNITDIR:-/lib/systemd/system}"
@@ -27,6 +39,33 @@ LOGDIR="/var/log/secure_sudo/addons"
 log() { printf '  [*] %s\n' "$*"; }
 
 [ "$(id -u)" -eq 0 ] || { echo "install-temporary.sh: must run as root" >&2; exit 1; }
+
+IRD="${INITRAMFS_DIR:-/etc/initramfs-tools}"
+IRD_HOOK="$IRD/hooks/secure-sudo-bootguard"
+IRD_SCRIPT="$IRD/scripts/local-bottom/secure-sudo-bootguard"
+
+# initramfs_rebuild: regenerate the initramfs for every installed kernel.
+initramfs_rebuild() {
+	if command -v update-initramfs >/dev/null 2>&1; then
+		log "rebuilding the initramfs (update-initramfs -u -k all)"
+		update-initramfs -u -k all || { echo "update-initramfs failed" >&2; return 1; }
+	else
+		log "update-initramfs not found - rebuild the initramfs yourself"
+	fi
+}
+
+if [ "$MODE" = remove-initramfs ]; then
+	rm -f "$IRD_HOOK" "$IRD_SCRIPT"
+	log "removed the BootGuard initramfs hook"
+	initramfs_rebuild
+	[ -x "$BINDIR/secure-sudo-bootguard" ] && "$BINDIR/secure-sudo-bootguard" refresh initramfs-hook-removed >/dev/null 2>&1 || true
+	echo "Done."
+	exit 0
+fi
+
+if [ "$MODE" = initramfs ]; then
+	[ -d "$IRD" ] || { echo "install-temporary.sh: $IRD not found - this system does not use initramfs-tools (the systemd restore unit still applies)" >&2; exit 1; }
+fi
 
 echo "secure_sudo temporary/ add-ons - installer"
 
@@ -100,6 +139,16 @@ if [ -d "$UNITDIR" ]; then
 	systemctl daemon-reload 2>/dev/null || true
 fi
 
+# 5. Optional initramfs-stage restore (BootGuard), only on request.
+if [ "$MODE" = initramfs ]; then
+	log "installing the BootGuard initramfs hook into $IRD"
+	install -D -m0755 "$SRC/initramfs-tools/hooks/secure-sudo-bootguard" "$IRD_HOOK"
+	install -D -m0755 "$SRC/initramfs-tools/scripts/local-bottom/secure-sudo-bootguard" "$IRD_SCRIPT"
+	initramfs_rebuild
+	# The rebuilt initramfs is a legitimate /boot change: re-baseline if one exists.
+	"$BINDIR/secure-sudo-bootguard" refresh initramfs-hook >/dev/null 2>&1 || true
+fi
+
 cat <<'NEXT'
 
 Installed. NOTHING is enabled yet - every enforcing part is opt-in.
@@ -135,6 +184,10 @@ Recommended order:
     secure-sudo-bootguard baseline                   # hash + back up /boot
     systemctl enable secure-sudo-bootguard-restore   # apply staged restore at boot
     systemctl enable --now secure-sudo-bootguard.timer
+    # optional, initramfs-tools systems (Debian/Ubuntu): also apply the staged
+    # restore from the initramfs, after the root is unlocked and before systemd:
+    #   bash install-temporary.sh --initramfs        (undo: --remove-initramfs)
+    # it repairs /boot for the NEXT boot; docs/BOOT_ASSURANCE.md has the limits
 
   BiosGuard (DETECTION ONLY - logs + notifies, never reflashes):
     secure-sudo-biosguard baseline        # fingerprint DMI + ACPI tables

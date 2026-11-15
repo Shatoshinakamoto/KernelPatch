@@ -201,10 +201,17 @@ jobs:
           sudo bash tests/vm/distro/run-addon-units-test.sh \
             "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$RUNNER_TEMP/res-addons"
 
+      - name: BootGuard initramfs-stage restore with a separate ESP (P2-4, BIOS then UEFI)
+        run: |
+          sudo bash tests/vm/distro/run-bootguard-initramfs-test.sh \
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$RUNNER_TEMP/res-bgi"
+          sudo env VM_UEFI=1 bash tests/vm/distro/run-bootguard-initramfs-test.sh \
+            "$RUNNER_TEMP/img/noble-server-cloudimg-amd64.img" "$RUNNER_TEMP/res-bgi-uefi"
+
       - name: Make the results readable for upload (never the VM key or disk)
         if: always()
         run: |
-          for d in "$RUNNER_TEMP/res-install" "$RUNNER_TEMP/res-stig" "$RUNNER_TEMP/res-addons"; do
+          for d in "$RUNNER_TEMP/res-install" "$RUNNER_TEMP/res-stig" "$RUNNER_TEMP/res-addons" "$RUNNER_TEMP/res-bgi" "$RUNNER_TEMP/res-bgi-uefi"; do
             sudo test -d "$d" || continue
             sudo find "$d" \( -name 'id_vm*' -o -name '*.qcow2' \) -print -delete
             sudo chown -R "$(id -u):$(id -g)" "$d"
@@ -218,3 +225,5 @@ jobs:
             ${{ runner.temp }}/res-install
             ${{ runner.temp }}/res-stig
             ${{ runner.temp }}/res-addons
+            ${{ runner.temp }}/res-bgi
+            ${{ runner.temp }}/res-bgi-uefi

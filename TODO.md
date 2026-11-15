@@ -355,6 +355,9 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     6.12.114 on 2026-11-07 (install test 71/71). Open: the other distros.
 
 - [ ] **P2-4: Make boot and firmware assurance stronger.**
+  - Progress (2026-11-15): BiosGuard coverage extended and documented, an
+    initramfs-stage restore built, docs/BOOT_ASSURANCE.md written. Open:
+    encrypted-root recovery test, other bootloaders, real-hardware firmware.
   - Evaluate an initramfs-stage BootGuard restore/verification path and test
     recovery with encrypted roots, separate ESPs, and supported bootloaders.
   - Document BiosGuard's actual measurement coverage and limits; investigate

@@ -784,7 +784,8 @@ check "failure reporter: a newline in a unit name cannot forge a log line" sh -c
 BI2="$T/bin/biosguard-fake"
 mkdir -p "$T/fw/dmi" "$T/fw/acpi" "$T/fw/state"
 if addon_cc "$BI2" "$ROOT/temporary/biosguard/biosguard.c" -DBIOS_CONF="\"$T/biosguard.conf\"" \
-	-DBIOS_STATEDIR="\"$T/fw/state\"" -DBIOS_DMI_DIR="\"$T/fw/dmi\"" -DBIOS_ACPI_DIR="\"$T/fw/acpi\""; then
+	-DBIOS_STATEDIR="\"$T/fw/state\"" -DBIOS_DMI_DIR="\"$T/fw/dmi\"" -DBIOS_ACPI_DIR="\"$T/fw/acpi\"" \
+	-DBIOS_SMBIOS_DIR="\"$T/fw/smbios\"" -DBIOS_EFI_DIR="\"$T/fw/efi\"" -DBIOS_TPM_DIR="\"$T/fw/tpm\""; then
 	BILOG="$T/log/biosguard.log"
 	echo Vendor > "$T/fw/dmi/bios_vendor"; echo 1.0 > "$T/fw/dmi/bios_version"
 	echo dsdt > "$T/fw/acpi/DSDT"; echo ssdt > "$T/fw/acpi/SSDT1"
@@ -807,6 +808,69 @@ if addon_cc "$BI2" "$ROOT/temporary/biosguard/biosguard.c" -DBIOS_CONF="\"$T/bio
 	check "BiosGuard: a table name with a newline is reported escaped, not fingerprinted" sh -c "
 		grep -qF 'FIRMWARE table with an odd name: $T/fw/acpi/T\\x0a2026' '$BILOG' &&
 		[ \"\$(grep -cv '^20[0-9][0-9]-' '$BILOG')\" = 0 ]"
+	# P2-4: Secure Boot variables, ESRT, SMBIOS and TPM PCRs
+	rm -f "$T/fw/state/fingerprint"; : > "$BILOG"
+	GG=8be4df61-93ca-11d2-aa0d-00e098032b8c; SD=d719b2cb-3d3a-4596-a3bc-dad00e67656f
+	mkdir -p "$T/fw/smbios" "$T/fw/efi/efivars" "$T/fw/efi/esrt/entries/entry0" "$T/fw/tpm/pcr-sha256"
+	rm -f "$T/fw/acpi/"T*
+	echo smbios > "$T/fw/smbios/DMI"; echo ep > "$T/fw/smbios/smbios_entry_point"
+	printf '\6\0\0\0\1' > "$T/fw/efi/efivars/SecureBoot-$GG"; printf '\7\0\0\0\0' > "$T/fw/efi/efivars/SetupMode-$GG"
+	echo pk > "$T/fw/efi/efivars/PK-$GG"; echo kek > "$T/fw/efi/efivars/KEK-$GG"
+	echo db > "$T/fw/efi/efivars/db-$SD"; echo dbx > "$T/fw/efi/efivars/dbx-$SD"
+	echo 0xAA > "$T/fw/efi/esrt/entries/entry0/fw_version"; echo 7 > "$T/fw/efi/esrt/entries/entry0/last_attempt_status"
+	for n in 0 1 2 7; do echo "PCR$n" > "$T/fw/tpm/pcr-sha256/$n"; done
+	"$BI2" baseline > "$T/out" 2>&1
+	check "BiosGuard: the baseline counts every source class it measured" \
+		grep -qF 'dmi 2, acpi 3, smbios 2, efi 6, esrt 2, tpm 3' "$T/out"
+	check "BiosGuard: the default measures PCRs 0, 2 and 7, not 1" sh -c "
+		grep -q ' tpm:pcr0:sha256\$' '$T/fw/state/fingerprint' && grep -q ' tpm:pcr7:sha256\$' '$T/fw/state/fingerprint' &&
+		! grep -q 'tpm:pcr1:' '$T/fw/state/fingerprint'"
+	"$BI2" scan > "$T/out" 2>&1
+	check "BiosGuard: an unchanged firmware with all sources is intact" grep -q 'firmware fingerprint intact' "$T/out"
+	printf '\7\0\0\0\0' > "$T/fw/efi/efivars/SecureBoot-$GG"
+	echo dbx2 > "$T/fw/efi/efivars/dbx-$SD"
+	echo PCR0-changed > "$T/fw/tpm/pcr-sha256/0"
+	echo PCR1-changed > "$T/fw/tpm/pcr-sha256/1"
+	echo 0xBB > "$T/fw/efi/esrt/entries/entry0/fw_version"
+	echo smbios2 > "$T/fw/smbios/DMI"
+	"$BI2" scan > /dev/null 2>&1
+	check "BiosGuard: Secure Boot turned off, a new dbx, a PCR 0 change, a new ESRT version and an SMBIOS change are each reported" sh -c "
+		for l in efi:SecureBoot efi:dbx tpm:pcr0:sha256 esrt:entry0:fw_version smbios:DMI; do
+			grep -qF \"FIRMWARE tamper detected: \$l changed\" '$BILOG' || { echo \"missing \$l\"; exit 1; }
+		done"
+	check "BiosGuard: PCR 1 is not measured, so its change is not reported" \
+		sh -c "! grep -q 'tpm:pcr1' '$BILOG'"
+	rm -f "$T/fw/efi/efivars/PK-$GG"
+	"$BI2" scan > /dev/null 2>&1
+	check "BiosGuard: a Secure Boot variable that vanished is reported" \
+		grep -qF 'FIRMWARE source vanished: efi:PK' "$BILOG"
+	: > "$BILOG"
+	"$BI2" refresh fwupd-dbx > "$T/out" 2>&1
+	check "BiosGuard: refresh logs each changed source CRITICAL with its reason, then re-baselines" sh -c "
+		grep -qF 'FIRMWARE changed (refresh: fwupd-dbx): efi:SecureBoot' '$BILOG' &&
+		grep -qF 'FIRMWARE source gone (refresh: fwupd-dbx): efi:PK' '$BILOG' &&
+		grep -q 'baseline captured' '$T/out'"
+	"$BI2" scan > "$T/out" 2>&1
+	check "BiosGuard: after refresh the new state is the baseline" grep -q 'firmware fingerprint intact' "$T/out"
+	rm -f "$T/fw/state/fingerprint"; printf 'tpm_pcrs = 0,1,\n' >> "$T/biosguard.conf"
+	"$BI2" check-config > "$T/out" 2>&1
+	check "BiosGuard: a malformed tpm_pcrs is a config error" grep -qF 'tpm_pcrs = 0,1,: trailing comma' "$T/out"
+	printf 'tpm_pcrs = 99\n' > "$T/biosguard.conf"
+	"$BI2" check-config > "$T/out" 2>&1
+	check "BiosGuard: a PCR number out of range is a config error" grep -qF 'tpm_pcrs = 99' "$T/out"
+	printf 'tpm_pcrs =\nefi = 0\nsmbios = 0\n' > "$T/biosguard.conf"
+	"$BI2" baseline > "$T/out" 2>&1
+	check "BiosGuard: tpm_pcrs empty, efi = 0 and smbios = 0 measure only DMI and ACPI" \
+		grep -qF 'dmi 2, acpi 3, smbios 0, efi 0, esrt 0, tpm 0' "$T/out"
+	"$BI2" status > "$T/out" 2>&1
+	check "BiosGuard: status says what this host exposes and what is switched off" sh -c "
+		grep -q 'efi = 0 so Secure Boot variables and ESRT are not measured' '$T/out' &&
+		grep -q 'TPM PCRs:  none configured (TPM present)' '$T/out'"
+	install -m0644 "$ROOT/temporary/config/biosguard.conf" "$T/biosguard.conf"
+	rm -rf "$T/fw/efi" "$T/fw/tpm"
+	"$BI2" status > "$T/out" 2>&1
+	check "BiosGuard: on a legacy-BIOS host without a TPM, status says so" sh -c "
+		grep -q 'not booted by UEFI (legacy BIOS)' '$T/out' && grep -q 'no TPM exposed' '$T/out'"
 else
 	not_ok "BiosGuard builds against stand-in firmware directories ($(head -1 "$T/build.err"))"
 fi
@@ -854,5 +918,31 @@ check "... a JSON body that is not an object is refused" sh -c "
 check "... quarantining PID 1 is refused" sh -c "
 	python3 -B '$T/api.py' '$GPORT' POST /api/action '$TOK' 127.0.0.1 '{\"action\":\"quarantine_pid\",\"arg\":\"1\"}' | grep -qF 'PID 1 and the console itself are never killed'"
 kill "$GUIP" 2>/dev/null; wait "$GUIP" 2>/dev/null
+
+# ---- P2-4: BootGuard initramfs stage (local-bottom script, fake root) --------
+IRS="$ROOT/temporary/initramfs-tools/scripts/local-bottom/secure-sudo-bootguard"
+IR="$T/ird"; mkdir -p "$IR/stubs" "$IR/root/etc" "$IR/root/usr/bin" "$IR/root/var/lib/secure_sudo/addons/bootguard" "$IR/proc"
+for c in mount umount chroot; do
+	printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 0\n' "$c" "$IR" > "$IR/stubs/$c"
+	chmod 0755 "$IR/stubs/$c"
+done
+: > "$IR/proc/cmdline"; : > "$IR/proc/mounts"
+printf '#!/bin/sh\nexit 0\n' > "$IR/root/usr/bin/secure-sudo-bootguard"; chmod 0755 "$IR/root/usr/bin/secure-sudo-bootguard"
+printf 'UUID=0000-0000 /boot/efi vfat defaults 0 2\n' > "$IR/root/etc/fstab"
+ir_run() { : > "$IR/calls"; PATH="$IR/stubs:$PATH" rootmnt="$IR/root" SS_PROC="$IR/proc" sh "$IRS" >/dev/null 2>&1; echo $?; }
+eq "initramfs: nothing staged -> does nothing, exit 0" "$(ir_run) $(wc -c < "$IR/calls")" "0 0"
+touch "$IR/root/var/lib/secure_sudo/addons/bootguard/PENDING"
+echo "ro secure_sudo.bootguard=off quiet" > "$IR/proc/cmdline"
+eq "initramfs: secure_sudo.bootguard=off skips the restore" "$(ir_run) $(grep -c chroot "$IR/calls")" "0 0"
+: > "$IR/proc/cmdline"
+check "initramfs: a boot filesystem that cannot be found keeps the restore staged (no chroot), boot continues" \
+	sh -c "[ \"$(ir_run)\" = 0 ] && ! grep -q chroot '$IR/calls'"
+printf '/dev/sda1 / ext4 defaults 0 1\n' > "$IR/root/etc/fstab"
+check "initramfs: with no separate boot filesystem it runs restore-staged in the root with the initramfs stage" \
+	sh -c "[ \"$(ir_run)\" = 0 ] && grep -q \"chroot $IR/root /usr/bin/secure-sudo-bootguard restore-staged\" '$IR/calls'"
+chmod 0644 "$IR/root/usr/bin/secure-sudo-bootguard"
+check "initramfs: a missing/non-executable bootguard binary skips, boot continues" \
+	sh -c "[ \"$(ir_run)\" = 0 ] && ! grep -q chroot '$IR/calls'"
+
 
 tap_done

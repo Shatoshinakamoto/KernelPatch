@@ -1427,3 +1427,26 @@ the collector and in health). Documented in [EVENTS.md](EVENTS.md).
   6.12.114 (an initramfs run and a full Ubuntu 24.04 guest with GRUB,
   systemd and AppArmor). Not under UEFI/Secure Boot, and not on real
   hardware. See [ROADMAP_STATUS.md](ROADMAP_STATUS.md).
+
+### 74. BootGuard's "restore before anything is used" claim was untrue, and BiosGuard measured only DMI and ACPI (v1–v12, found 2026-11-15 by P2-4) — SI-7 / SI-7(1) / CM-3
+
+1. **Overstated initramfs guarantee.** ADDONS.md said wiring
+   `restore-staged` into the initramfs restores "before anything from /boot is
+   used at all". By the time an initramfs runs, the kernel and that initramfs
+   are already loaded, so it cannot protect the boot in progress. The claim is
+   corrected, and the missing feature is built rather than the text trimmed: an
+   optional initramfs-tools stage (`install-temporary.sh --initramfs`) that
+   mounts a separate `/boot` and ESP from fstab, runs `restore-staged` in a
+   chroot after the root is unlocked, never blocks the boot, can be skipped
+   with `secure_sudo.bootguard=off`, and logs its stage. It repairs files for
+   the next boot only. The restore itself is unchanged (baseline trust,
+   per-file SHA-256, evidence kept).
+2. **Thin firmware coverage.** BiosGuard fingerprinted DMI and ACPI only. It
+   now also covers SMBIOS tables, Secure Boot state and key variables, the
+   firmware-update table (ESRT) and TPM PCRs 0/2/7, with `refresh` for
+   legitimate updates and `check-config` validation. All of it is read through
+   the running kernel and is therefore not authenticated by BiosGuard;
+   docs/BOOT_ASSURANCE.md says so and points to TPM quotes (P2-1) for the
+   authenticated path. Still detect-only, no reflashing.
+3. **Not claimed.** Encrypted-root recovery, systemd-boot and dracut distros
+   are untested or unsupported and are listed as such.

@@ -1,0 +1,108 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# BootGuard in the initramfs (TODO P2-4): apply a staged boot-partition
+# restore after the real root is mounted (and, for an encrypted root,
+# unlocked) and before the system switches to it. Nothing from the real root
+# is running yet, so nothing holds /boot or the ESP open.
+#
+# What it does, only when BootGuard staged a restore (the PENDING flag):
+#   1. mounts the separate /boot and ESP listed in the root's /etc/fstab
+#      under the root, read-write;
+#   2. runs the root's secure-sudo-bootguard restore-staged in a chroot, which
+#      checks the baseline's trust and every backup's SHA-256 as usual and
+#      keeps the replaced bytes as evidence;
+#   3. unmounts what it mounted.
+# It never stops the boot: every failure is logged and the system comes up
+# (the systemd unit still tries again, and the PENDING flag stays until a
+# restore is done). Emergency opt-out: add secure_sudo.bootguard=off to the
+# kernel command line.
+#
+# It does not protect the boot in progress: the kernel and this initramfs were
+# already loaded when it runs. It repairs the files for the NEXT boot.
+# docs/BOOT_ASSURANCE.md "What the initramfs stage gives".
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs) prereqs; exit 0 ;;
+esac
+
+# set by init(8) of initramfs-tools; the default only matters for tests
+rootmnt="${rootmnt:-/root}"
+BG_STATE="$rootmnt/var/lib/secure_sudo/addons/bootguard"
+BG_BIN=/usr/bin/secure-sudo-bootguard
+FSTAB="$rootmnt/etc/fstab"
+MOUNTED=""	# what this script mounted, for the unmount
+SS_PROC="${SS_PROC:-/proc}"
+
+say() { echo "secure_sudo bootguard: $*" > /dev/kmsg 2>/dev/null || echo "secure_sudo bootguard: $*" >&2; }
+
+# the flag only exists when a restore is staged: the normal boot does nothing
+[ -e "$BG_STATE/PENDING" ] || exit 0
+
+if grep -qw 'secure_sudo.bootguard=off' "$SS_PROC/cmdline" 2>/dev/null; then
+	say "restore skipped: secure_sudo.bootguard=off on the kernel command line"
+	exit 0
+fi
+if [ ! -x "$rootmnt$BG_BIN" ]; then
+	say "restore skipped: $BG_BIN is not in the root filesystem"
+	exit 0
+fi
+
+# fstab spec -> a device node (udev has made /dev/disk/by-* by now)
+resolve_dev() {
+	case "$1" in
+	UUID=*) echo "/dev/disk/by-uuid/${1#UUID=}" ;;
+	LABEL=*) echo "/dev/disk/by-label/${1#LABEL=}" ;;
+	PARTUUID=*) echo "/dev/disk/by-partuuid/${1#PARTUUID=}" ;;
+	PARTLABEL=*) echo "/dev/disk/by-partlabel/${1#PARTLABEL=}" ;;
+	/dev/*) echo "$1" ;;
+	*) return 1 ;;
+	esac
+}
+
+# mount_one MOUNTPOINT: mount the fstab entry for it under the root, if it is
+# listed and not already mounted
+mount_one() {
+	mp="$1"
+	line="$(awk -v mp="$mp" '$1 !~ /^#/ && $2 == mp { print $1, $3; exit }' "$FSTAB" 2>/dev/null)"
+	[ -n "$line" ] || return 0		# not a separate filesystem
+	spec="${line%% *}"; fstype="${line##* }"
+	grep -q " $rootmnt$mp " "$SS_PROC/mounts" 2>/dev/null && return 0
+	dev="$(resolve_dev "$spec")" || { say "cannot resolve $spec for $mp"; return 1; }
+	[ -b "$dev" ] || { say "$mp: $dev is not there; not restoring files on it"; return 1; }
+	mkdir -p "$rootmnt$mp" 2>/dev/null
+	if mount -t "$fstype" -o rw,nodev,nosuid,noexec "$dev" "$rootmnt$mp" 2>/dev/null; then
+		MOUNTED="$rootmnt$mp $MOUNTED"
+		return 0
+	fi
+	say "$mp: could not mount $dev ($fstype)"
+	return 1
+}
+
+bind() { # SRC: bind it into the root for the chroot
+	mount -o bind "$1" "$rootmnt$1" 2>/dev/null && MOUNTED="$rootmnt$1 $MOUNTED"
+}
+
+say "a boot-partition restore is staged: applying it before the system starts"
+ok=1
+mount_one /boot || ok=0
+mount_one /boot/efi || ok=0
+mount_one /efi || ok=0
+bind /dev; bind /proc; bind /sys
+
+if [ "$ok" = 1 ]; then
+	SECURE_SUDO_BOOT_STAGE=initramfs chroot "$rootmnt" "$BG_BIN" restore-staged
+	rc=$?
+	say "restore finished with status $rc (details: /var/log/secure_sudo/addons/bootguard.log)"
+else
+	say "restore not attempted: a boot filesystem could not be mounted; the staged restore is kept"
+fi
+
+# unmount in reverse order of mounting; never leave one under the root
+for m in $MOUNTED; do
+	umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || say "could not unmount $m"
+done
+sync
+exit 0

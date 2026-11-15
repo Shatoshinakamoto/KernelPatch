@@ -12,13 +12,29 @@
  * write bricks the board). Repair, if ever wanted, is a deliberate manual step
  * with vendor media, outside this tool.
  *
- *   baseline  - fingerprint the firmware: hash the DMI identity fields and the
- *               ACPI tables the firmware exposes, and save the manifest.
+ *   baseline  - fingerprint the firmware: hash the sources below and save
+ *               the manifest.
  *   scan      - recompute the fingerprint and compare. Any change is logged
  *               CRITICAL and raised as a notification (ssl_notify -> the
  *               configured notify_cmd, e.g. wall/logger/ops hook). Nothing is
  *               written to the firmware.
- *   status    - show state.
+ *   refresh REASON - after a legitimate firmware or Secure Boot database
+ *               update (fwupd, a BIOS flash): re-baseline, logging CRITICAL
+ *               every source that changed so the change is on record off-box.
+ *   status    - show state and what this host actually exposes.
+ *
+ * What is measured (docs/BOOT_ASSURANCE.md "BiosGuard coverage and limits"):
+ *   dmi:      the DMI identity strings (/sys/class/dmi/id)
+ *   acpi:     every ACPI table the firmware hands the kernel
+ *   smbios:   the raw SMBIOS table and entry point (/sys/firmware/dmi/tables)
+ *   efi:      the Secure Boot state and key databases (SecureBoot, SetupMode,
+ *             PK, KEK, db, dbx) from efivarfs
+ *   esrt:     the UEFI System Resource Table: version and update status of
+ *             each firmware component that takes capsule updates
+ *   tpm:      the TPM PCRs that measure firmware (default 0, 2, 7)
+ * Every source is read as the running kernel reports it. None of it is
+ * authenticated by a signature here: a quote of the same PCRs, checked by a
+ * remote verifier, is `secure-sudo attest` (docs/ATTESTATION.md).
  *
  * Config: /etc/secure_sudo/addons/biosguard.conf (notify_cmd lives in the
  * shared logging.conf).
@@ -54,8 +70,29 @@
 #ifndef BIOS_ACPI_DIR
 #define BIOS_ACPI_DIR	"/sys/firmware/acpi/tables"
 #endif
+#ifndef BIOS_SMBIOS_DIR
+#define BIOS_SMBIOS_DIR	"/sys/firmware/dmi/tables"
+#endif
+#ifndef BIOS_EFI_DIR
+#define BIOS_EFI_DIR	"/sys/firmware/efi"
+#endif
+#ifndef BIOS_TPM_DIR
+#define BIOS_TPM_DIR	"/sys/class/tpm/tpm0"
+#endif
 #define DMI_DIR		BIOS_DMI_DIR
 #define ACPI_DIR	BIOS_ACPI_DIR
+#define SMBIOS_DIR	BIOS_SMBIOS_DIR
+#define EFI_DIR		BIOS_EFI_DIR
+#define TPM_DIR		BIOS_TPM_DIR
+
+/* what to measure, from biosguard.conf */
+struct cfg {
+	int trust;
+	int smbios;			/* SMBIOS tables */
+	int efi;			/* Secure Boot variables + ESRT */
+	char pcrs[64];			/* "0,2,7": TPM PCRs; empty = none */
+	unsigned pcr_mask;		/* the same, parsed */
+};
 
 /* SHA-256 one file into out[65]. It is hashed in-process: this used to run
  * `sha256sum '<path>'` through a shell, so a table name with a quote in it
@@ -84,15 +121,26 @@ static void fp_one(FILE *mf, const char *path, const char *label, size_t *n)
 	}
 }
 
-/* Build the firmware fingerprint into @mf. Returns the number of sources. */
-static size_t build_fingerprint(FILE *mf)
+struct counts {
+	size_t dmi, acpi, smbios, efi, esrt, tpm;
+};
+
+static size_t counts_total(const struct counts *k)
+{
+	return k->dmi + k->acpi + k->smbios + k->efi + k->esrt + k->tpm;
+}
+
+/* The Secure Boot variables, by name and vendor GUID (UEFI spec). */
+#define GUID_GLOBAL	"8be4df61-93ca-11d2-aa0d-00e098032b8c"
+#define GUID_SECDB	"d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+
+static void fp_dmi_acpi(FILE *mf, struct counts *k)
 {
 	static const char *dmi[] = {
 		"bios_vendor", "bios_version", "bios_date", "bios_release",
 		"board_vendor", "board_name", "board_version",
 		"product_name", "product_version", "sys_vendor", NULL
 	};
-	size_t n = 0;
 	DIR *d;
 	int i;
 
@@ -103,7 +151,7 @@ static size_t build_fingerprint(FILE *mf)
 		if (access(p, R_OK) != 0)
 			continue;
 		snprintf(label, sizeof(label), "dmi:%s", dmi[i]);
-		fp_one(mf, p, label, &n);
+		fp_one(mf, p, label, &k->dmi);
 	}
 
 	d = opendir(ACPI_DIR);
@@ -127,22 +175,129 @@ static size_t build_fingerprint(FILE *mf)
 			if (stat(p, &st) != 0 || !S_ISREG(st.st_mode))
 				continue;
 			snprintf(label, sizeof(label), "acpi:%s", de->d_name);
-			fp_one(mf, p, label, &n);
+			fp_one(mf, p, label, &k->acpi);
 		}
 		closedir(d);
 	}
-	return n;
 }
 
-static int load_trust(int *trust, FILE *r);
-
-static int cmd_baseline(void)
+/* The raw SMBIOS structure table and its entry point: what DMI strings are
+ * parsed from, so a changed table that kept the same strings still shows. */
+static void fp_smbios(FILE *mf, struct counts *k)
 {
-	int trust;
+	static const char *const f[] = { "DMI", "smbios_entry_point", NULL };
+	int i;
 
+	for (i = 0; f[i]; i++) {
+		char p[PATH_MAX], label[64];
+
+		snprintf(p, sizeof(p), "%s/%s", SMBIOS_DIR, f[i]);
+		snprintf(label, sizeof(label), "smbios:%s", f[i]);
+		fp_one(mf, p, label, &k->smbios);
+	}
+}
+
+/* Secure Boot state and key databases from efivarfs, and the ESRT. A
+ * legacy-BIOS boot has neither: nothing is fingerprinted, and `status` says
+ * so. An EFI variable file starts with its 4-byte attributes; the whole file
+ * is hashed. */
+static void fp_efi(FILE *mf, struct counts *k)
+{
+	static const struct { const char *name, *guid; } v[] = {
+		{ "SecureBoot", GUID_GLOBAL }, { "SetupMode", GUID_GLOBAL },
+		{ "PK", GUID_GLOBAL }, { "KEK", GUID_GLOBAL },
+		{ "db", GUID_SECDB }, { "dbx", GUID_SECDB }, { NULL, NULL }
+	};
+	static const char *const attr[] = {
+		"fw_class", "fw_type", "fw_version", "lowest_supported_fw_version",
+		"capsule_flags", "last_attempt_version", "last_attempt_status", NULL
+	};
+	char dir[PATH_MAX];
+	DIR *d;
+	int i;
+
+	for (i = 0; v[i].name; i++) {
+		char p[PATH_MAX], label[64];
+
+		snprintf(p, sizeof(p), "%s/efivars/%s-%s", EFI_DIR, v[i].name, v[i].guid);
+		snprintf(label, sizeof(label), "efi:%s", v[i].name);
+		fp_one(mf, p, label, &k->efi);
+	}
+
+	snprintf(dir, sizeof(dir), "%s/esrt/entries", EFI_DIR);
+	d = opendir(dir);
+	if (d) {
+		struct dirent *de;
+
+		while ((de = readdir(d))) {
+			if (de->d_name[0] == '.' || !label_ok(de->d_name))
+				continue;
+			for (i = 0; attr[i]; i++) {
+				char p[PATH_MAX], label[320];
+
+				if (snprintf(p, sizeof(p), "%s/%s/%s", dir, de->d_name,
+					     attr[i]) >= (int)sizeof(p))
+					continue;
+				snprintf(label, sizeof(label), "esrt:%s:%s", de->d_name,
+					 attr[i]);
+				fp_one(mf, p, label, &k->esrt);
+			}
+		}
+		closedir(d);
+	}
+}
+
+/* The TPM's measurements of the firmware. PCR 0 is the firmware code, 2 the
+ * option ROMs and other executable firmware, 7 the Secure Boot policy. The
+ * sha256 bank is used, the sha1 bank only where there is no sha256. */
+static void fp_tpm(FILE *mf, const struct cfg *c, struct counts *k)
+{
+	int n;
+
+	for (n = 0; n < 24; n++) {
+		char p[PATH_MAX], label[48];
+
+		if (!(c->pcr_mask & (1u << n)))
+			continue;
+		snprintf(p, sizeof(p), "%s/pcr-sha256/%d", TPM_DIR, n);
+		if (access(p, R_OK) == 0) {
+			snprintf(label, sizeof(label), "tpm:pcr%d:sha256", n);
+		} else {
+			snprintf(p, sizeof(p), "%s/pcr-sha1/%d", TPM_DIR, n);
+			snprintf(label, sizeof(label), "tpm:pcr%d:sha1", n);
+		}
+		fp_one(mf, p, label, &k->tpm);
+	}
+}
+
+/* Build the firmware fingerprint into @mf. */
+static void build_fingerprint(FILE *mf, const struct cfg *c, struct counts *k)
+{
+	memset(k, 0, sizeof(*k));
+	fp_dmi_acpi(mf, k);
+	if (c->smbios)
+		fp_smbios(mf, k);
+	if (c->efi)
+		fp_efi(mf, k);
+	if (c->pcr_mask)
+		fp_tpm(mf, c, k);
+}
+
+static void describe_counts(const struct counts *k, char *out, size_t n)
+{
+	snprintf(out, n, "dmi %zu, acpi %zu, smbios %zu, efi %zu, esrt %zu, tpm %zu",
+		 k->dmi, k->acpi, k->smbios, k->efi, k->esrt, k->tpm);
+}
+
+static int load_cfg(struct cfg *c, FILE *r);
+
+static int baseline_why(const char *why)
+{
+	struct cfg c;
+	struct counts k;
+	char desc[160];
 	FILE *mf;
 	char tmp[] = STATEDIR "/.fp.XXXXXX";
-	size_t n;
 	int fd;
 
 	mkdir("/var/lib/secure_sudo", 0700);
@@ -160,24 +315,36 @@ static int cmd_baseline(void)
 		unlink(tmp);
 		return 1;
 	}
-	n = build_fingerprint(mf);
-	fflush(mf);
-	fsync(fileno(mf));
+	load_cfg(&c, NULL);
+	build_fingerprint(mf, &c, &k);
+	if (fflush(mf) != 0 || fsync(fileno(mf)) != 0 || ferror(mf)) {
+		fclose(mf);
+		unlink(tmp);
+		ssl_err("baseline: the fingerprint could not be written");
+		return 1;
+	}
 	fclose(mf);
 	if (rename(tmp, MANIFEST) != 0) {
 		unlink(tmp);
 		return 1;
 	}
 	chmod(MANIFEST, 0600);
-	load_trust(&trust, NULL);
-	sst_announce("biosguard", MANIFEST, "baseline", trust);
-	ssl_info("baseline: %zu firmware sources fingerprinted", n);
-	printf("biosguard: baseline captured %zu firmware sources\n", n);
+	sst_announce("biosguard", MANIFEST, why, c.trust);
+	describe_counts(&k, desc, sizeof(desc));
+	ssl_info("baseline: %zu firmware sources fingerprinted (%s)",
+		 counts_total(&k), desc);
+	printf("biosguard: baseline captured %zu firmware sources (%s)\n",
+	       counts_total(&k), desc);
 	return 0;
 }
 
+static int cmd_baseline(void)
+{
+	return baseline_why("baseline");
+}
+
 /* Recompute and compare; returns the number of mismatches, or -1 on error. */
-static int fingerprint_diff(void)
+static int fingerprint_diff(const char *refresh)
 {
 	FILE *base = fopen(MANIFEST, "re");
 	FILE *now;
@@ -201,7 +368,13 @@ static int fingerprint_diff(void)
 		fclose(base);
 		return -1;
 	}
-	build_fingerprint(now);
+	{
+		struct cfg c;
+		struct counts k;
+
+		load_cfg(&c, NULL);
+		build_fingerprint(now, &c, &k);
+	}
 	rewind(now);
 
 	while (fgets(lb, sizeof(lb), base)) {
@@ -217,15 +390,23 @@ static int fingerprint_diff(void)
 			if (!strcmp(blabel, nlabel)) {
 				matched = 1;
 				if (strcmp(bsha, nsha) != 0) {
-					ssl_notify(SSL_CRIT,
-						"FIRMWARE tamper detected: %s changed", blabel);
+					if (refresh)
+						ssl_crit("FIRMWARE changed (refresh: %s): %s",
+							 refresh, blabel);
+					else
+						ssl_notify(SSL_CRIT,
+							"FIRMWARE tamper detected: %s changed", blabel);
 					mism++;
 				}
 				break;
 			}
 		}
 		if (!matched) {
-			ssl_notify(SSL_CRIT, "FIRMWARE source vanished: %s", blabel);
+			if (refresh)
+				ssl_crit("FIRMWARE source gone (refresh: %s): %s", refresh,
+					 blabel);
+			else
+				ssl_notify(SSL_CRIT, "FIRMWARE source vanished: %s", blabel);
 			mism++;
 		}
 	}
@@ -246,8 +427,12 @@ static int fingerprint_diff(void)
 				break;
 			}
 		if (!known) {
-			ssl_notify(SSL_CRIT, "FIRMWARE source appeared: %s (not in the "
-				   "baseline)", nlabel);
+			if (refresh)
+				ssl_crit("FIRMWARE source added (refresh: %s): %s", refresh,
+					 nlabel);
+			else
+				ssl_notify(SSL_CRIT, "FIRMWARE source appeared: %s (not in "
+					   "the baseline)", nlabel);
 			mism++;
 		}
 	}
@@ -260,17 +445,18 @@ static int fingerprint_diff(void)
 static int cmd_scan(void)
 {
 	char why[512];
-	int trust, mism;
+	struct cfg c;
+	int mism;
 
-	load_trust(&trust, NULL);
-	if (!sst_manifest_trusted(MANIFEST, trust, why, sizeof(why))) {
+	load_cfg(&c, NULL);
+	if (!sst_manifest_trusted(MANIFEST, c.trust, why, sizeof(why))) {
 		/* a fingerprint that may have been rewritten proves nothing */
 		ssl_notify(SSL_CRIT, "FIRMWARE fingerprint NOT TRUSTED (%s): the scan "
 			   "cannot vouch for the firmware", why);
 		printf("biosguard: fingerprint not trusted (%s)\n", why);
 		return 3;
 	}
-	mism = fingerprint_diff();
+	mism = fingerprint_diff(NULL);
 
 	if (mism < 0)
 		return 1;
@@ -287,50 +473,144 @@ static int cmd_scan(void)
 	return 0;
 }
 
+/*
+ * After a legitimate firmware change (a BIOS flash, a capsule update, a
+ * Secure Boot database update from fwupd): record every source that changed,
+ * CRITICAL so it is shipped off-box, and take a new baseline. A host with no
+ * baseline yet is not in use: nothing to refresh.
+ */
+static int cmd_refresh(const char *reason)
+{
+	char why[64];
+	size_t i, j = 0;
+	int mism, rc;
+
+	for (i = 0; reason && reason[i] && j + 1 < sizeof(why); i++)
+		if (isalnum((unsigned char)reason[i]) || strchr("._-", reason[i]))
+			why[j++] = reason[i];
+	why[j] = '\0';
+	if (!j)
+		snprintf(why, sizeof(why), "manual");
+	if (access(MANIFEST, F_OK) != 0) {
+		printf("biosguard: no baseline; nothing to refresh\n");
+		return 0;
+	}
+	mism = fingerprint_diff(why);
+	if (mism < 0)
+		return 1;
+	rc = baseline_why(why);
+	if (rc == 0)
+		ssl_info("refresh (%s): %d firmware source(s) changed since the last "
+			 "baseline", why, mism);
+	return rc;
+}
+
+static void describe_pcrs(const struct cfg *c, char *out, size_t n)
+{
+	snprintf(out, n, "%s", c->pcr_mask ? c->pcrs : "none configured");
+}
+
 static int cmd_status(void)
 {
+	struct cfg c;
+	struct counts k;
+	char desc[160], t[640];
+	FILE *null = fopen("/dev/null", "we");
+
+	load_cfg(&c, NULL);
 	printf("BiosGuard (detect + log + notify only; no repair)\n");
 	printf("baseline:  %s\n", access(MANIFEST, F_OK) == 0 ? "present" : "none");
-	{
-		char t[640];
-		int trust;
-
-		load_trust(&trust, NULL);
-		sst_describe(MANIFEST, trust, t, sizeof(t));
-		printf("trust:     %s\n", t);
+	sst_describe(MANIFEST, c.trust, t, sizeof(t));
+	printf("trust:     %s\n", t);
+	/* what this host exposes right now, which is all the baseline can hold */
+	if (null) {
+		build_fingerprint(null, &c, &k);
+		fclose(null);
+		describe_counts(&k, desc, sizeof(desc));
+		printf("sources:   %s\n", desc);
 	}
-	printf("sources:   %s DMI ids + %s ACPI tables\n", DMI_DIR, ACPI_DIR);
+	printf("EFI:       %s\n", access(EFI_DIR, F_OK) == 0 ?
+	       (c.efi ? "booted by UEFI; Secure Boot variables and ESRT measured" :
+		"booted by UEFI; efi = 0 so Secure Boot variables and ESRT are not measured") :
+	       "not booted by UEFI (legacy BIOS): no Secure Boot or ESRT data exists");
+	describe_pcrs(&c, desc, sizeof(desc));
+	printf("TPM PCRs:  %s (%s)\n", desc, access(TPM_DIR, F_OK) == 0 ?
+	       "TPM present" : "no TPM exposed: none can be measured");
 	printf("on tamper: logged CRITICAL + notify_cmd (see logging.conf). Firmware "
 	       "is never written by this tool.\n");
 	return 0;
 }
 
-/* biosguard.conf: one setting, the trust in the recorded fingerprint. */
-static int load_trust(int *trust, FILE *r)
+/* "0,2,7" -> a PCR bitmask. Empty is none. Returns 0, or -1 with @err. */
+static int parse_pcrs(const char *v, unsigned *mask, char *err, size_t n)
+{
+	const char *p = v;
+
+	*mask = 0;
+	while (*p) {
+		char *end;
+		long x = strtol(p, &end, 10);
+
+		if (end == p || x < 0 || x > 23 || (*end != ',' && *end != '\0')) {
+			snprintf(err, n, "tpm_pcrs = %s: a comma-separated list of PCR "
+				 "numbers 0..23 (or empty for none)", v);
+			return -1;
+		}
+		*mask |= 1u << x;
+		p = *end ? end + 1 : end;
+		if (*end == ',' && !*p) {
+			snprintf(err, n, "tpm_pcrs = %s: trailing comma", v);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+/* biosguard.conf: the trust in the recorded fingerprint and what to measure. */
+static int load_cfg(struct cfg *c, FILE *r)
 {
 	const struct ssc_key keys[] = {
-		{ "baseline_trust", SSC_ENUM, trust, 0, 0, 0, sst_modes },
+		{ "baseline_trust", SSC_ENUM, &c->trust, 0, 0, 0, sst_modes },
+		{ "smbios", SSC_INT, &c->smbios, 0, 0, 1, NULL },
+		{ "efi", SSC_INT, &c->efi, 0, 0, 1, NULL },
+		{ "tpm_pcrs", SSC_STR, c->pcrs, sizeof(c->pcrs), 0, 0, NULL },
 		SSC_END
 	};
+	char err[160];
+	int errs;
 
-	*trust = SST_LOCAL;
-	return ssc_parse(CONF, keys, NULL, NULL, r);
+	c->trust = SST_LOCAL;
+	c->smbios = 1;
+	c->efi = 1;
+	snprintf(c->pcrs, sizeof(c->pcrs), "0,2,7");
+	errs = ssc_parse(CONF, keys, NULL, NULL, r);
+	if (parse_pcrs(c->pcrs, &c->pcr_mask, err, sizeof(err)) != 0) {
+		if (r)
+			fprintf(r, "%s: %s\n", CONF, err);
+		snprintf(c->pcrs, sizeof(c->pcrs), "0,2,7");
+		parse_pcrs(c->pcrs, &c->pcr_mask, err, sizeof(err));
+		errs++;
+	}
+	return errs;
 }
 
 static int conf_errors(FILE *r)
 {
-	int t;
+	struct cfg c;
 
-	return load_trust(&t, r) + ssl_check_conf(r);
+	return load_cfg(&c, r) + ssl_check_conf(r);
 }
 
 static void usage(void)
 {
 	fprintf(stderr,
 "usage: secure-sudo-biosguard <command>\n"
-"  baseline   fingerprint the firmware (DMI ids + ACPI tables)\n"
+"  baseline   fingerprint the firmware (DMI, ACPI, SMBIOS, Secure Boot variables,\n"
+"             ESRT, TPM PCRs: see status for what this host exposes)\n"
 "  scan       check for firmware tamper; log + notify on any change (no repair)\n"
-"  status     show state\n"
+"  refresh [REASON]  after a legitimate firmware/Secure Boot update: log what\n"
+"             changed (CRITICAL) and take a new baseline\n"
+"  status     show state and what this host exposes\n"
 "  check-config  check every config file strictly; 1 if any problem\n"
 "\nDetection only by design: BiosGuard never writes firmware. Config: " CONF "\n");
 }
@@ -360,6 +640,8 @@ int main(int argc, char **argv)
 		return cmd_baseline();
 	if (!strcmp(argv[1], "scan"))
 		return cmd_scan();
+	if (!strcmp(argv[1], "refresh"))
+		return cmd_refresh(argc > 2 ? argv[2] : NULL);
 	if (!strcmp(argv[1], "status"))
 		return cmd_status();
 

@@ -70,6 +70,10 @@
 #define RESTORE_LIST	STATEDIR "/restore.list"
 #define PENDING		STATEDIR "/PENDING"
 #define LOCUS_PURPOSE	"bootguard-backup"
+#ifndef BG_INITRAMFS_HOOK
+#define BG_INITRAMFS_HOOK "/etc/initramfs-tools/scripts/local-bottom/secure-sudo-bootguard"
+#endif
+#define INITRAMFS_HOOK	BG_INITRAMFS_HOOK
 
 struct cfg {
 	int enforce;			/* enforce => stage on tamper */
@@ -589,11 +593,23 @@ static int do_restore(void)
 	return fail ? 1 : 0;
 }
 
+/* Where this restore runs, for the log: "initramfs" from the initramfs
+ * script, "systemd" from the unit (SECURE_SUDO_BOOT_STAGE), "manual" else. */
+static const char *boot_stage(void)
+{
+	const char *v = getenv("SECURE_SUDO_BOOT_STAGE");
+
+	if (v && (!strcmp(v, "initramfs") || !strcmp(v, "systemd")))
+		return v;
+	return "manual";
+}
+
 static int cmd_restore_staged(void)
 {
 	if (access(PENDING, F_OK) != 0)
 		return 0;		/* nothing staged: normal boot */
-	ssl_crit("PENDING boot restore found - applying before system start");
+	ssl_crit("PENDING boot restore found - applying before system start "
+		 "(stage: %s)", boot_stage());
 	return do_restore();
 }
 
@@ -632,6 +648,9 @@ static int cmd_status(void)
 	printf("backup root:      %s (hourly buckets)\n", c.backup_root);
 	printf("pending restore:  %s\n", access(PENDING, F_OK) == 0 ?
 	       "YES - will apply at next boot" : "none");
+	printf("initramfs stage:  %s\n", access(INITRAMFS_HOOK, F_OK) == 0 ?
+	       "installed (restores before the system starts, then the systemd unit is a no-op)" :
+	       "not installed (the systemd unit applies it; install-temporary.sh --initramfs)");
 	f = fopen(MANIFEST, "re");
 	if (f) {
 		while ((len = getline(&line, &cap, f)) >= 0)

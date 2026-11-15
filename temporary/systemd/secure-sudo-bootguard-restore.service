@@ -10,6 +10,7 @@ OnFailure=secure-sudo-addon-failure@%n.service
 [Service]
 Type=oneshot
 # No-op unless a restore is PENDING (staged by a previous `bootguard scan`).
+Environment=SECURE_SUDO_BOOT_STAGE=systemd
 ExecStart=/usr/bin/secure-sudo-bootguard restore-staged
 # It writes the boot partition (and an ESP mounted under /boot or /efi) and
 # its own state; everything else is read-only. No network this early.
