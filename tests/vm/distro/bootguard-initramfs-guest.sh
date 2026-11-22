@@ -50,7 +50,7 @@ import glob, zlib, sys
 ok = False
 for f in glob.glob('/var/lib/secure_sudo/addons/evidence/bootguard/*/evidence.*.z'):
     try:
-        if b'evil-boot' in zlib.decompress(open(f, 'rb').read()):
+        if b'evil-boot' in zlib.decompress(open(f, "rb").read()[8:]):
             ok = True
     except Exception:
         pass
