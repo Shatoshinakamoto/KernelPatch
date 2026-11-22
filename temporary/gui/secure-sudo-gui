@@ -18,6 +18,12 @@
 #     zones on/off (fixed) and enabling/disabling guards;
 #   - auto-detect helpers (driver tree, seed the ProcGuard allowlist).
 #
+# READ-ONLY BY DEFAULT (P2-5). gui.conf `mode = read_only` (the default) lets
+# the console show everything (status, health, event loss, the merged event
+# timeline, policy changes, evidence, logs) and refuses every POST; destructive
+# actions (config edits, knob changes, quarantine, scans that stage restores)
+# need `mode = admin`. The views are plain semantic HTML.
+#
 # SECURITY / ATTACK SURFACE. Root-only. Binds 127.0.0.1 by default (configure
 # in gui.conf). EVERY /api request (read or write) needs the per-install token
 # in the X-SS-Token header. The token lives only in a root-only 0600 file and is
@@ -29,20 +35,23 @@
 # Keep the bind on loopback unless you front it with your own authenticated
 # proxy - this console can change config and quarantine processes.
 import hmac, json, os, re, secrets, shutil, signal, subprocess, sys, time, gzip, html
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 # SS_GUI_CONF / SS_ADDON_CONF: for the tests (tests/userspace/test-addons.sh)
 CONF       = os.environ.get("SS_GUI_CONF", "/etc/secure_sudo/addons/gui.conf")
 ADDON_CONF = os.environ.get("SS_ADDON_CONF", "/etc/secure_sudo/addons")
-KLOG_DIR   = "/var/log/secure_sudo"            # daemon kernel-event logs
-ALOG_DIR   = "/var/log/secure_sudo/addons"     # guard logs (ssaddon_log)
-SYSFS      = "/sys/kernel/secure_sudo"
+KLOG_DIR   = os.environ.get("SS_GUI_KLOG", "/var/log/secure_sudo")   # daemon kernel-event logs
+ALOG_DIR   = os.environ.get("SS_GUI_ALOG", "/var/log/secure_sudo/addons")   # guard logs (ssaddon_log)
+SYSFS      = os.environ.get("SS_GUI_SYSFS", "/sys/kernel/secure_sudo")
 STATE      = os.environ.get("SS_GUI_STATE", "/var/lib/secure_sudo/addons/gui")
 TOKEN_FILE = STATE + "/token"
 # the evidence records the guards keep (ssaddon_trust.c), one JSON line each
 EVIDENCE   = os.environ.get("SS_EVIDENCE_ROOT", "/var/lib/secure_sudo/addons/evidence")
 HERE       = os.path.dirname(os.path.abspath(__file__))
+CLI        = os.environ.get("SS_GUI_CLI", "secure-sudo")   # tests point this at a stub
+MAX_EXPORT = 20000                              # evidence records in one export
 
 # conf name -> file; the only files the GUI will read/write.
 CONF_FILES = {
@@ -74,7 +83,7 @@ def load_conf(errors=None):
     """gui.conf, checked strictly like the guards' configs (ssaddon_conf):
     unknown keys, repeats, bad values and an unsafe owner/mode are errors,
     appended to @errors as "path:line: message"."""
-    cfg = {"bind": "127.0.0.1", "port": 8790}
+    cfg = {"bind": "127.0.0.1", "port": 8790, "mode": "read_only"}
     errs = [] if errors is None else errors
     try:
         f = open(CONF)
@@ -98,14 +107,19 @@ def load_conf(errors=None):
                 errs.append(f"{CONF}:{n}: not a 'key = value' line")
                 continue
             k, v = (x.strip() for x in line.split("=", 1))
-            if k not in ("bind", "port"):
+            if k not in ("bind", "port", "mode"):
                 errs.append(f"{CONF}:{n}: unknown setting '{k[:64]}'")
                 continue
             if k in seen:
                 errs.append(f"{CONF}:{n}: {k} is set twice (first on line {seen[k]})")
                 continue
             seen[k] = n
-            if k == "bind":
+            if k == "mode":
+                if v not in ("read_only", "admin"):
+                    errs.append(f"{CONF}:{n}: mode: '{v[:64]}' is not read_only or admin")
+                else:
+                    cfg["mode"] = v
+            elif k == "bind":
                 if not re.fullmatch(r"[A-Za-z0-9.\-_:\[\]%]{1,63}", v):
                     errs.append(f"{CONF}:{n}: bind: '{v[:64]}' is not a host name or address")
                 else:
@@ -253,6 +267,65 @@ def tail(path, n):
         return []
 
 
+# bad-token throttle: 10 failures in 60 s lock the API for the rest of the
+# window (the token is 192 bits, so this is about noise and logging, not about
+# guessing)
+_FAILS, _FAILS_LOCK = [], threading.Lock()
+THROTTLE_MAX, THROTTLE_WINDOW = 10, 60
+
+
+def throttled():
+    now = time.monotonic()
+    with _FAILS_LOCK:
+        _FAILS[:] = [t for t in _FAILS if now - t < THROTTLE_WINDOW]
+        return len(_FAILS) >= THROTTLE_MAX
+
+
+def note_failure():
+    with _FAILS_LOCK:
+        _FAILS.append(time.monotonic())
+
+
+def parse_ts(text):
+    """Epoch seconds from the start of a guard log line (ISO 8601 with or
+    without an offset), or None."""
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(Z|[+-]\d{4})?", text)
+    if not m:
+        return None
+    import calendar
+    y, mo, d, h, mi, se = (int(x) for x in m.groups()[:6])
+    t = calendar.timegm((y, mo, d, h, mi, se))
+    z = m.group(7)
+    if z and z != "Z":
+        off = (int(z[1:3]) * 3600 + int(z[3:5]) * 60) * (1 if z[0] == "+" else -1)
+        t -= off
+    return t
+
+
+def flatten(d, prefix=""):
+    out = {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            out.update(flatten(v, f"{prefix}{k}."))
+    elif isinstance(d, list):
+        out[prefix.rstrip(".")] = len(d)
+    else:
+        out[prefix.rstrip(".")] = d
+    return out
+
+
+def cli_json(args):
+    """Run the CLI and return (rc, parsed JSON or None, text)."""
+    exe = shutil.which(CLI)
+    if not exe:
+        return 127, None, f"{CLI} is not installed"
+    rc, out = run([exe] + args)
+    try:
+        return rc, json.loads(out), out
+    except ValueError:
+        return rc, None, out
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "secure-sudo-gui"
 
@@ -265,6 +338,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        # no framing (clickjacking), no caching of anything this console shows,
+        # no referrer, and a page that can only talk to itself
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; script-src 'self' 'unsafe-inline'; "
+                         "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
+                         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        for k, v in getattr(self, "_extra", ()):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -303,6 +387,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.api_memaccess(q))
         if u.path == "/api/config":
             return self._send(200, self.api_config_get(q))
+        if u.path == "/api/health":
+            return self._send(200, self.api_health())
+        if u.path == "/api/eventloss":
+            return self._send(200, self.api_eventloss())
+        if u.path == "/api/timeline":
+            return self._send(200, self.api_timeline(q))
+        if u.path == "/api/policy":
+            return self._send(200, self.api_policy(q))
+        if u.path == "/api/evidence":
+            return self._send(200, self.api_evidence(q))
+        if u.path == "/api/evidence/export":
+            body, name = self.api_evidence_export()
+            self._extra = [("Content-Disposition", f'attachment; filename="{name}"')]
+            return self._send(200, body)
         return self._send(404, {"error": "not found"})
 
     # ---- POST (token + same-host required) ----
@@ -311,10 +409,20 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0]
         if host not in ("127.0.0.1", "localhost", CFG["bind"]):
             return 403, {"error": "host not allowed"}
+        # a browser sends Origin on cross-site and on POST requests: it must
+        # name this console (CSRF); non-browser clients send none
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            if origin == "null" or urlparse(origin).hostname not in (
+                    "127.0.0.1", "localhost", CFG["bind"]):
+                return 403, {"error": "origin not allowed"}
+        if throttled():
+            return 429, {"error": "too many bad tokens; wait a minute"}
         given = (self.headers.get("X-SS-Token") or "").encode()
         if not hmac.compare_digest(given, TOKEN.encode()):
             sys.stderr.write(f"secure-sudo-gui: rejected API call {self.path.split('?')[0]} "
                              f"from {self.client_address[0]} (bad token)\n")
+            note_failure()
             return 401, {"error": "bad or missing token"}
         return None
 
@@ -328,6 +436,12 @@ class Handler(BaseHTTPRequestHandler):
         err = self._auth()
         if err:
             return self._send(*err)
+        if CFG["mode"] != "admin":
+            return self._send(403, {"error": "the console is read-only "
+                                    "(mode = read_only in gui.conf); set mode = admin to change things"})
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return self._send(415, {"error": "Content-Type must be application/json"})
         cl = self.headers.get("Content-Length") or "0"
         # a negative length would read to EOF, a huge one would hold memory
         if not re.fullmatch(r"[0-9]{1,7}", cl) or int(cl) > MAX_BODY:
@@ -350,7 +464,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- handlers ----
     def api_status(self):
-        out = {"knobs": read_sysfs(), "guards": {}}
+        out = {"knobs": read_sysfs(), "guards": {}, "mode": CFG["mode"]}
         for feat, binname in GUARD_BIN.items():
             if shutil.which(binname):
                 rc, txt = run([binname, "status"])
@@ -358,6 +472,150 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 out["guards"][feat] = {"installed": False, "status": "not installed"}
         return out
+
+    # ---- read-only views (P2-5) ----
+    def api_health(self):
+        """The CLI's own health report: the console shows what `secure-sudo
+        health` says, it does not compute a second opinion."""
+        rc, doc, text = cli_json(["health", "--json"])
+        return {"rc": rc, "health": doc, "text": None if doc is not None else text.strip()}
+
+    def api_eventloss(self):
+        """Everything that says an event may have been lost: the daemon's
+        counters from health, and the event_gap records in the kernel log."""
+        rc, doc, text = cli_json(["health", "--json"])
+        counters = {}
+        if isinstance(doc, dict):
+            for k, v in flatten(doc).items():
+                if re.search(r"drop|gap|missing|suppress|fail|overflow", k, re.I):
+                    counters[k] = v
+        gaps = []
+        path = latest_klog()
+        if path:
+            for ln in tail(path, 4000):
+                if re.search(r'"event_type"\s*:\s*"(event_gap|event_sequence_error)"', ln):
+                    gaps.append(ln.rstrip()[:500])
+        return {"counters": counters, "gap_records": gaps[-50:],
+                "gap_count": len(gaps), "health_rc": rc,
+                "source": "secure-sudo health --json and the daemon event log"}
+
+    def api_timeline(self, q):
+        """Kernel events and every guard's log, merged into one list by time."""
+        n = count_arg(q)
+        rows = []
+        path = latest_klog()
+        if path:
+            for ln in tail(path, n):
+                ln = ln.rstrip("\n")
+                row = {"source": "kernel", "time": None, "severity": "info", "text": ln[:600]}
+                try:
+                    rec = json.loads(ln)
+                    if isinstance(rec, dict):
+                        ns = rec.get("realtime_ns")
+                        if isinstance(ns, int):
+                            row["epoch"] = ns / 1e9
+                        row["source"] = str(rec.get("source") or "kernel")[:32]
+                        row["severity"] = "high" if rec.get("decision") == "deny" else "info"
+                        row["text"] = " ".join(str(rec.get(k, "")) for k in
+                                               ("event_type", "operation", "decision", "reason", "object")
+                                               if rec.get(k))[:600] or ln[:600]
+                except ValueError:
+                    t = parse_ts(ln)
+                    if t is not None:
+                        row["epoch"] = t
+                rows.append(row)
+        sev = {"CRIT": "critical", "ERROR": "high", "WARN": "medium", "INFO": "info"}
+        try:
+            names = sorted(x for x in os.listdir(ALOG_DIR) if x.endswith(".log"))
+        except OSError:
+            names = []
+        for name in names:
+            for ln in tail(os.path.join(ALOG_DIR, name), n):
+                ln = ln.rstrip("\n")
+                m = re.match(r"\S+\s+(CRIT|ERROR|WARN|INFO)\b", ln)
+                row = {"source": name[:-4], "time": None,
+                       "severity": sev.get(m.group(1), "info") if m else "info", "text": ln[:600]}
+                t = parse_ts(ln)
+                if t is not None:
+                    row["epoch"] = t
+                rows.append(row)
+        rows.sort(key=lambda r: r.get("epoch", 0))
+        for r in rows:
+            if "epoch" in r:
+                r["time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["epoch"]))
+                del r["epoch"]
+        return {"rows": rows[-n:], "note": "sorted by the time in each record; "
+                "lines without a time sort first"}
+
+    def api_policy(self, q):
+        """Policy changes, straight from `secure-sudo history`, with the
+        hash-chain check."""
+        n = count_arg(q, 20)
+        exe = shutil.which(CLI)
+        if not exe:
+            return {"error": f"{CLI} is not installed", "rows": []}
+        rc, out = run([exe, "history", "-n", str(n), "--json"])
+        rows = []
+        for ln in out.splitlines():
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                rows.append(rec)
+        vrc, vout = run([exe, "history", "--verify"])
+        return {"rows": rows, "chain": "intact" if vrc == 0 else "BROKEN",
+                "verify": vout.strip()[:2000]}
+
+    def _evidence_records(self, limit):
+        recs, blobs = [], []
+        for root, _dirs, files in os.walk(EVIDENCE):
+            for f in sorted(files):
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, EVIDENCE)
+                if os.path.islink(full):
+                    continue
+                if f.endswith(".jsonl"):
+                    for ln in tail(full, limit):
+                        try:
+                            rec = json.loads(ln)
+                        except ValueError:
+                            continue
+                        if isinstance(rec, dict):
+                            rec["file"] = rel
+                            recs.append(rec)
+                else:
+                    try:
+                        blobs.append({"file": rel, "size": os.path.getsize(full)})
+                    except OSError:
+                        pass
+        recs.sort(key=lambda r: str(r.get("time", "")))
+        return recs[-limit:], blobs[:limit]
+
+    def api_evidence(self, q):
+        n = count_arg(q)
+        recs, blobs = self._evidence_records(n)
+        return {"records": recs, "blobs": blobs, "root": EVIDENCE,
+                "export": "/api/evidence/export"}
+
+    def api_evidence_export(self):
+        """Every evidence record as one JSON document for the operator to
+        keep. Blob files are listed with size and SHA-256, never inlined."""
+        import hashlib
+        recs, blobs = self._evidence_records(MAX_EXPORT)
+        for b in blobs:
+            try:
+                h = hashlib.sha256()
+                with open(os.path.join(EVIDENCE, b["file"]), "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        h.update(chunk)
+                b["sha256"] = h.hexdigest()
+            except OSError:
+                b["sha256"] = None
+        doc = {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "root": EVIDENCE, "records": recs, "blobs": blobs}
+        return json.dumps(doc, indent=1, sort_keys=True), \
+            "secure-sudo-evidence-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + ".json"
 
     def api_logs(self, q):
         src = (q.get("src", ["kernel"])[0])

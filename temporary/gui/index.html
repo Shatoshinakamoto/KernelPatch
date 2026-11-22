@@ -113,14 +113,80 @@
   <button onclick="refreshAll()">Refresh</button>
   <button onclick="logout()">Sign out</button>
 </header>
-<nav>
+<nav aria-label="Views">
   <button data-view="status" class="active">Status</button>
+  <button data-view="timeline">Timeline</button>
+  <button data-view="policy">Policy changes</button>
+  <button data-view="loss">Event loss</button>
+  <button data-view="evidence">Evidence</button>
   <button data-view="logs">Kernel logs</button>
   <button data-view="mem">Memory access</button>
   <button data-view="pbox">PheonixBox &amp; tamper</button>
   <button data-view="config">Config</button>
 </nav>
 <main>
+  <p id="mode-banner" role="status" class="muted" style="display:none"></p>
+  <!-- TIMELINE -->
+  <section id="view-timeline" class="view" aria-labelledby="h-timeline">
+    <div class="card">
+      <h2 id="h-timeline">Event timeline</h2>
+      <p class="muted">Kernel and daemon events and every guard's log, merged by
+        the time in each record. Read-only.</p>
+      <div class="row">
+        <label for="tl-n">Newest</label>
+        <input type="number" id="tl-n" value="200" min="1" max="2000" style="width:90px">
+        <button onclick="loadTimeline()">Load</button>
+      </div>
+      <table><caption class="muted">Events, oldest first</caption>
+        <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Source</th>
+          <th scope="col">Severity</th><th scope="col">Event</th></tr></thead>
+        <tbody id="tl-body"></tbody></table>
+    </div>
+  </section>
+  <!-- POLICY CHANGES -->
+  <section id="view-policy" class="view" aria-labelledby="h-policy">
+    <div class="card">
+      <h2 id="h-policy">Policy changes</h2>
+      <p class="muted">Straight from <span class="mono">secure-sudo history</span>.
+        Read-only.</p>
+      <p id="pol-chain" role="status"></p>
+      <table><caption class="muted">Policy changes, oldest first</caption>
+        <thead><tr><th scope="col">Time</th><th scope="col">Action</th>
+          <th scope="col">Who (login uid)</th><th scope="col">Result</th>
+          <th scope="col">Detail</th></tr></thead>
+        <tbody id="pol-body"></tbody></table>
+    </div>
+  </section>
+  <!-- EVENT LOSS -->
+  <section id="view-loss" class="view" aria-labelledby="h-loss">
+    <div class="card">
+      <h2 id="h-loss">Event loss</h2>
+      <p class="muted">Anything that says an event may have been lost: the
+        daemon's counters from <span class="mono">secure-sudo health</span> and the
+        <span class="mono">event_gap</span> records in the event log. Read-only.</p>
+      <p id="loss-sum" role="status"></p>
+      <table><caption class="muted">Loss counters</caption>
+        <thead><tr><th scope="col">Counter</th><th scope="col">Value</th></tr></thead>
+        <tbody id="loss-body"></tbody></table>
+      <h3>Gap records</h3>
+      <pre id="loss-gaps">—</pre>
+    </div>
+  </section>
+  <!-- EVIDENCE -->
+  <section id="view-evidence" class="view" aria-labelledby="h-evidence">
+    <div class="card">
+      <h2 id="h-evidence">Evidence</h2>
+      <p class="muted">What the guards and this console recorded before they
+        changed or removed a file. Read-only; the export is a JSON file you keep
+        (files are listed with their SHA-256, not included).</p>
+      <div class="row"><button onclick="exportEvidence()">Export all as JSON</button></div>
+      <table><caption class="muted">Evidence records, oldest first</caption>
+        <thead><tr><th scope="col">Time</th><th scope="col">Feature</th>
+          <th scope="col">Action</th><th scope="col">Path</th></tr></thead>
+        <tbody id="ev-body"></tbody></table>
+      <p class="muted" id="ev-blobs"></p>
+    </div>
+  </section>
   <!-- STATUS -->
   <section id="view-status" class="view active">
     <div class="card">
@@ -241,10 +307,12 @@
     </div>
   </section>
 </main>
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;",
+  ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ---- auth: token lives in sessionStorage (this tab only), never in the page ----
 let TOKEN = "";
@@ -278,6 +346,10 @@ document.querySelectorAll("nav button").forEach(b => {
     b.classList.add("active");
     $("view-" + b.dataset.view).classList.add("active");
     if (b.dataset.view === "pbox") loadPbox();
+    if (b.dataset.view === "timeline") loadTimeline();
+    if (b.dataset.view === "policy") loadPolicy();
+    if (b.dataset.view === "loss") loadLoss();
+    if (b.dataset.view === "evidence") loadEvidence();
   };
 });
 
@@ -317,11 +389,86 @@ function colorLog(lines) {
   }).join("");
 }
 
+// ---- read-only mode: the server refuses writes anyway; the page just does
+// not offer them ----
+let MODE = "read_only";
+function applyMode() {
+  const ro = MODE !== "admin";
+  const b = $("mode-banner");
+  b.style.display = "block";
+  b.textContent = ro
+    ? "Read-only console: changes are switched off (mode = read_only in gui.conf)."
+    : "Admin console: changes are switched on (mode = admin in gui.conf).";
+  document.querySelectorAll(
+    'button[onclick^="action("], button[onclick^="setKnob("], button[onclick^="toggleKey("], ' +
+    'button[onclick^="saveConfig"], button[onclick^="quarantinePid"]').forEach(x => {
+    x.disabled = ro;
+    x.title = ro ? "Switched off: the console is read-only" : "";
+  });
+  $("cfg-body").readOnly = ro;
+}
+
+// ---- timeline, policy changes, event loss, evidence (read-only views) ----
+function cell(v) { return "<td>" + esc(v === undefined || v === null ? "" : v) + "</td>"; }
+async function loadTimeline() {
+  const n = $("tl-n").value || 200;
+  try {
+    const d = await apiGet("/api/timeline?n=" + encodeURIComponent(n));
+    $("tl-body").innerHTML = d.rows.length ? d.rows.map(r =>
+      "<tr>" + cell(r.time || "(no time)") + cell(r.source) + cell(r.severity) + cell(r.text) + "</tr>").join("")
+      : '<tr><td colspan="4">(no events)</td></tr>';
+  } catch (e) { toast("timeline: " + e.message, true); }
+}
+async function loadPolicy() {
+  try {
+    const d = await apiGet("/api/policy?n=50");
+    $("pol-chain").textContent = d.error ? d.error
+      : "History hash chain: " + d.chain + (d.chain === "intact" ? "" : " - " + (d.verify || ""));
+    $("pol-body").innerHTML = (d.rows || []).length ? d.rows.map(r =>
+      "<tr>" + cell(r.time) + cell(r.action) + cell(r.loginuid) + cell(r.result) +
+      cell(r.detail || r.snapshot || "") + "</tr>").join("")
+      : '<tr><td colspan="5">(no policy changes recorded)</td></tr>';
+  } catch (e) { toast("policy: " + e.message, true); }
+}
+async function loadLoss() {
+  try {
+    const d = await apiGet("/api/eventloss");
+    const bad = Object.entries(d.counters).filter(([, v]) => typeof v === "number" && v > 0);
+    $("loss-sum").textContent = (bad.length || d.gap_count)
+      ? "Events may have been lost: " + bad.length + " counter(s) above zero, " + d.gap_count + " gap record(s)."
+      : "No loss counter above zero and no gap records.";
+    $("loss-body").innerHTML = Object.entries(d.counters).map(([k, v]) =>
+      "<tr>" + cell(k) + cell(v) + "</tr>").join("") || '<tr><td colspan="2">(health report unavailable)</td></tr>';
+    $("loss-gaps").textContent = d.gap_records.length ? d.gap_records.join("\n") : "(none)";
+  } catch (e) { toast("event loss: " + e.message, true); }
+}
+async function loadEvidence() {
+  try {
+    const d = await apiGet("/api/evidence?n=200");
+    $("ev-body").innerHTML = d.records.length ? d.records.map(r =>
+      "<tr>" + cell(r.time) + cell(r.feature) + cell(r.action) + cell(r.path) + "</tr>").join("")
+      : '<tr><td colspan="4">(no evidence recorded)</td></tr>';
+    $("ev-blobs").textContent = d.blobs.length + " stored file(s) under " + d.root;
+  } catch (e) { toast("evidence: " + e.message, true); }
+}
+async function exportEvidence() {
+  try {
+    const r = await fetch("/api/evidence/export", { headers: { "X-SS-Token": TOKEN } });
+    if (r.status === 401) { showLogin("Session expired: sign in again."); return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = "secure-sudo-evidence.json"; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { toast("export: " + e.message, true); }
+}
+
 // ---- status ----
 async function loadStatus() {
   let d;
   try { d = await apiGet("/api/status"); }
   catch (e) { toast("status: " + e.message, true); return; }
+  MODE = d.mode || "read_only";
   const knobs = d.knobs || {};
   const keys = Object.keys(knobs);
   $("knobs-empty").style.display = keys.length ? "none" : "block";
@@ -330,9 +477,9 @@ async function loadStatus() {
     const on = /^(1|y|yes|on|true|enabled|locked)$/i.test(v);
     const isbool = /^(0|1|y|n|yes|no|on|off|true|false|enabled|disabled|locked|unlocked)$/i.test(v);
     const badge = isbool
-      ? `<span class="pill ${on ? "on" : "off"}">${v}</span>`
-      : `<span class="mono">${v}</span>`;
-    return `<div class="kv"><span class="k">${k}</span>${badge}</div>`;
+      ? `<span class="pill ${on ? "on" : "off"}">${esc(v)}</span>`
+      : `<span class="mono">${esc(v)}</span>`;
+    return `<div class="kv"><span class="k">${esc(k)}</span>${badge}</div>`;
   }).join("");
 
   const g = d.guards || {};
@@ -352,9 +499,10 @@ async function loadStatus() {
              ? `<button onclick="action('baseline','${feat}')">Baseline</button>` : ""}
          </div>` : "";
     return `<div class="card" style="margin:0">
-       <div class="row"><span class="guard-name">${feat}</span>${badge}</div>
+       <div class="row"><span class="guard-name">${esc(feat)}</span>${badge}</div>
        ${body}${actions}</div>`;
   }).join("");
+  applyMode();
 }
 
 // ---- logs ----
@@ -423,6 +571,7 @@ async function loadConfig() {
     $("cfg-path").textContent = d.path || "";
     $("cfg-body").value = d.content || "";
     renderToggles(name, d.content || "");
+    applyMode();
   } catch (e) { toast("config: " + e.message, true); }
 }
 function readKey(text, key) {
