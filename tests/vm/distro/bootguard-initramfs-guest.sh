@@ -14,6 +14,24 @@ ST=/var/lib/secure_sudo/addons/bootguard
 pass=0; fail=0
 r() { if eval "$2"; then echo "R ok $1"; pass=$((pass+1)); else echo "R fail $1"; fail=$((fail+1)); fi; }
 
+# evidence_has TEXT: an evidence blob (8-byte LE length header, then zlib) under
+# the BootGuard evidence dir contains TEXT. Kept out of the r "..." strings,
+# which are eval'd, so no quoting can change the Python.
+evidence_has() {
+	python3 - "$1" <<'PY'
+import glob, sys, zlib
+want = sys.argv[1].encode()
+found = False
+for f in glob.glob('/var/lib/secure_sudo/addons/evidence/bootguard/*/evidence.*.z'):
+    try:
+        if want in zlib.decompress(open(f, 'rb').read()[8:]):
+            found = True
+    except (zlib.error, OSError):
+        pass
+sys.exit(0 if found else 1)
+PY
+}
+
 case "${1:-}" in
 prep)
 	IMG="/boot/initrd.img-$(uname -r)"
@@ -45,17 +63,7 @@ verify)
 	r "the systemd unit found nothing left to do (it did not restore again)" \
 		"! grep -q 'stage: systemd' $L/bootguard.log && [ \"\$(systemctl show -p Result --value secure-sudo-bootguard-restore.service)\" = success ]"
 	r "the replaced bytes are kept as evidence (compressed copies hold the tampered content)" \
-		"python3 - <<'PY'
-import glob, zlib, sys
-ok = False
-for f in glob.glob('/var/lib/secure_sudo/addons/evidence/bootguard/*/evidence.*.z'):
-    try:
-        if b'evil-boot' in zlib.decompress(open(f, "rb").read()[8:]):
-            ok = True
-    except Exception:
-        pass
-sys.exit(0 if ok else 1)
-PY"
+		"evidence_has evil-boot"
 	r "the status line reports the initramfs stage installed" "secure-sudo-bootguard status | grep -qi 'initramfs stage:.*installed'"
 	secure-sudo-bootguard scan | tail -1
 	r "a fresh scan after the restore is clean" "secure-sudo-bootguard scan 2>&1 | grep -qi 'intact\|0 tampered'"
