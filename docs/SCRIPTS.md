@@ -254,6 +254,7 @@ never pass in release mode; a listed rule missing from the results fails
 |---|---|
 | `ci/build-gate.sh [--stages …] [--kernel-tree DIR] [--headers DIR]… [--headers-direct DIR]… [--record FILE]` | The release gate, in a scratch copy of the tree: `lint` (bash -n, shellcheck, py_compile, duplicate-hook check), `userspace` and `addons` (`-Werror`), `lsm-headers` (LSM against installed or downloaded header trees), `lsm-tree` (in-tree build per `ci/kconfig/*.config` variant), `tests` (`tests/run-all.sh`), `package` (release tarball built twice, compared). Writes a record with compiler, tree hash, kernel tree, per-variant config hashes and each stage's result |
 | `ci/make-release.sh [--out DIR]` | Reproducible release tarball + `.sha256` + SPDX SBOM |
+| `ci/publish-release.sh --notes FILE [--sign KEYID] [--publish]` | Build locally and create a GitHub Release with `gh` (a draft unless `--publish`) with the archive, checksum, SBOM and optional signature |
 | `ci/graft-lsm.sh TREE` | Copy the LSM into a kernel tree and register it (Kconfig, Makefile, `lsm_count.h`) |
 | `ci/lsm-compile-check.sh` | Compile every LSM file against a header tree (`--mode kbuild\|direct`) |
 | `ci/check-lsm-hooks.sh` | Fails if any LSM hook is registered twice (the v11 boot panic) |

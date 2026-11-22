@@ -41,8 +41,12 @@ you did on the pull request. Pull requests go against `main`, one at a time.
    attach the results to the pull request as evidence, with dates.
 4. Build the release archive with `ci/make-release.sh` and check that it is
    reproducible (the gate's package stage builds it twice and compares).
-5. Merge, tag the release, publish the archive and its SHA-256, then publish
-   the advisory. Tell supported users which release to take and whether any
+5. Merge, then publish the release as a public GitHub Release from the
+   owner's PC with `ci/publish-release.sh --notes NOTES.md [--sign KEYID]`. It
+   builds locally, checks the SHA-256, optionally signs the checksum file, and
+   uploads the archive, checksum, SBOM and signature with `gh release create`.
+   It creates a DRAFT; the owner reviews the tag and notes on GitHub and gives
+   a go before it is published (`--publish`). Then publish the advisory. Tell supported users which release to take and whether any
    action beyond upgrading is needed.
 6. If the fix cannot be backported to the previous supported release, say so in
    the advisory and tell users to upgrade.
