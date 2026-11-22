@@ -92,6 +92,10 @@ if stage_on lint; then
 	python3 -B "$SRC/ci/check-addon-maturity.py" "$SRC" > "$WORK/addon-maturity.log" 2>&1 ||
 		{ grep -v '^ok' "$WORK/addon-maturity.log"; bad=$((bad + 1)); }
 	tail -1 "$WORK/addon-maturity.log"
+	# the release-support matrix must be current for this release (P3-1)
+	python3 -B "$SRC/ci/check-support-matrix.py" "$SRC" > "$WORK/support-matrix.log" 2>&1 ||
+		{ grep -v '^ok' "$WORK/support-matrix.log"; bad=$((bad + 1)); }
+	tail -1 "$WORK/support-matrix.log"
 	if [ "$bad" -eq 0 ]; then result lint pass "$n shell scripts"; else result lint FAIL "$bad problems"; fi
 fi
 

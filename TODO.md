@@ -384,6 +384,8 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
 ## P3 — sustain support and trust
 
 - [ ] **P3-1: Publish a compatibility and release-support matrix.**
+  - Progress (2026-11-22): docs/SUPPORT.md and the gate check are built; the
+    end-of-support policy in it is a proposal for the owner to confirm.
   - Track supported kernel releases, distro versions, architectures, boot
     methods, compiler versions, and required kernel options; identify tested
     versus merely expected combinations.
