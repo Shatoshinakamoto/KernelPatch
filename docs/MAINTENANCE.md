@@ -6,10 +6,10 @@ in [SECURITY.md](../SECURITY.md); the supported kernels, distributions and
 the end-of-support policy are in [SUPPORT.md](SUPPORT.md). Targets in this
 file marked *proposed* are for the owner to confirm.
 
-Evidence rules that apply to every step: GitHub Actions has been blocked by
-billing since 2026-11-02, so "tested" means the local gate plus the VM runs on
-the owner's PC (see [ROADMAP_STATUS.md](ROADMAP_STATUS.md)); say that on the
-pull request. Pull requests go against `main`, one at a time.
+Evidence rules that apply to every step: This project does not use GitHub
+Actions; everything is built and tested locally, so "tested" means the local gate plus the VM runs on
+the owner's PC (see [ROADMAP_STATUS.md](ROADMAP_STATUS.md)); say which runs
+you did on the pull request. Pull requests go against `main`, one at a time.
 
 ## 1. Vulnerability triage
 

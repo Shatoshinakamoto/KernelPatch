@@ -15,9 +15,8 @@ says one of:
 * **unsupported**: refused by the installer or known not to work.
 
 "Tested" never means "tested on hardware" unless the row says so. All VM runs
-are QEMU, mostly without KVM (software emulation) on the owner's PC; GitHub
-Actions has been blocked by billing since 2026-11-02, so the dates below are
-from local and PC runs after that. See
+are QEMU, mostly without KVM (software emulation) on the owner's PC; the project does
+not use GitHub Actions, so the dates below are from local and PC runs. See
 [ROADMAP_STATUS.md](ROADMAP_STATUS.md) for the full evidence per item.
 
 ## 1. Kernels
