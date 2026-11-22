@@ -877,7 +877,7 @@ fi
 
 # the console's API: token, Host, sizes and names
 GPORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
-printf 'bind = 127.0.0.1\nport = %s\n' "$GPORT" > "$T/gui.conf"
+printf 'bind = 127.0.0.1\nport = %s\nmode = admin\n' "$GPORT" > "$T/gui.conf"
 mkdir -p "$T/guist"
 SS_GUI_CONF="$T/gui.conf" SS_ADDON_CONF="$T" SS_GUI_STATE="$T/guist" python3 -B "$GUI" > /dev/null 2>&1 & GUIP=$!
 for _ in $(seq 50); do [ -s "$T/guist/token" ] && python3 -c "import socket; socket.create_connection(('127.0.0.1',$GPORT),1)" 2>/dev/null && break; sleep 0.1; done
@@ -892,6 +892,7 @@ c.putheader("Host", host)
 if tok != "-":
     c.putheader("X-SS-Token", tok)
 if body is not None:
+    c.putheader("Content-Type", "application/json")
     if body.startswith("LEN="):
         c.putheader("Content-Length", body[4:]); body = None
     else:

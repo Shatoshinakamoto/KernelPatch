@@ -199,7 +199,8 @@ Recommended order:
     systemctl enable --now secure-sudo-tamperwatch
     # mode=log (default) attributes only; set mode=quarantine to kill+compress
 
-  Management GUI (view/configure everything from a local browser):
+  Management GUI (view everything from a local browser; READ-ONLY by default,
+  set mode = admin in /etc/secure_sudo/addons/gui.conf to change things):
     systemctl enable --now secure-sudo-gui
     # then open http://127.0.0.1:8790/ ON THIS HOST (loopback only)
     # the access token is printed on start and stored 0600 at

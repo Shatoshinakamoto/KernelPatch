@@ -1450,3 +1450,29 @@ the collector and in health). Documented in [EVENTS.md](EVENTS.md).
    authenticated path. Still detect-only, no reflashing.
 3. **Not claimed.** Encrypted-root recovery, systemd-boot and dracut distros
    are untested or unsupported and are listed as such.
+
+### 75. The console could change and kill by default, had no CSRF, framing or flood defences beyond the token, and showed no policy history, event loss or evidence (v1–v12, found 2026-11-22 by P2-5) — AC-3 / AC-6 / SI-4 / AU-6
+
+1. **Destructive by default.** Anyone holding the token could edit configs,
+   set knobs, stage restores and kill processes from the first start. The
+   console now starts `mode = read_only`: every POST is refused with 403 and
+   the page switches the buttons off. `mode = admin` in `gui.conf` turns the
+   changes on.
+2. **Cross-site and framing.** Only the token and Host were checked. A POST
+   must now be `application/json` (415), a browser `Origin` must be the console
+   (403, `null` included), and every response carries `X-Frame-Options: DENY`,
+   `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and a content
+   security policy.
+3. **Token flood.** Ten bad tokens in a minute now lock the API for the rest of
+   the minute (429).
+4. **Unescaped kernel values.** Knob names and values and guard names were
+   put into the page as HTML. They are escaped (a log line `<img onerror>` was
+   checked in a real browser).
+5. **Visibility.** Read-only views were added for the merged event timeline,
+   policy changes (the CLI's `history` with its chain verdict), event loss
+   (the CLI's `health --json` counters and `event_gap` records) and evidence
+   (with a JSON export that lists stored files by SHA-256). The status view is
+   tested to equal the guards' own `status` output and the kernel's sysfs.
+6. **Tests.** `tests/userspace/test-gui.sh` (40 checks over real HTTP) and the
+   admin-mode paths in `test-addons.sh`.
+

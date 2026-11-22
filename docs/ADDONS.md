@@ -285,7 +285,14 @@ A single dependency-free (Python 3 stdlib) service — `secure-sudo-gui` — tha
 lets an operator view and configure the whole stack from a browser:
 
 * **Status** of every guard + PheonixBox, and the live kernel knobs (with
-  on/off pills);
+  on/off pills), exactly as `secure-sudo-<guard> status` and the kernel's
+  sysfs report them;
+* **Timeline**, **Policy changes**, **Event loss** and **Evidence** (P2-5,
+  read-only): every kernel, daemon and guard record merged by time; the
+  `secure-sudo history` list with its hash-chain verdict; the daemon's loss
+  counters from `secure-sudo health` and any `event_gap` records; and the
+  evidence the guards kept, with a JSON export (stored files listed with their
+  SHA-256, never inlined);
 * **Kernel logs** — the daemon's dated event logs and each guard's log;
 * **Memory access** — the `prguard_observe` read/write feed, with an
   enable/disable toggle;
@@ -310,12 +317,27 @@ sudo cat /var/lib/secure_sudo/addons/gui/token
 The token stays in that browser tab only (cleared when the tab closes); **Sign
 out** forgets it.
 
+**Read-only by default (P2-5).** `gui.conf` `mode = read_only` (the default)
+shows every view and refuses every POST (403), so no destructive action is on
+the default path: the buttons are switched off and the server would refuse them
+anyway. Config edits, knob changes, scans, baselines and quarantine need
+`mode = admin`; change it, restart the console, do the work, change it back.
+(Upgrade note: an existing install that used the console to change things now
+needs `mode = admin`.)
+
 **Attack surface.** Root-only service, bound to `127.0.0.1` by default
-(`gui.conf`). The page itself holds no secret. **Every** API call, reads
+(`gui.conf`). Remote access is not supported: if you need it, front the
+console with your own authenticated TLS proxy, keep the bind on loopback, and
+note that the Host and Origin checks expect the loopback names. The page itself holds no secret. **Every** API call, reads
 included, needs the token, which lives only in a root-only `0600` file, so
 being able to reach the port is not enough: only someone who can read that
 file (root) can use the console. Tokens are compared in constant time, failed
-attempts are logged, and the `Host` header is checked on every call. (v10 put
+attempts are logged and throttled (ten in a minute lock the API for the rest
+of the minute), the `Host` header is checked on every call, a browser's
+`Origin` must be the console itself (CSRF), a POST must be
+`application/json`, bodies over 512 KiB are refused unread, and every response
+says no framing, no caching, no referrer and a content security policy that
+lets the page talk only to itself. Text from logs is escaped before display. (v10 put
 the token in the page, which let any local user read it; fixed in v11, see
 SECURITY_REVIEW #29.) Keep the bind on loopback unless you front it with your
 own authenticated TLS proxy: this console can change config and kill processes.

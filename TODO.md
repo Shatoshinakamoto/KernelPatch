@@ -367,6 +367,10 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     provenance, and the operator has an explicit, safe recovery path.
 
 - [ ] **P2-5: Add maintainable operator-facing visibility.**
+  - Progress (2026-11-22): read-only default, CSRF/Origin/type/throttle/headers,
+    the four read-only views and automated tests are built; see
+    docs/ROADMAP_STATUS.md. Open: a supported TLS-proxy deployment is only
+    needed if remote access is required (not built).
   - Keep the GUI loopback-only by default; test authentication, authorization,
     CSRF/DNS rebinding, request-size limits, session handling, and privileged
     actions. Define a supported TLS-proxy deployment only if remote access is
