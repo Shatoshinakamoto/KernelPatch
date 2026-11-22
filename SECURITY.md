@@ -9,11 +9,12 @@ problems privately and give us time to fix them.
 * **Use GitHub private vulnerability reporting** on this repository: the
   **Security** tab, then **Report a vulnerability**. Do not open a public
   issue, pull request or discussion for a vulnerability.
-* **Owner action needed:** private vulnerability reporting must be enabled
-  in the repository settings (Settings, Code security). Until the owner has
-  confirmed it is on, there is no tested private channel; the owner decides
-  whether to add an e-mail address here. No personal contact details are
-  published in this file on purpose.
+* **While the repository is private** (the owner's choice, 2026-11-22),
+  GitHub private vulnerability reporting is not available, so there is no
+  public reporting channel yet: report to the owner directly. Once the
+  repository is made public the owner enables private vulnerability reporting
+  (Settings, Code security) and this file is updated. No personal contact
+  details are published in this file on purpose.
 * Include: the release (the `VERSION` file), the
   kernel (`uname -r`) and distribution, what you did, what you expected, what
   happened, and whether you can reproduce it on a clean install. A test that
