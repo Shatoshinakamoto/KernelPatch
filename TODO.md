@@ -71,7 +71,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     [OSCAP_BUGS.md](docs/OSCAP_BUGS.md). Run the release gate in an Ubuntu
     VM with systemd and AppArmor so the final result has exactly one `fail`
     (`encrypt_partitions`, OSB-12), zero `error`, and zero other failed rules;
-    compare rule IDs, not only totals.
+    compare rule IDs, not only totals. (Two further fails are accepted by the
+    owner, 2026-10-26, and listed with their reasons in
+    `tests/oscap/ubuntu2404-stig.expect`: `is_fips_mode_enabled`, because a
+    self-built kernel cannot be FIPS-validated, and `service_sssd_enabled`,
+    because it needs the site's directory. The gate allows exactly those
+    three.)
   - Keep container scans as diagnostics, not as the release acceptance gate:
     their AppArmor error and other environment-dependent results must be
     resolved by running in a capable VM/host, not hidden or counted as a pass.
@@ -93,8 +98,9 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     verify the STIG results that are misrepresented by container limitations:
     AppArmor rules must evaluate without errors, and all applicable rules must
     pass. If the VM cannot validate encrypted partitions, permit only the
-    exact `encrypt_partitions` failure (OSB-12); do not infer encrypted-volume
-    support from a container scan.
+    exact `encrypt_partitions` failure (OSB-12), plus the two owner-accepted
+    exceptions in `tests/oscap/ubuntu2404-stig.expect` (FIPS mode, sssd); do
+    not infer encrypted-volume support from a container scan.
   - **Done when:** results and known platform exclusions are recorded per
     supported kernel/distro combination; documentation no longer treats
     compilation as a substitute for boot testing, and the VM STIG run has no

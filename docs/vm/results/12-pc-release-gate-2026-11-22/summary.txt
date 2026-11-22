@@ -1,0 +1,44 @@
+Release-gate VM run on main d321ecc (merge of PR #42), 2026-11-22, on the
+owner's PC: Docker Desktop (container kp-vm), QEMU without KVM (TCG), Ubuntu
+24.04 cloud image, software TPM. GitHub Actions was blocked by billing, so this
+is not a CI run. Text below is copied from the run's report; the VM disk and
+key were deleted after the run and are not kept.
+
+Kernel: linux-6.12.114 (kernel.org, signature verified:
+"verify-kernel-source: OK linux-6.12.114.tar.xz signed by 647F2865...693E"),
+secure_sudo in CONFIG_LSM, version 0.12.0, built 19:50 to 19:57Z. Its config
+hash equals the 5e6ac56 build's.
+
+run-install-test.sh (VM_TPM=1), 19:57 to 20:30Z: 71/71 ok, 0 not ok.
+
+run-stig-test.sh (SSG 0.1.78, datastream pinned by sha256), 20:30 to 21:53Z:
+16/16 ok.
+  ok 1 - fresh guest boots
+  ok 2 - install-kernel + userspace succeed
+  ok 3 - trial boot of 6.12.114-secure-sudo verified and committed
+  ok 4 - running the secure_sudo kernel
+  ok 5 - site steps applied (ufw limits ssh and is on, GRUB password with unrestricted entries, chrony server, audit offload job)
+  ok 6 - tester can reach root through sudo
+  ok 7 - baseline scan, remediation and rescan ran to the end
+  ok 8 - the default boot entry needs no GRUB password (install.sh verify)
+  ok 9 - the hardened guest reboots
+  ok 10 - after hardening it still runs the secure_sudo kernel
+  ok 11 - secure_sudo and AppArmor both active after hardening
+  ok 12 - final scan ran
+  ok 13 - the independent checks (OSB-19) were recorded with the final scan
+  ok 14 - STIG release gate passes on the VM result
+  ok 15 - no evaluation errors
+  ok 16 - apparmor_configured evaluates (no error) and passes
+  STIG gate release: pass=214 fail=3 error=0 notapplicable=8 notchecked=5 notselected=409
+  scanner alone: pass=215 fail=2 error=0 notapplicable=8 notchecked=5 notselected=409
+  The three allowed fails are in tests/oscap/ubuntu2404-stig.expect:
+    encrypt_partitions (OSB-12: the test VM disk is not LUKS; the independent
+      check overrode the scanner's false "pass", OSB-19),
+    is_fips_mode_enabled (accepted by the owner, 2026-10-26),
+    service_sssd_enabled (accepted by the owner, 2026-10-26).
+  Five manual-review notchecked rules (OSB-14), never counted as pass:
+    account_temp_expire_date, auditd_audispd_configure_sufficiently_large_partition,
+    ensure_sudo_group_restricted, only_allow_dod_certs, ufw_only_required_services.
+
+The add-on units test and the BootGuard initramfs tests (BIOS and UEFI) ran
+after this and are reported separately.
