@@ -35,7 +35,9 @@ under UEFI or Secure Boot, or on real hardware.
 | P2-3 | part 1 done: traced on Ubuntu 24.04 with kernel 6.12.114 (2026-11-07) | [EVENTS.md](EVENTS.md): record formats, severity per event type, syslog PRI from severity (`authpriv`, `<82>`–`<86>`), supported integrations (tested vs example), gaps table. Core #1 denials are now `credential_change` events (they were dmesg-only, SECURITY_REVIEW #73). `alert_cmd` without a shell, with placeholders, dedup, per-minute limit, timeout, `alert_failed`/`alert_rate_limited` records and health state; add-on `notify_cmd` no longer runs a shell (it could run `$(...)` from event text) and gained dedup, a rate limit, a timeout and failure logging. Tests: `test-daemon-events` (21 new), `test-addons` (notify rewritten), `t_creds` (4 new), `alert-trace-guest.sh` (kernel → log → collector → alert, and a failing alert). Run 2026-11-07 on main 5e6ac56 plus the PR #41 test fixes, kernel 6.12.114 built from the signature-verified kernel.org tarball, Ubuntu 24.04 guest under QEMU (TCG, no KVM) in Docker on the owner's PC: install test 71/71 including all 10 trace checks, add-on units 22/22. GitHub Actions could not run it (billing). Other distros not yet traced |
 | P2-4 | part 1 code-complete (VM result to be recorded) | [BOOT_ASSURANCE.md](BOOT_ASSURANCE.md): BiosGuard now fingerprints SMBIOS, Secure Boot variables, ESRT and TPM PCRs 0/2/7 (configurable) with `refresh`, and states plainly that none of it is authenticated (attestation is); optional initramfs-stage BootGuard restore (`install-temporary.sh --initramfs`), which handles a separate `/boot` and ESP and never blocks the boot; tested-vs-not-tested table (encrypted roots, systemd-boot and dracut are NOT tested/supported); operator recovery path. Tests: 13 BiosGuard and 5 initramfs-script checks in `test-addons`; `run-bootguard-initramfs-test.sh` (reboot proof, BIOS and UEFI, separate ESP) (SECURITY_REVIEW #74) |
 | P2-5 | code-complete (browser smoke by hand, no remote TLS deployment) | [ADDONS.md](ADDONS.md) "Management GUI": read-only by default (`mode = read_only`; `mode = admin` for changes); Origin/CSRF, Content-Type, size, Host, token throttle and security headers, all tested over real HTTP (`test-gui.sh`, 40 checks); read-only Timeline, Policy changes, Event loss and Evidence views with a JSON export, and a status that equals the guards' CLI output and the kernel's sysfs; log text escaped. No remote access is supported (front it with your own authenticated TLS proxy; documented, not built). SECURITY_REVIEW #75 |
-| P3-1 … P3-3 | partly (P3-2) | evidence and docs updated with this release; no matrix or disclosure process yet |
+| P3-1 | done (policy awaits the owner) | [SUPPORT.md](SUPPORT.md): kernels, distributions and architectures, boot methods, toolchain and required kernel options, each marked tested (with date and evidence), compile-checked, expected or unsupported; end-of-support policy (proposed, owner to confirm); release checklist. `ci/check-support-matrix.py` runs in the gate's lint stage and fails a release whose matrix is for another version, has no review date, uses an unknown status, or has a tested row without a date (`test-support-matrix.sh`) |
+| P3-2 | partly | evidence and docs updated with this release; the STIG/CIS target-host gates and the remaining OpenSCAP items are tracked in P3-2 below |
+| P3-3 | not started | no disclosure or maintenance process yet |
 
 ---
 
@@ -619,8 +621,9 @@ P2-5 groundwork: the management GUI's access-token hole was fixed in v11
 
 ## P3
 
-* P3-1 compatibility matrix: not started. What is known is in the P0-3
-  table above.
+* P3-1 compatibility matrix: [SUPPORT.md](SUPPORT.md), checked by the gate
+  (`ci/check-support-matrix.py`). The end-of-support policy in it is a
+  proposal for the owner to confirm.
 * P3-2: this file, [RECOVERY.md](RECOVERY.md), the security review (#35–#47)
   and `docs/vm/results/` were brought up to date with the code in this
   release; making that part of a release checklist is not done.
