@@ -40,5 +40,10 @@ run-stig-test.sh (SSG 0.1.78, datastream pinned by sha256), 20:30 to 21:53Z:
     account_temp_expire_date, auditd_audispd_configure_sufficiently_large_partition,
     ensure_sudo_group_restricted, only_allow_dod_certs, ufw_only_required_services.
 
-The add-on units test and the BootGuard initramfs tests (BIOS and UEFI) ran
-after this and are reported separately.
+Reported after the STIG run, same main d321ecc, same PC (no KVM):
+  run-addon-units-test.sh: 22/22 ok (11 min).
+  run-bootguard-initramfs-test.sh, BIOS/GRUB: 18/18 ok (17 min).
+  run-bootguard-initramfs-test.sh, UEFI (OVMF): 18/18 ok (18 min).
+Whole distro-vm job: 19:50 to 22:39Z (2 h 49 min), 0 not ok in any TAP file.
+This is local evidence, not CI. It does not cover the hardware smoke test
+(Secure Boot, Wi-Fi/BT, real storage and NICs) that TODO P0-3 also asks for.
