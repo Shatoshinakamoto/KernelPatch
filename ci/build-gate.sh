@@ -96,6 +96,10 @@ if stage_on lint; then
 	python3 -B "$SRC/ci/check-support-matrix.py" "$SRC" > "$WORK/support-matrix.log" 2>&1 ||
 		{ grep -v '^ok' "$WORK/support-matrix.log"; bad=$((bad + 1)); }
 	tail -1 "$WORK/support-matrix.log"
+	# the disclosure and maintenance process documents must stay complete (P3-3)
+	python3 -B "$SRC/ci/check-process-docs.py" "$SRC" > "$WORK/process-docs.log" 2>&1 ||
+		{ grep -v '^ok' "$WORK/process-docs.log"; bad=$((bad + 1)); }
+	tail -1 "$WORK/process-docs.log"
 	if [ "$bad" -eq 0 ]; then result lint pass "$n shell scripts"; else result lint FAIL "$bad problems"; fi
 fi
 
