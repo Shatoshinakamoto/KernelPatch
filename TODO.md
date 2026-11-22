@@ -443,6 +443,9 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     control.
 
 - [ ] **P3-3: Establish maintenance and disclosure processes.**
+  - Progress (2026-11-22): SECURITY.md, docs/MAINTENANCE.md and a gate check
+    are built. Owner to do: enable GitHub private vulnerability reporting
+    (the channel SECURITY.md names) and confirm the proposed targets.
   - Document supported reporting channels, security-fix release process,
     kernel API/LTS tracking, dependency updates, vulnerability triage, and
     deprecation policy.

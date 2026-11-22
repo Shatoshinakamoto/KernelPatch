@@ -37,7 +37,7 @@ under UEFI or Secure Boot, or on real hardware.
 | P2-5 | code-complete (browser smoke by hand, no remote TLS deployment) | [ADDONS.md](ADDONS.md) "Management GUI": read-only by default (`mode = read_only`; `mode = admin` for changes); Origin/CSRF, Content-Type, size, Host, token throttle and security headers, all tested over real HTTP (`test-gui.sh`, 40 checks); read-only Timeline, Policy changes, Event loss and Evidence views with a JSON export, and a status that equals the guards' CLI output and the kernel's sysfs; log text escaped. No remote access is supported (front it with your own authenticated TLS proxy; documented, not built). SECURITY_REVIEW #75 |
 | P3-1 | done (policy awaits the owner) | [SUPPORT.md](SUPPORT.md): kernels, distributions and architectures, boot methods, toolchain and required kernel options, each marked tested (with date and evidence), compile-checked, expected or unsupported; end-of-support policy (proposed, owner to confirm); release checklist. `ci/check-support-matrix.py` runs in the gate's lint stage and fails a release whose matrix is for another version, has no review date, uses an unknown status, or has a tested row without a date (`test-support-matrix.sh`) |
 | P3-2 | partly | evidence and docs updated with this release; the STIG/CIS target-host gates and the remaining OpenSCAP items are tracked in P3-2 below |
-| P3-3 | not started | no disclosure or maintenance process yet |
+| P3-3 | done (owner must enable private vulnerability reporting and confirm the targets) | [SECURITY.md](../SECURITY.md): reporting channel (GitHub private vulnerability reporting; no personal contact published), response and fix targets by severity (proposed), scope; [MAINTENANCE.md](MAINTENANCE.md): triage, security-fix release steps, kernel API/LTS tracking, dependency table, deprecation policy. `ci/check-process-docs.py` in the gate keeps the parts and links in place (`test-process-docs.sh`). Whether people follow it is recorded per release, not testable by the gate |
 
 ---
 
@@ -624,6 +624,7 @@ P2-5 groundwork: the management GUI's access-token hole was fixed in v11
 * P3-1 compatibility matrix: [SUPPORT.md](SUPPORT.md), checked by the gate
   (`ci/check-support-matrix.py`). The end-of-support policy in it is a
   proposal for the owner to confirm.
+* P3-3: [SECURITY.md](../SECURITY.md) and [MAINTENANCE.md](MAINTENANCE.md), checked by the gate.
 * P3-2: this file, [RECOVERY.md](RECOVERY.md), the security review (#35–#47)
   and `docs/vm/results/` were brought up to date with the code in this
   release; making that part of a release checklist is not done.

@@ -38,6 +38,7 @@ docs/
   THREAT_MODEL.md                 per control: threat, preconditions, limits, test
   ATTESTATION.md                  remote attestation: enroll, verify, revoke, recover (P2-1)
   BOOT_ASSURANCE.md               boot and firmware assurance: coverage, initramfs restore, tested vs not, recovery (P2-4)
+  MAINTENANCE.md                  vulnerability triage, security-fix releases, kernel/LTS tracking, dependency updates, deprecation (P3-3)
   SUPPORT.md                      compatibility and release-support matrix: tested vs expected, end-of-support policy (P3-1)
   EVENTS.md                       event format, severity, forwarding priority, alerts, SIEM integration (P2-3)
   STIG.md                         STIG/CIS tooling, control map, results
