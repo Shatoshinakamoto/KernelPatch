@@ -133,13 +133,22 @@ bricks the board. So BiosGuard **only detects, logs, and notifies**; it never
 writes firmware:
 
 ```sh
-secure-sudo-biosguard baseline   # fingerprint DMI + ACPI tables
+secure-sudo-biosguard baseline   # fingerprint the firmware sources below
 secure-sudo-biosguard scan       # detect tamper; log CRITICAL + notify (writes nothing)
+secure-sudo-biosguard refresh R  # after a legitimate firmware update: log every change, re-baseline
 secure-sudo-biosguard status
 ```
 
-`baseline` hashes the firmware identity (`/sys/class/dmi/id/*`) and the ACPI
-tables the firmware exposes (`/sys/firmware/acpi/tables/*`). `scan` recomputes
+`baseline` hashes the firmware identity (`/sys/class/dmi/id/*`), the ACPI
+tables (`/sys/firmware/acpi/tables/*`), the raw SMBIOS tables
+(`/sys/firmware/dmi/tables`), the UEFI Secure Boot state (`SecureBoot`,
+`SetupMode`, `PK`, `KEK`, `db`, `dbx`), the firmware-update table (ESRT: each
+entry's class, version, last attempt status) and the TPM PCRs listed in
+`tpm_pcrs` (default 0, 2, 7). None of these is signature-authenticated by
+BiosGuard: they are what the running kernel reports, so a firmware that lies to
+the kernel also lies here. For a quote verified by someone else, use
+`secure-sudo attest` (docs/ATTESTATION.md). Coverage table and limits:
+[BOOT_ASSURANCE.md](BOOT_ASSURANCE.md). `scan` recomputes
 and, on a mismatch, logs CRITICAL and fires `ssl_notify` (so it reaches your
 `notify_cmd` and off-box collector). There is **no repair/reflash path** — if a
 firmware change is detected, remediation is a deliberate operator action with
@@ -177,11 +186,15 @@ any restore staged before the update (`BOOT staged restore DROPPED by refresh`),
 so the next boot does not roll the update back (SECURITY_REVIEW #66). Run
 `refresh` yourself after a manual kernel install.
 
-> Assurance note: the systemd unit applies the restore as early as a normal
-> systemd unit can (after `/boot` is mounted, before services use it). For the
-> strongest guarantee — restoring before anything from `/boot` is used at all —
-> wire `restore-staged` into the initramfs; the systemd unit is the practical
-> default.
+**Initramfs stage (optional, initramfs-tools systems).**
+`bash temporary/install-temporary.sh --initramfs` installs a hook that applies a
+staged restore from the initramfs, after the (possibly encrypted) root is
+mounted and before systemd starts, mounting a separate `/boot` and ESP from the
+root's `/etc/fstab` first. Undo with `--remove-initramfs`. It never blocks the
+boot, and `secure_sudo.bootguard=off` on the kernel command line skips it. It
+repairs files for the **next** boot; it does not protect the boot already in
+progress. What it gives, what it does not, and what is tested:
+[BOOT_ASSURANCE.md](BOOT_ASSURANCE.md).
 
 ## 5. Locus — the rotating-location allocator
 

@@ -1,0 +1,28 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# initramfs-tools build-time hook for BootGuard (TODO P2-4): puts what the
+# local-bottom script needs into the initramfs - the filesystem modules for a
+# FAT boot partition (the ESP) and a chroot. BootGuard itself, its libraries
+# and its state are NOT copied in: the restore runs the installed program from
+# the real root once that is mounted.
+#
+# Installed by `bash install-temporary.sh --initramfs` (which then rebuilds the
+# initramfs and re-baselines BootGuard). docs/BOOT_ASSURANCE.md.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs) prereqs; exit 0 ;;
+esac
+
+# shellcheck source=/dev/null
+. /usr/share/initramfs-tools/hook-functions
+
+# the ESP is FAT; a separate /boot is normally the root's own filesystem
+manual_add_modules vfat fat nls_cp437 nls_iso8859_1
+
+# the restore runs the real root's secure-sudo-bootguard under chroot
+if [ -x /usr/sbin/chroot ]; then
+	copy_exec /usr/sbin/chroot /usr/sbin
+fi
