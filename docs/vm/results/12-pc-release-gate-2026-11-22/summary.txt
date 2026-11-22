@@ -1,7 +1,7 @@
 Release-gate VM run on main d321ecc (merge of PR #42), 2026-11-22, on the
 owner's PC: Docker Desktop (container kp-vm), QEMU without KVM (TCG), Ubuntu
-24.04 cloud image, software TPM. GitHub Actions was blocked by billing, so this
-is not a CI run. Text below is copied from the run's report; the VM disk and
+24.04 cloud image, software TPM. The project builds and tests locally and does
+not use GitHub Actions, so this is not a CI run. Text below is copied from the run's report; the VM disk and
 key were deleted after the run and are not kept.
 
 Kernel: linux-6.12.114 (kernel.org, signature verified:
