@@ -940,6 +940,12 @@ check "initramfs: a boot filesystem that cannot be found keeps the restore stage
 printf '/dev/sda1 / ext4 defaults 0 1\n' > "$IR/root/etc/fstab"
 check "initramfs: with no separate boot filesystem it runs restore-staged in the root with the initramfs stage" \
 	sh -c "[ \"$(ir_run)\" = 0 ] && grep -q \"chroot $IR/root /usr/bin/secure-sudo-bootguard restore-staged\" '$IR/calls'"
+echo "dev $IR/root ext4 ro,relatime 0 0" > "$IR/proc/mounts"
+check "initramfs: a read-only root is remounted read-write for the restore and back to read-only after" \
+	sh -c "[ \"$(ir_run)\" = 0 ] && grep -q 'remount,rw $IR/root' '$IR/calls' && grep -q 'remount,ro $IR/root' '$IR/calls' && grep -q 'chroot $IR/root' '$IR/calls'"
+echo "dev $IR/root ext4 rw,relatime 0 0" > "$IR/proc/mounts"
+check "initramfs: a root that is already read-write is not remounted" \
+	sh -c "[ \"$(ir_run)\" = 0 ] && ! grep -q remount '$IR/calls'"
 chmod 0644 "$IR/root/usr/bin/secure-sudo-bootguard"
 check "initramfs: a missing/non-executable bootguard binary skips, boot continues" \
 	sh -c "[ \"$(ir_run)\" = 0 ] && ! grep -q chroot '$IR/calls'"

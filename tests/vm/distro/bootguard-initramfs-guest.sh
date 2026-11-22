@@ -19,8 +19,9 @@ prep)
 	IMG="/boot/initrd.img-$(uname -r)"
 	r "the initramfs carries the BootGuard local-bottom script" \
 		"lsinitramfs $IMG | grep -q 'scripts/local-bottom/secure-sudo-bootguard'"
-	r "... a chroot, and the vfat module for an ESP" \
-		"lsinitramfs $IMG | grep -qE '(^|/)chroot\$' && lsinitramfs $IMG | grep -q 'vfat'"
+	r "... a chroot" "lsinitramfs $IMG | grep -qE '(^|/)chroot\$'"
+	r "... and vfat for the ESP (a module in it, or built into the kernel)" \
+		"lsinitramfs $IMG | grep -q 'vfat' || grep -q '^CONFIG_VFAT_FS=y' /boot/config-$(uname -r)"
 	r "the guest has a separate ESP mounted at /boot/efi (the case under test)" \
 		"findmnt -n /boot/efi >/dev/null && [ \"\$(findmnt -n -o SOURCE /boot/efi)\" != \"\$(findmnt -n -o SOURCE /)\" ]"
 	echo good-boot > /boot/ss-p24.txt
@@ -43,7 +44,18 @@ verify)
 	r "the log says the initramfs stage applied it" "grep -q 'applying before system start (stage: initramfs)' $L/bootguard.log"
 	r "the systemd unit found nothing left to do (it did not restore again)" \
 		"! grep -q 'stage: systemd' $L/bootguard.log && [ \"\$(systemctl show -p Result --value secure-sudo-bootguard-restore.service)\" = success ]"
-	r "the replaced bytes are kept as evidence" "grep -rq evil-boot $ST 2>/dev/null || grep -rqs evil /var/lib/secure_sudo 2>/dev/null"
+	r "the replaced bytes are kept as evidence (compressed copies hold the tampered content)" \
+		"python3 - <<'PY'
+import glob, zlib, sys
+ok = False
+for f in glob.glob('/var/lib/secure_sudo/addons/evidence/bootguard/*/evidence.*.z'):
+    try:
+        if b'evil-boot' in zlib.decompress(open(f, 'rb').read()):
+            ok = True
+    except Exception:
+        pass
+sys.exit(0 if ok else 1)
+PY"
 	r "the status line reports the initramfs stage installed" "secure-sudo-bootguard status | grep -qi 'initramfs stage:.*installed'"
 	secure-sudo-bootguard scan | tail -1
 	r "a fresh scan after the restore is clean" "secure-sudo-bootguard scan 2>&1 | grep -qi 'intact\|0 tampered'"

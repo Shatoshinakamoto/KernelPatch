@@ -50,6 +50,7 @@ Ubuntu) installs a build hook and a `local-bottom` script. After the real root
 is mounted (for an encrypted root, after it is unlocked) and before the switch
 to it, if BootGuard staged a restore (the `PENDING` flag) the script:
 
+0. remounts the root read-write if it is still read-only (it usually is at this stage; `restore-staged` writes its log, evidence and state under `/var`) and puts it back to read-only afterwards;
 1. mounts the separate `/boot`, `/boot/efi` and `/efi` listed in the root's
    `/etc/fstab` under the root (`rw,nodev,nosuid,noexec`);
 2. runs the root's `secure-sudo-bootguard restore-staged` in a chroot, which

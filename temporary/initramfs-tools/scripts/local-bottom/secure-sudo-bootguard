@@ -87,6 +87,20 @@ bind() { # SRC: bind it into the root for the chroot
 
 say "a boot-partition restore is staged: applying it before the system starts"
 ok=1
+
+# On most distros the real root is still mounted read-only here (systemd
+# remounts it read-write later). restore-staged must write its log, evidence
+# and state under the root, so remount it read-write for the restore and put
+# it back afterwards.
+REMOUNT_RO=0
+if grep -q " $rootmnt [^ ]* ro[ ,]" "$SS_PROC/mounts" 2>/dev/null; then
+	if mount -o remount,rw "$rootmnt" 2>/dev/null; then
+		REMOUNT_RO=1
+	else
+		say "could not remount the root read-write; the staged restore is kept"
+		ok=0
+	fi
+fi
 mount_one /boot || ok=0
 mount_one /boot/efi || ok=0
 mount_one /efi || ok=0
@@ -97,7 +111,7 @@ if [ "$ok" = 1 ]; then
 	rc=$?
 	say "restore finished with status $rc (details: /var/log/secure_sudo/addons/bootguard.log)"
 else
-	say "restore not attempted: a boot filesystem could not be mounted; the staged restore is kept"
+	say "restore not attempted: the root could not be made writable or a boot filesystem could not be mounted; the staged restore is kept"
 fi
 
 # unmount in reverse order of mounting; never leave one under the root
@@ -105,4 +119,5 @@ for m in $MOUNTED; do
 	umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || say "could not unmount $m"
 done
 sync
+[ "$REMOUNT_RO" = 1 ] && { mount -o remount,ro "$rootmnt" 2>/dev/null || say "could not put the root back to read-only"; }
 exit 0
