@@ -1,0 +1,26 @@
+{
+  "area": "lsm-compile",
+  "commit": "e82717f",
+  "date": "2026-11-23T21:41:05+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "a53d9c1aeec76c9b73bc50a5621ebbe592e66d51ac7c5c569fc7188fc8da7208",
+    "command.txt": "5938c640df20b3bf59509c941b3980fe94f817ddb4093fac156225c974e583f6",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "4605b9798e469d99093fd8810e4eabea35980dfd3a2aa29b831a714b49f52fee",
+    "results/tap-summary.txt": "a64d9aef2139fb1ef049eaa05d5fd5f1aaf1212dd98dad6506192dd52bd7e0fc"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "a7965e4b558dfaa252f4837afb8f1178d494c381a9740cf882eb6682fcf13e08",
+  "previous_run": "2026-11-23_214051Z_lsm-compile_e82717f",
+  "run_id": "2026-11-23_214105Z_lsm-compile_e82717f",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu), linux-headers-6.17.0-42-generic from the Ubuntu archive"
+}

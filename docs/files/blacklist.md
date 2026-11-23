@@ -20,7 +20,7 @@ Programs that non-sudo users may not run. Sudo users are not affected.
 
 One absolute path per line. `#` at the start of a line is a comment; blank lines are ignored.
 
-**Matching:** At load the kernel resolves each path and records its device, inode and inode generation, so renaming the binary, or reusing the inode, is still caught. It also matches the canonical path at exec, so a replacement file dropped at the same path is caught too.
+**Matching:** three ways. The *inode* match (device, inode and generation, taken when the list is loaded) catches the binary after a rename. The *path* match catches a different binary dropped at the listed path. The *content* match catches a byte-identical copy at a new path: each entry's SHA-256 and size are recorded at load, and an exec of a file with the same size is hashed and compared (other execs pay nothing). A path that does not exist at load is kept as a path-only entry.
 
 Example:
 
@@ -38,7 +38,7 @@ Example:
 
 ## Security impact
 
-A denylist: it stops casual use of listed tools but cannot stop a user who brings their own copy under another path (combine with `block_tmp_exec`, `block_home_write` or TimeVault for that). An entry that is missing is simply allowed.
+A denylist: it stops listed programs, renamed or copied, but a copy changed by even one byte is a different program and is not matched, and nothing stops a user bringing a different tool with the same function. For that, use an allowlist (TimeVault, #13) together with `block_tmp_exec` and `block_home_write`. An entry that is missing is simply allowed. Entries are resolved and hashed at `load`, so run `load` again after the listed program is updated.
 
 ## Entries
 

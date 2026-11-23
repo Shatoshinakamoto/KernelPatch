@@ -1410,6 +1410,23 @@ the collector and in health). Documented in [EVENTS.md](EVENTS.md).
 
 ---
 
+### 78. Policy lists past the kernel's limit lost entries silently (v2–v12, found 2026-11-23 while writing docs/files/) — CM-6 / SI-10
+
+Nine of the twelve securityfs policy lists (`blacklist`, `tmp_exec_allow`,
+`node_allowed_children`, `node_sea_binaries`, `driver_blacklist`, `home_map`,
+`home_write_allow`, `binvault_allow`, `prguard_allow`, `tpm_openers`) were
+parsed with `while (strsep(...) && n < MAX)`: the parser stopped at its
+limit and the write still succeeded, so entry 1025 of `blacklist.conf` was
+never enforced and `secure-sudo load` reported success. `driver_blacklist`
+also kept a 257th hash as a module name. `secure-sudo lint` did not check
+the limits either (fixed first, PR #63). Each write handler now counts the
+entries (`ss_list_entries()`, the same blank and `#` rules as the parsers)
+and refuses a longer list with `E2BIG`, leaving the loaded list in force;
+`driver_blacklist` refuses a 257th hash or name. `setid_exec_allow` and
+`timevault_allow` already did this. `tests/vm/ss-functest.c`
+`t_list_limits` checks one-over (refused, old list kept) and at-limit
+(loads) for every list. CWE-1284.
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

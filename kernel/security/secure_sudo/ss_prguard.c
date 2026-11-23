@@ -411,6 +411,13 @@ static ssize_t pg_write(struct file *file, const char __user *ubuf,
 	}
 	text[count] = '\0';
 
+	/* SECURITY: refuse a list longer than the kernel keeps (see
+	 * ss_list_entries) instead of silently dropping the rest. */
+	if (ss_list_entries(text) > PG_MAX_ITEMS) {
+		kvfree(text);
+		return -E2BIG;
+	}
+
 	scratch = kvmemdup(text, count + 1, GFP_KERNEL);
 	if (!scratch) {
 		kvfree(text);

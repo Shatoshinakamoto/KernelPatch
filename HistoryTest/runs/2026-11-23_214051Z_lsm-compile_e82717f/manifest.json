@@ -1,0 +1,26 @@
+{
+  "area": "lsm-compile",
+  "commit": "e82717f",
+  "date": "2026-11-23T21:40:51+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "ea0b751e58d22b68342de78a8e72766fe71daf73a5cd263a9aeafbf030e6b1d9",
+    "command.txt": "c656a6651f701a746f27dbd1dae6145fd9a921253135396d35ec2079759868b5",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "46004fa002eb0179e0822551ddf96ce954ff4ad6a66602da231f20d7e1f66d55",
+    "results/tap-summary.txt": "a64d9aef2139fb1ef049eaa05d5fd5f1aaf1212dd98dad6506192dd52bd7e0fc"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "76bc0a71817a8e0b1e47c85b9c5b70c349498a1e715310ef5c61916fc9c4f3e0",
+  "previous_run": "2026-11-23_213829Z_unit-cis-firewall_d457f1f",
+  "run_id": "2026-11-23_214051Z_lsm-compile_e82717f",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu), linux-headers-6.14.0-37-generic from the Ubuntu archive"
+}

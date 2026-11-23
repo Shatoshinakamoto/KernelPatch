@@ -317,6 +317,13 @@ static ssize_t bl_file_write(struct file *file, const char __user *ubuf,
 	}
 	text[count] = '\0';
 
+	/* SECURITY: refuse a list longer than the kernel keeps (see
+	 * ss_list_entries) instead of silently dropping the rest. */
+	if (ss_list_entries(text) > SS_BL_MAX_ENTRIES) {
+		kfree(text);
+		return -E2BIG;
+	}
+
 	/* bl_parse() consumes a mutable copy; keep the verbatim text for reads. */
 	{
 		char *scratch = kmemdup(text, count + 1, GFP_KERNEL);

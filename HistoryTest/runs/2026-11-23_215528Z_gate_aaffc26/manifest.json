@@ -1,0 +1,23 @@
+{
+  "area": "gate",
+  "commit": "aaffc26",
+  "date": "2026-11-23T21:55:27+00:00",
+  "files": {
+    "RUN.md": "caf9db600de2e71bf7a7535878360b1c5a967948f2af1f97af06cc1d9b3a7e5d",
+    "command.txt": "f2ba466c7299a406e16d9d07c432e15d9dcacc3094a3e867299f0f95a581505b",
+    "environment.md": "4baa0736f15884434db6fba11de705bae5c5d302353d4a737a2281cfae15743b",
+    "results/gate66.txt": "3e4c81796b8d307793e8956464ecf6f3146b3bc00a3a7bb3a0bdda0a6d275875"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "ed21922860ca5abfe3a3d078d0adf006709f79a8c494a5a7d35f8936da61d7d5",
+  "previous_run": "2026-11-23_215527Z_vm-functest_aaffc26",
+  "run_id": "2026-11-23_215528Z_gate_aaffc26",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "Pheonix's PC, Docker container on WSL2, QEMU TCG (no KVM)"
+}
