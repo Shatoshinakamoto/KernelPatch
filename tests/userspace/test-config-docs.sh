@@ -6,7 +6,9 @@
 # on each kind of drift between docs/configuration/ and the code: a key with
 # no row, a row for a key the code does not read, a wrong built-in default, a
 # wrong shipped value, a net.conf default that differs from apply-net.sh, a
-# missing trust row and a page not linked from docs/README.md.
+# missing trust row, a page not linked from docs/README.md, and for the
+# policy-list pages in docs/files/: a missing page, a wrong kernel limit, a
+# shipped entry with no row and a row for an entry the template lacks.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -18,7 +20,8 @@ FILES="userspace/cli/policy.c kernel/security/secure_sudo/ss_core.c
 userspace/config/secure-sudo.conf userspace/config/net.conf
 userspace/config/pheonixbox.conf userspace/daemon/helpers/apply-net.sh
 docs/README.md docs/configuration/secure-sudo-conf.md
-docs/configuration/net-conf.md docs/configuration/pheonixbox-conf.md"
+docs/configuration/net-conf.md docs/configuration/pheonixbox-conf.md
+$(cd "$ROOT" && ls userspace/config/*.conf docs/files/*.md)"
 fresh() {
 	rm -rf "$T/r"
 	for f in $FILES; do mkdir -p "$T/r/$(dirname "$f")"; cp "$ROOT/$f" "$T/r/$f"; done
@@ -61,4 +64,16 @@ fresh; sub docs/README.md '^.*\(configuration/net-conf\.md\).*\n' ''
 fails "a page not linked from docs/README.md" 'does not link configuration/net-conf.md'
 fresh; sub docs/configuration/net-conf.md '<!-- config-keys:begin -->' ''
 fails "a page without the key-table markers" 'net-conf.md: no <!-- config-keys'
+fresh; rm "$T/r/docs/files/blacklist.md"
+fails "a policy list with no docs/files page" 'docs/files/blacklist.md is missing'
+fresh; sub docs/files/tpm_openers.md '<!-- list-limit:64 -->' '<!-- list-limit:65 -->'
+fails "a list page whose limit differs from the kernel's" 'tpm_openers.md: limit marker 65, policy.c has 64'
+fresh; echo "/usr/bin/tpm2_unseal" >> "$T/r/userspace/config/tpm_openers.conf"
+fails "a shipped entry with no row" 'shipped entry /usr/bin/tpm2_unseal has no row'
+fresh; sub docs/files/tpm_openers.md '^\| `/usr/bin/systemd-creds` \|.*\n' ''
+fails "a shipped entry whose row was deleted" 'shipped entry /usr/bin/systemd-creds has no row'
+fresh; sub docs/files/blacklist.md '(<!-- list-entries:begin -->\n.*\n.*\n)' '\1| `/usr/bin/nc` | x | y | z |\n'
+fails "a row for an entry the template does not ship" 'row /usr/bin/nc is not in userspace/config/blacklist.conf'
+fresh; sub docs/README.md '^.*\(files/prguard_allow\.md\).*\n' ''
+fails "a list page not linked from docs/README.md" 'does not link files/prguard_allow.md'
 tap_done

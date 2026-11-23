@@ -151,6 +151,31 @@ fresh; echo "block_flash" >> "$CFG/secure-sudo.conf"; lint --no-kernel
 lint_err "line without '='" "not a \"key = value\" line"
 fresh; printf 'block_flash = %02000d\n' 1 >> "$CFG/secure-sudo.conf"; lint --no-kernel
 lint_err "over-long line" "line too long"
+
+echo "# lint: list files the kernel would refuse or cut short"
+H64=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+fresh; echo "/bin/sh" >> "$CFG/timevault_allow.conf"; lint --no-kernel
+lint_err "timevault_allow: a bare path is an error (the kernel refuses the whole list)" "/bin/sh has no SHA-256"
+fresh; echo "/bin/sh deadbeef" >> "$CFG/timevault_allow.conf"; lint --no-kernel
+lint_err "timevault_allow: a token that is not a hash, auto or autodir" "'deadbeef' is not a 64-hex SHA-256, auto or autodir"
+fresh; printf '/bin/sh %s\n/bin/sh auto\n' "$H64" >> "$CFG/timevault_allow.conf"; lint --no-kernel
+lint_err "timevault_allow: the same path twice" "/bin/sh is listed twice"
+fresh; printf '/bin/sh %s\n/bin/true auto\n/usr/bin autodir\n' "$H64" >> "$CFG/timevault_allow.conf"; lint --no-kernel
+refute "timevault_allow: hash, auto and autodir entries pass" grep -q "timevault_allow.conf.*ERROR\|ERROR.*timevault_allow" "$T/lint.out"
+fresh; setkey timevault_max_entries 2; printf '/bin/sh %s\n/bin/true auto\n/bin/false auto\n' "$H64" >> "$CFG/timevault_allow.conf"; lint --no-kernel
+lint_err "timevault_allow: more entries than timevault_max_entries" "3 entries: over timevault_max_entries \(2\)"
+fresh; echo "/bin/sh" >> "$CFG/node_allowed_children.conf"; lint --no-kernel
+refute "node_allowed_children: an absolute path is accepted (the kernel matches it exactly)" grep -q "ERROR.*node_allowed_children" "$T/lint.out"
+fresh; echo "git" >> "$CFG/node_allowed_children.conf"; lint --no-kernel
+check "node_allowed_children: a bare name gets a note that a path is stricter" says "note +node_allowed_children.conf:[0-9]+ +'git' allows any file of that name"
+fresh; echo "bin/git" >> "$CFG/node_allowed_children.conf"; lint --no-kernel
+lint_err "node_allowed_children: a relative path is an error" "'bin/git': give an absolute path or a bare name"
+fresh; for i in $(seq 1 1025); do echo "/usr/bin/x$i"; done >> "$CFG/blacklist.conf"; lint --no-kernel --source-tree
+lint_err "blacklist: more entries than the kernel reads (it would drop them silently)" "1025 entries: the kernel keeps only the first 1024"
+fresh; for i in $(seq 1 257); do printf '%064x\n' "$i"; done >> "$CFG/driver_blacklist.conf"; lint --no-kernel
+lint_err "driver_blacklist: more hashes than the kernel keeps" "257 hashes and 0 names: the kernel keeps at most 256"
+fresh; head -c 17000 /dev/zero | tr '\0' '#' >> "$CFG/tpm_openers.conf"; echo >> "$CFG/tpm_openers.conf"; lint --no-kernel
+lint_err "tpm_openers: a file larger than the kernel accepts" "bytes: the kernel takes at most 16384"
 fresh; echo "block_setid = 0" >> "$CFG/secure-sudo.conf"; lint --no-kernel
 check "duplicate key is a warning naming the first line" says "WARN +secure-sudo.conf:[0-9]+ +block_setid is set again \(first on line [0-9]+\)"
 fresh; setkey vault_action delete; lint --no-kernel

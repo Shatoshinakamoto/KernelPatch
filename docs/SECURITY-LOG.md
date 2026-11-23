@@ -8,6 +8,16 @@ stays the detailed record. Each entry here points to it.
 CVSS and EPSS scores are given only where a CVE exists. These are project
 findings without CVE IDs, so none are given; no scores are invented.
 
+## 2026-11-23 — policy lists could silently lose entries, or fail to load, after a clean lint
+- **Type:** patch
+- **CVE / CWE / advisory:** none; CWE-1284 (improper validation of specified quantity in input) and CWE-20
+- **Severity:** no CVSS (no CVE). Project rating: medium. A `blacklist.conf` or `driver_blacklist.conf` over the kernel's limit (1024 paths, 256 hashes or names) loaded with no error and the extra entries were not enforced. A `timevault_allow.conf` with one bare path passed lint and then the kernel refused the whole allowlist. Exploiting it needs an administrator to write such a file; it is a fail-open for denylists, not a privilege escalation.
+- **Affected:** `userspace/cli/policy.c` (`secure-sudo lint` and `load`), templates `timevault_allow.conf`, `node_allowed_children.conf`, `blacklist.conf`.
+- **What changed:** lint knows each list's kernel limits (entries and bytes) and refuses a file over them; it checks the TimeVault grammar (`<path> <sha256|auto|autodir>`, no duplicates, `timevault_max_entries`), accepts absolute paths in `node_allowed_children.conf` (with a note that bare names are weaker), and checks `driver_blacklist.conf` hash and name counts separately. Because `load` runs lint first and refuses on an error, the normal load path can no longer drop entries.
+- **Why it is secure now:** a policy either loads in full or not at all (NIST CM-6, SI-10).
+- **Remaining:** the kernel still stops reading most lists at its limit without an error; a direct securityfs write by root bypasses lint. Returning `E2BIG` from the kernel, as `setid_exec_allow` and `timevault_allow` already do, is tracked in TODO P0-6 and needs the next kernel build and VM run.
+- **Verification:** `tests/userspace/test-cli.sh` 180/0 (11 new lint checks) and `tests/userspace/test-config-docs.sh` 20/0. HistoryTest runs listed in the PR.
+
 ## 2026-11-23 — template example lines gave invalid values when uncommented
 - **Type:** hardening (secure defaults)
 - **CVE / CWE / advisory:** none; CWE-1188 (insecure default initialization of resource) is the nearest class

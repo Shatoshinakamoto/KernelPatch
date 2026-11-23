@@ -4,8 +4,10 @@ Per-file reference pages, with every key's type, range, built-in and
 shipped value, security impact and NIST reference, are in
 [configuration/](configuration/): [secure-sudo.conf](configuration/secure-sudo-conf.md),
 [net.conf](configuration/net-conf.md) and
-[pheonixbox.conf](configuration/pheonixbox-conf.md). This page keeps the
-feature narrative.
+[pheonixbox.conf](configuration/pheonixbox-conf.md). Each policy list has its
+own page in [files/](files/), with its format, kernel limits, how to change it
+safely and every shipped entry with its reason. This page keeps the feature
+narrative.
 
 All configuration lives under **`/etc/secure_sudo/`**. `secure-sudo load`
 (run automatically at boot) pushes it into the kernel. There are two kinds of

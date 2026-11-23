@@ -33,6 +33,18 @@ here (CLAUDE.MD section 5).
 | [configuration/secure-sudo-conf.md](configuration/secure-sudo-conf.md) | `secure-sudo.conf`: every key's type, range, defaults, security impact and NIST reference |
 | [configuration/net-conf.md](configuration/net-conf.md) | `net.conf`: what the network modes treat as the LAN, and the stop behaviour |
 | [configuration/pheonixbox-conf.md](configuration/pheonixbox-conf.md) | `pheonixbox.conf`: the protected paths and the snapshot trust mode |
+| [files/blacklist.md](files/blacklist.md) | `blacklist.conf`: commands non-sudo users may not run (#2) |
+| [files/setid_exec_allow.md](files/setid_exec_allow.md) | `setid_exec_allow.conf`: setuid/setgid programs non-sudo users may still run (#1b) |
+| [files/tmp_exec_allow.md](files/tmp_exec_allow.md) | `tmp_exec_allow.conf`: exec exemptions in /tmp, /var/tmp, /dev/shm (#12) |
+| [files/node_allowed_children.md](files/node_allowed_children.md) | `node_allowed_children.conf`: what a Node.js process may start (#11) |
+| [files/node_sea_binaries.md](files/node_sea_binaries.md) | `node_sea_binaries.conf`: self-contained Node binaries to guard (#11) |
+| [files/driver_blacklist.md](files/driver_blacklist.md) | `driver_blacklist.conf`: kernel modules refused at load (#6) |
+| [files/timevault_allow.md](files/timevault_allow.md) | `timevault_allow.conf`: the hash-pinned programs allowed while TimeVault is engaged (#13) |
+| [files/home_map.md](files/home_map.md) | `home_map.conf`: each user's writable home (#4) |
+| [files/home_write_allow.md](files/home_write_allow.md) | `home_write_allow.conf`: extra writable prefixes for all non-sudo users (#4) |
+| [files/binvault_allow.md](files/binvault_allow.md) | `binvault_allow.conf`: directories exempt from BinaryVault (#17) |
+| [files/prguard_allow.md](files/prguard_allow.md) | `prguard_allow.conf`: programs exempt from the runtime memory guard (#20) |
+| [files/tpm_openers.md](files/tpm_openers.md) | `tpm_openers.conf`: programs that may use the TPM once locked (#5, G4) |
 | [EVENTS.md](EVENTS.md) | Event and log record formats, severities, integrations |
 
 ## Features in depth
