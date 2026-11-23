@@ -30,6 +30,7 @@
 #   stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
 #                  [--tailoring <f>] [--list-profiles] [--outdir <dir>] [--yes]
 #                  [--passes <n>] [--skip-rules <regex>] [--post-patch-only]
+#                  [--cis-firewall] [--allow-tcp <port>]...
 #
 #   --scan           scan only, produce reports (default if nothing given)
 #   --remediate      scan, apply the generated fixes, then re-scan (asks first
@@ -46,6 +47,12 @@
 #   --skip-rules <re> leave rules whose id matches this regex unremediated
 #                    (e.g. 'ufw|nftables|firewalld' when secure_sudo's own nft
 #                    network modes manage the firewall); they stay in the report
+#   --cis-firewall   before the baseline scan, load the CIS firewall table
+#                    "inet filter" with scripts/cis-nftables.sh (persistent,
+#                    default deny, inbound SSH allowed). It coexists with
+#                    secure_sudo's own "inet secure_sudo" table (owner's choice,
+#                    2026-11-23), so the CIS nftables rules need no --skip-rules.
+#   --allow-tcp <p>  extra inbound TCP port for --cis-firewall (repeatable)
 #   --post-patch-only apply only the known-issue patches (OSB-03..07, OSB-20,
 #                    docs/OSCAP_BUGS.md), then rescan
 #
@@ -63,6 +70,8 @@ LIST_ONLY=0
 ASSUME_YES=0
 PASSES=2
 SKIP_RULES=""
+CIS_FW=0
+CIS_TCP=()
 
 die()  { echo "stig-harden: $*" >&2; exit 1; }
 # Result parsing lives in oscap-results.py (next to this script, in the
@@ -86,7 +95,9 @@ while [ $# -gt 0 ]; do
 	--passes)        PASSES="${2:?}"; shift ;;
 	--skip-rules)    SKIP_RULES="${2:?}"; shift ;;
 	--post-patch-only) MODE=postpatch ;;
-	-h|--help)       sed -n '2,52p' "$0"; exit 0 ;;
+	--cis-firewall)  CIS_FW=1 ;;
+	--allow-tcp)     CIS_TCP+=(--allow-tcp "${2:?}"); shift ;;
+	-h|--help)       sed -n '2,60p' "$0"; exit 0 ;;
 	*)               die "unknown option: $1" ;;
 	esac
 	shift
@@ -466,6 +477,15 @@ if [ "$MODE" = "postpatch" ]; then
 	post_patch
 	scan after
 	exit 0
+fi
+
+# The CIS firewall table goes in before the baseline scan, so the fixes are
+# generated against a host that already has it and no CIS nftables fix runs.
+# Only for --remediate: a scan never changes the system.
+if [ "$CIS_FW" -eq 1 ] && [ "$MODE" = remediate ]; then
+	info "loading the CIS firewall table (inet filter) next to secure_sudo's"
+	bash "$(dirname "$(readlink -f "$0")")/cis-nftables.sh" --apply "${CIS_TCP[@]+"${CIS_TCP[@]}"}" ||
+		die "the CIS firewall table did not load; nothing else was changed"
 fi
 
 scan baseline

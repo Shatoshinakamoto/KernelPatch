@@ -102,6 +102,7 @@ and the real before/after results are in [STIG.md](STIG.md).
 stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
                [--tailoring <f>] [--list-profiles] [--outdir <dir>] [--yes]
                [--passes <n>] [--skip-rules <regex>] [--post-patch-only]
+               [--cis-firewall] [--allow-tcp <port>]...
 ```
 
 | Flag | What it does |
@@ -110,6 +111,8 @@ stig-harden.sh [--scan] [--remediate] [--profile <id>] [--datastream <f>]
 | `--remediate` | Scan, apply the generated bash fixes, then re-scan. Asks for confirmation unless `--yes`. Rewrites PAM/password/banner/audit/permission policy — do it in a maintenance window with a root shell open. |
 | `--profile <id>` | Force a specific XCCDF profile (see `--list-profiles`). |
 | `--datastream <f>` | Force a specific SSG datastream file. |
+| `--cis-firewall` | With `--remediate`: before the baseline scan, load CIS's own nftables table `inet filter` with `scripts/cis-nftables.sh --apply` (persistent in `/etc/nftables.conf`, default-deny input/forward/output, loopback rules, established traffic, essential ICMP/ICMPv6, DHCP replies, inbound SSH on the ports `sshd -T` reports). It coexists with secure_sudo's `inet secure_sudo` table. |
+| `--allow-tcp <port>` | Extra inbound TCP port for `--cis-firewall` (repeatable). |
 | `--tailoring <f>` | XCCDF tailoring file with your site's values (time servers, ...); scans and fixes use its profile. Example: `tests/vm/distro/stig-vm-tailoring.xml`. |
 | `--list-profiles` | List the profiles in the chosen datastream and exit. |
 | `--outdir <dir>` | Report directory (default `/var/log/secure_sudo/stig`). |

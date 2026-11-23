@@ -60,7 +60,7 @@ check "stage-userspace builds the userspace" sh -c "SS_ROOT='$R' bash '$INST' st
 for f in usr/bin/secure-sudo usr/sbin/secure-sudod usr/bin/secure-sudo-otp usr/bin/secure-sudo-pheonixbox \
 	lib/x86_64-linux-gnu/security/pam_secure_sudo.so lib/x86_64-linux-gnu/security/pam_secure_otp.so \
 	usr/libexec/secure-sudo/apply-net.sh usr/libexec/secure-sudo/quarantine.sh usr/libexec/secure-sudo/contain.sh \
-	usr/libexec/secure-sudo/oscap-results.py lib/systemd/system/secure-sudod.service \
+	usr/libexec/secure-sudo/oscap-results.py usr/libexec/secure-sudo/cis-nftables.sh lib/systemd/system/secure-sudod.service \
 	usr/libexec/secure-sudo/secure-sudo-attest usr/libexec/secure-sudo/attest-report.sh usr/bin/secure-sudo-attest-verify \
 	usr/share/secure-sudo/defaults/secure-sudo.conf .secure-sudo-stage; do
 	check "stage has $f" test -f "$STAGE/$f"

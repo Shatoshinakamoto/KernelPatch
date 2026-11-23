@@ -176,10 +176,21 @@ sudo /usr/libexec/secure-sudo/stig-harden.sh --list-profiles
 # Scan, two remediation passes, known-issue patches, re-scan (maintenance window!):
 sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate
 
-# CIS Level 2 instead, leaving the firewall to secure_sudo's nft modes:
+# CIS Level 2 instead. --cis-firewall loads CIS's own nftables table
+# ("inet filter", persistent, default deny, inbound SSH allowed) next to
+# secure_sudo's "inet secure_sudo" table, so no firewall rule is skipped.
+# Add --allow-tcp PORT for each other inbound service (SSH is found itself):
 sudo /usr/libexec/secure-sudo/stig-harden.sh --remediate \
   --profile xccdf_org.ssgproject.content_profile_cis_level2_server \
-  --skip-rules 'ufw|nftables|iptables|firewalld|firewall'
+  --cis-firewall
+
+# Firewall ownership (owner's choice, 2026-11-23: coexist): CIS owns
+# "inet filter", secure_sudo owns "inet secure_sudo". nftables runs every
+# table's base chains, so a packet must pass both and the stricter rule wins;
+# neither file resets the other's table (OSB-23). See scripts/cis-nftables.sh
+# and tests/userspace/test-cis-firewall.sh. The old blanket
+# --skip-rules 'ufw|nftables|iptables|firewalld|firewall' run (2026-10-26
+# results) predates this; a CIS VM run with --cis-firewall is still to do.
 
 # Re-apply just the known-issue patches (e.g. after big package changes):
 sudo /usr/libexec/secure-sudo/stig-harden.sh --post-patch-only
