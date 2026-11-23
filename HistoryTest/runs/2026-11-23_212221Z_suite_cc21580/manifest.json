@@ -1,0 +1,26 @@
+{
+  "area": "suite",
+  "commit": "cc21580",
+  "date": "2026-11-23T21:22:21+00:00",
+  "exit_code": 1,
+  "files": {
+    "RUN.md": "c54ebebd3ad2a3f41e88317b3ac54d915dccbfa627a0b6e897e47a62af499556",
+    "command.txt": "ac09d33f700dfe1b6cb095993ebe601083d90b9537973caacbed57e80b6c263d",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "f7873f83867ece254b29be6527333eebb5d45961591e2c81eb2645c543b0f460",
+    "results/tap-summary.txt": "69afdf40d9d95cf57e933209289faa4f1047ea753fcc7959060e96d643210ba6"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "32f0c0d128d8c02645ef3a9d55ef0d50d916a39ca7e4b93d66ea43c481249174",
+  "previous_run": "2026-11-23_212216Z_unit-config-docs_cc21580",
+  "run_id": "2026-11-23_212221Z_suite_cc21580",
+  "schema": 1,
+  "tap": {
+    "not_ok": 2,
+    "ok": 1349,
+    "skipped": 6
+  },
+  "verdict": "fail",
+  "where": "cloud container (Ubuntu); this sandbox puts a refusing rm wrapper first in PATH"
+}

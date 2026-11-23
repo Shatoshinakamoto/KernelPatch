@@ -16,7 +16,7 @@ findings without CVE IDs, so none are given; no scores are invented.
 - **What changed:** lint knows each list's kernel limits (entries and bytes) and refuses a file over them; it checks the TimeVault grammar (`<path> <sha256|auto|autodir>`, no duplicates, `timevault_max_entries`), accepts absolute paths in `node_allowed_children.conf` (with a note that bare names are weaker), and checks `driver_blacklist.conf` hash and name counts separately. Because `load` runs lint first and refuses on an error, the normal load path can no longer drop entries.
 - **Why it is secure now:** a policy either loads in full or not at all (NIST CM-6, SI-10).
 - **Remaining:** the kernel still stops reading most lists at its limit without an error; a direct securityfs write by root bypasses lint. Returning `E2BIG` from the kernel, as `setid_exec_allow` and `timevault_allow` already do, is tracked in TODO P0-6 and needs the next kernel build and VM run.
-- **Verification:** `tests/userspace/test-cli.sh` 180/0 (11 new lint checks) and `tests/userspace/test-config-docs.sh` 20/0. HistoryTest runs listed in the PR.
+- **Verification:** `tests/userspace/test-cli.sh` 180/0 (11 new lint checks) and `tests/userspace/test-config-docs.sh` 20/0: `HistoryTest/runs/2026-11-23_212209Z_unit-cli_cc21580/`, `HistoryTest/runs/2026-11-23_212216Z_unit-config-docs_cc21580/`. Whole suite `HistoryTest/runs/2026-11-23_212221Z_suite_cc21580/`: 1349 ok, 2 failing only because of a sandbox rm wrapper (see that run's note).
 
 ## 2026-11-23 — template example lines gave invalid values when uncommented
 - **Type:** hardening (secure defaults)

@@ -1,0 +1,26 @@
+{
+  "area": "gate-lint",
+  "commit": "cc21580",
+  "date": "2026-11-23T21:30:03+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "9e9e4e38287eeb391c87f5e2fe3019aba683f906f8bcd9eb7a3c0df2058c6482",
+    "command.txt": "71bbf817ed5bbf72b82faa23756bf8cf6369d8a62067dd309eeb213681eee5a2",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "e50a396c6b418c066abf4a1abb16438741e063b368500043e20c12a06cbbffeb",
+    "results/tap-summary.txt": "6b7b58c9f5c2bd0fe64d7bf1050c23abdd3d9bdefe9188c58cd85f48741a83d5"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "ed72ed1a2a14ba418205b7679f711cb7b58454b7e7fdf775ff1dd437412eec06",
+  "previous_run": "2026-11-23_212221Z_suite_cc21580",
+  "run_id": "2026-11-23_213003Z_gate-lint_cc21580",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 1,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu)"
+}

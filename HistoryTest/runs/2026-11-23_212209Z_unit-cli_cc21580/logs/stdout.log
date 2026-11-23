@@ -1,0 +1,189 @@
+ok 1 - CLI builds with test paths (-Werror)
+# lint: configuration syntax and values
+ok 2 - shipped config passes lint (--source-tree)
+ok 3 - fresh install config: no errors
+ok 4 - unknown key is an error with its line
+ok 5 - non-boolean value
+ok 6 - value below the kernel's range
+ok 7 - value above the kernel's range
+ok 8 - number with junk
+ok 9 - bad net_mode
+ok 10 - bad admin_gid list
+ok 11 - more GIDs than the kernel holds
+ok 12 - inline comment in a value
+ok 13 - line without '='
+ok 14 - over-long line
+# lint: list files the kernel would refuse or cut short
+ok 15 - timevault_allow: a bare path is an error (the kernel refuses the whole list)
+ok 16 - timevault_allow: a token that is not a hash, auto or autodir
+ok 17 - timevault_allow: the same path twice
+ok 18 - timevault_allow: hash, auto and autodir entries pass
+ok 19 - timevault_allow: more entries than timevault_max_entries
+ok 20 - node_allowed_children: an absolute path is accepted (the kernel matches it exactly)
+ok 21 - node_allowed_children: a bare name gets a note that a path is stricter
+ok 22 - node_allowed_children: a relative path is an error
+ok 23 - blacklist: more entries than the kernel reads (it would drop them silently)
+ok 24 - driver_blacklist: more hashes than the kernel keeps
+ok 25 - tpm_openers: a file larger than the kernel accepts
+ok 26 - duplicate key is a warning naming the first line
+ok 27 - bad daemon value (vault_action)
+ok 28 - bad alert_min_severity
+ok 29 - alert_max_per_minute below its range
+ok 30 - alert_dedup_seconds above its range
+ok 31 - alert_cmd with an unbalanced quote
+ok 32 - alert_cmd with an unknown placeholder
+ok 33 - a good alert block passes lint
+ok 34 - bad daemon value (remote_syslog)
+ok 35 - remote syslog port is bounded
+ok 36 - remote transport is explicit
+ok 37 - remote CA path must be absolute
+ok 38 - remote CA bundle cannot be empty
+ok 39 - remote queue has a bounded maximum
+ok 40 - node-scan interval must be whole minutes
+ok 41 - node-scan directories must be absolute
+ok 42 - valid node-scan settings pass lint
+ok 43 - timevault_enabled is not an error
+ok 44 - ... and lint explains load never engages TimeVault
+# lint: allowlists, admin groups, combinations
+ok 45 - missing list file warns that load clears the list
+ok 46 - relative path in a path list
+ok 47 - listed program that does not exist warns
+ok 48 - malformed home_map line
+ok 49 - path where a module name is expected
+ok 50 - admin GID that does not exist
+ok 51 - admin_gid unset + block_setid_exec locks admins out of sudo
+ok 52 - operator not in admin_gid: warning
+ok 53 - ... an error with block_setid_exec (would lose sudo)
+ok 54 - block_home_write with an empty home_map
+ok 55 - prguard_observe without prguard_enabled warns
+ok 56 - block_setid_exec with an empty allowlist warns
+ok 57 - lock effects listed (modules + kernel memory)
+ok 58 - vault_action = wipe warns that evidence is lost
+# lint: running kernel
+ok 59 - fake kernel with every knob: no errors
+ok 60 - setting the running kernel does not have
+ok 61 - config already locked
+# lint: PAM order
+ok 62 - recommended one-line stack: clean
+ok 63 - old documented stack is an error (denies the right password)
+ok 64 - pam_secure_sudo after the password check warns
+ok 65 - cooldown on but nothing feeds it warns
+ok 66 - OTP wired before any OTP is set up: lockout error
+ok 67 - ... clean once the OTP secret exists
+ok 68 - OTP use_first_pass before any password module
+ok 69 - OTP module not installed: lockout error
+ok 70 - missing @include warns
+# load
+ok 71 - load of a clean config exits 0
+ok 72 - settings reach the kernel files
+ok 73 - every setting reported accepted with its line
+ok 74 - lists are loaded before the settings
+ok 75 - summary line counts the results
+ok 76 - successful load persists a root-only complete result
+ok 77 - health JSON reports last successful load
+ok 78 - missing list file: reported as cleared, kernel list emptied
+ok 79 - daemon keys reported skipped
+ok 80 - load reports what node-scan found
+ok 81 - load sends the config's entries first, then node-scan's, once each
+ok 82 - load counts every entry of a list (not just the first)
+# health
+ok 83 - health reports degraded fake kernel and exits non-zero
+ok 84 - health JSON reports live/config policy mismatch
+ok 85 - health JSON reports daemon heartbeat
+ok 86 - health reports an unknown load outcome before the first run
+ok 87 - health reports an enabled kernel audit feed
+ok 88 - configured audit feed degrades when kernel auditing is inactive
+ok 89 - health JSON reports remote forwarding state
+ok 90 - health JSON reports remote transport
+ok 91 - health JSON reports active log retention
+ok 92 - health reports an active evidence retention hold
+ok 93 - health JSON reports heartbeat metric availability
+ok 94 - health JSON reports add-on and timer unit states
+ok 95 - health degrades for a failed enabled add-on
+ok 96 - disabled optional add-on does not degrade health
+ok 97 - health reports unavailable systemd inspection
+ok 98 - enabled scanning timer without baseline degrades health
+ok 99 - fresh baseline and timer trigger are reported
+ok 100 - health reports scan service result and last successful scan time
+ok 101 - failed scan result degrades enabled timer health
+ok 102 - scan older than the hourly interval degrades timer health
+ok 103 - stale baseline degrades an enabled scanning timer
+ok 104 - health does not treat UDP send as confirmed delivery
+ok 105 - health reports TLS queue backlog and drops
+ok 106 - health reports local log write failures
+ok 107 - health degrades when the daemon saw event-stream gaps
+ok 108 - health degrades when net_mode rules are pending (P1-8)
+ok 109 - health degrades when net_mode rules are failing (P1-8)
+ok 110 - health shows the network policy rules state
+ok 111 - heartbeat keys match whole names only (xretention_state is not retention_state)
+ok 112 - a heartbeat without the event-gap counters is incomplete
+ok 113 - health marks incomplete daemon metrics unavailable
+ok 114 - health JSON reports event-ring loss
+ok 115 - health detects invalid daemon configuration
+ok 116 - health detects unknown policy keys
+ok 117 - health JSON reports and degrades for persisted partial load
+ok 118 - health rejects a load result from a previous boot
+ok 119 - lint error: load exits 1
+ok 120 - lint error: load refused, nothing written
+ok 121 - lint error: says why
+ok 122 - refused load is persisted for health
+ok 123 - --force: still exits 1 (partial policy)
+ok 124 - --force: the bad value is rejected, not written
+ok 125 - --force: the other settings were applied
+ok 126 - --force: says the policy is incomplete
+ok 127 - partial load rejection count and setting are persisted
+ok 128 - health degrades and reports rejected partial load
+ok 129 - kernel rejects one setting: exit 1
+ok 130 - kernel rejection reported with the kernel's reason
+ok 131 - kernel rejection: the rest still loaded and counted
+ok 132 - no LSM: load fails and says so
+ok 133 - LSM-inactive refusal is persisted
+ok 134 - non-root: load refused
+ok 135 - non-root: lint runs (read-only)
+ok 136 - world-writable list file is an error
+ok 137 - config not owned by root is an error
+# P1-6: diff (preview), snapshots, history, restore
+ok 138 - diff before any load lists every difference
+ok 139 - ... list entries to add and remove, with counts
+ok 140 - load --dry-run is the same preview
+ok 141 - diff and --dry-run change nothing (kernel, config, no snapshot)
+ok 142 - load takes a snapshot first and names it
+ok 143 - ... with the old live state and the config files
+ok 144 - ... root-only, with reason and SHA256SUMS
+ok 145 - after a clean load diff reports 0 changes
+ok 146 - history records the load: result, counts, lint, snapshot
+ok 147 - ... and who ran it (SUDO_USER)
+ok 148 - history file is root-only
+ok 149 - snapshot verify: intact snapshot passes
+ok 150 - partial load: INCOMPLETE names what was rejected and the restore point
+ok 151 - partial load is in the history with the rejected setting
+ok 152 - diff after a partial load shows what did not apply
+ok 153 - restore previews and stops without 'yes'
+ok 154 - restore -y: files back as in the snapshot, and loaded
+ok 155 - ... after saving what it replaced
+ok 156 - ... recorded as a restore with its source
+ok 157 - snapshot verify: an edited file fails
+ok 158 - restore refuses a snapshot that fails verification
+ok 159 - (forged snapshot with rewritten sums checks out on its own)
+ok 160 - ... but the next snapshot sees its predecessor changed
+ok 161 - history --verify flags the record whose snapshot changed
+ok 162 - history --verify: intact chain passes
+ok 163 - history --verify: an edited record breaks the chain
+ok 164 - history --verify: a removed record breaks the chain
+ok 165 - history prints the latest records readably
+ok 166 - set is recorded with what it set
+ok 167 - a set the kernel refuses is recorded as rejected, not persisted
+ok 168 - lock warns when the running policy is not the config's
+ok 169 - lock is recorded with its pre-lock snapshot
+ok 170 - restore refused while locked (points at --no-load)
+ok 171 - restore --no-load while locked: files only, for the next boot
+ok 172 - restore refuses an id that is not a snapshot id
+ok 173 - manual snapshot with a reason
+ok 174 - snapshot list shows id, reason, lock state
+ok 175 - contain: recorded with what was asked
+ok 176 - release that fails: recorded as failed, exit status passed on
+ok 177 - dry runs, unconfirmed actions and status are not recorded
+ok 178 - history chain still verifies after every action
+ok 179 - otp passes its subcommand to the helper (not "otp")
+ok 180 - ... with its options
+1..180

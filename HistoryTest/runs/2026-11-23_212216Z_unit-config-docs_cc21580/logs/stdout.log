@@ -1,0 +1,21 @@
+ok 1 - the repo passes
+ok 2 - it says ok
+ok 3 - a kernel key with no row
+ok 4 - a daemon key with no row
+ok 5 - a row for a key the code does not read
+ok 6 - a wrong kernel built-in default
+ok 7 - the template changed but the doc did not
+ok 8 - a commented key uncommented in the template
+ok 9 - a template key the code does not read
+ok 10 - a net.conf default that differs from apply-net.sh
+ok 11 - a net.conf shipped value that differs
+ok 12 - no trust row
+ok 13 - a page not linked from docs/README.md
+ok 14 - a page without the key-table markers
+ok 15 - a policy list with no docs/files page
+ok 16 - a list page whose limit differs from the kernel's
+ok 17 - a shipped entry with no row
+ok 18 - a shipped entry whose row was deleted
+ok 19 - a row for an entry the template does not ship
+ok 20 - a list page not linked from docs/README.md
+1..20
