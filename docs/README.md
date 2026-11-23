@@ -30,6 +30,9 @@ here (CLAUDE.MD section 5).
 | [SCRIPTS.md](SCRIPTS.md) | Every script in `scripts/`, `ci/`, `install/` and `tests/`, with its flags |
 | [commands/history-test.md](commands/history-test.md) | `scripts/history_test.py`, the HistoryTest recorder |
 | [CONFIGURATION.md](CONFIGURATION.md) | Every configuration file and key |
+| [configuration/secure-sudo-conf.md](configuration/secure-sudo-conf.md) | `secure-sudo.conf`: every key's type, range, defaults, security impact and NIST reference |
+| [configuration/net-conf.md](configuration/net-conf.md) | `net.conf`: what the network modes treat as the LAN, and the stop behaviour |
+| [configuration/pheonixbox-conf.md](configuration/pheonixbox-conf.md) | `pheonixbox.conf`: the protected paths and the snapshot trust mode |
 | [EVENTS.md](EVENTS.md) | Event and log record formats, severities, integrations |
 
 ## Features in depth

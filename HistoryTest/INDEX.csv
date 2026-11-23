@@ -9,3 +9,7 @@ run_id,date,area,commit,verdict,where,ok,not_ok,skipped
 2026-11-23_133728Z_unit-history-test_3ff68f6,2026-11-23T13:37:27+00:00,unit-history-test,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",45,0,0
 2026-11-23_133808Z_gate-lint_24d1c85,2026-11-23T13:38:08+00:00,gate-lint,24d1c85,pass,"cloud container (Ubuntu 24.04, root, no KVM)",1,0,0
 2026-11-23_134551Z_vm-osb24_8d432e8,2026-11-23T13:45:51+00:00,vm-osb24,8d432e8,pass,"PC Docker container (QEMU TCG, no KVM), Ubuntu 24.04 guest",0,0,0
+2026-11-23_211054Z_unit-config-docs_6544e45,2026-11-23T21:10:54+00:00,unit-config-docs,6544e45,pass,"cloud container (Ubuntu), no root kernel",14,0,0
+2026-11-23_211056Z_unit-cli_6544e45,2026-11-23T21:10:56+00:00,unit-cli,6544e45,pass,"cloud container (Ubuntu), no root kernel",169,0,0
+2026-11-23_211103Z_unit-pheonixbox_6544e45,2026-11-23T21:11:03+00:00,unit-pheonixbox,6544e45,pass,"cloud container (Ubuntu), no root kernel",61,0,2
+2026-11-23_211112Z_gate-lint_6544e45,2026-11-23T21:11:12+00:00,gate-lint,6544e45,pass,cloud container (Ubuntu),1,0,0

@@ -1,0 +1,26 @@
+{
+  "area": "unit-pheonixbox",
+  "commit": "6544e45",
+  "date": "2026-11-23T21:11:03+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "21dd78df95a48acfed8b930fe4b9c789d04f52bd815d0136ef092ab11495b771",
+    "command.txt": "a5067a57a535237bc8177ffec1b93bca1295f7aa9ba2919a8bc78dfbaf58a7e6",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "90ee4213dbf4135903eeecc3b13e3f9ebad5c748e27d855c5a1d9049be264bd6",
+    "results/tap-summary.txt": "2b08694d47db73cbb2762134e934fe789270e574e17f5341b1f934e3c100b675"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "2080aaa9d86febcb9ecf8b5348a6269b118b834c1a03ed7f20cd3067bf33d84c",
+  "previous_run": "2026-11-23_211056Z_unit-cli_6544e45",
+  "run_id": "2026-11-23_211103Z_unit-pheonixbox_6544e45",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 61,
+    "skipped": 2
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu), no root kernel"
+}

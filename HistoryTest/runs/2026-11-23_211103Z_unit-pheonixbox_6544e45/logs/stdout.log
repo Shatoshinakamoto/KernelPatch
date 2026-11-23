@@ -1,0 +1,68 @@
+ok 1 - PheonixBox helper builds with -Werror
+# part 1: no root needed
+ok 2 - refuses to run without root
+# part 2: ROOT-ONLY - the real helper in a private mount namespace
+ok 3 - the test starts without /etc/secure_sudo (inside the namespace)
+ok 4 - ... and the host still has its own
+# getfacl absent: the ACL path is skipped
+ok 5 - add a directory to the protected set
+ok 6 - the config lands in /etc/secure_sudo (inside the namespace only)
+ok 7 - the write went to the scratch overlay, not the host's /etc
+ok 8 - on succeeds
+ok 9 - on reports ENABLED
+ok 10 - a name with a newline is skipped, not stored
+ok 11 - no command ran from a file name
+ok 12 - the store is root-only (0700)
+ok 13 - files are locked read-only
+ok 14 - every file is locked, recursively
+ok 15 - the manifest has one line per stored file (3)
+ok 16 - scan succeeds
+ok 17 - scan reports the repairs
+ok 18 - a rewritten file gets its contents back
+ok 19 - a deleted file comes back
+ok 20 - a repaired file is locked read-only again
+ok 21 - a second scan finds nothing to repair
+ok 22 - no command ran from a file name during scans
+# adversarial (TODO P2-2 part 3)
+ok 23 - the rewritten file's bytes were kept as evidence before the repair
+ok 24 - a symlink planted at a protected path is replaced by the real file
+ok 25 - ... and the file it pointed at is untouched (contents and mode)
+ok 26 - a swapped snapshot blob is refused: the file is not overwritten with it
+ok 27 - ... and the real snapshot repairs it
+ok 28 - an edited manifest entry with a .. component is never acted on
+ok 29 - with no room for the evidence copy, the tampered file is not overwritten
+ok 30 - ... and is repaired once there is room
+ok 31 - status says ENABLED with 3 snapshot entries
+ok 32 - snapshot while enabled is refused
+ok 33 - off succeeds
+ok 34 - off restores the original mode (0640)
+ok 35 - off does not change permissions through a planted symlink
+ok 36 - while off, scan repairs nothing
+# check-config (TODO P2-2)
+ok 37 - check-config passes on the config add/remove wrote
+ok 38 - check-config: a relative path, a duplicate and a .. component (3 problems)
+ok 39 - on refuses while the config has an error (78)
+ok 40 - ... and so does snapshot
+ok 41 - check-config: a group-writable config is an error
+# signed snapshot (TODO P2-2: baseline trust)
+ok 42 - check-config: an unknown trust value is an error
+ok 43 - check-config: trust = signed without a signing key is an error
+ok 44 - check-config passes with trust = signed and a key
+ok 45 - on with trust = signed says nothing is repaired until it is signed
+ok 46 - status: an unsigned snapshot is NOT TRUSTED
+ok 47 - # SKIP ACL hashes in the manifest (no getfacl)
+ok 48 - unsigned snapshot: tampering is reported, not repaired
+ok 49 - ... and its bytes are kept as evidence
+ok 50 - the next scan does not report (or copy) the same change again
+ok 51 - status: once the operator signs it, the snapshot is trusted
+ok 52 - a signed snapshot repairs
+ok 53 - (the test edited the manifest)
+ok 54 - an edited manifest is not trusted: nothing is written back
+ok 55 - a forged signature is not trusted either
+ok 56 - ... and the signed manifest repairs it again
+ok 57 - a scan notices trust lowered from signed to local
+ok 58 - off with an untrusted manifest only unlocks (and says so)
+ok 59 - ... the setuid mode the edited manifest names is not applied (mode 640)
+ok 60 - ... and the file is writable by its owner again
+ok 61 - # SKIP captured ACLs applied only when their hash matches (needs getfacl, setfacl, ACL support)
+1..61
