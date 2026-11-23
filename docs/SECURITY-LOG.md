@@ -8,6 +8,15 @@ stays the detailed record. Each entry here points to it.
 CVSS and EPSS scores are given only where a CVE exists. These are project
 findings without CVE IDs, so none are given; no scores are invented.
 
+## 2026-11-23 — template example lines gave invalid values when uncommented
+- **Type:** hardening (secure defaults)
+- **CVE / CWE / advisory:** none; CWE-1188 (insecure default initialization of resource) is the nearest class
+- **Severity:** not applicable (no CVE). Project rating: low. `secure-sudo lint` and `load` already refused the kernel keys, but the daemon read `remote_syslog_transport = tls # udp | tls` as an invalid transport and stopped forwarding (`config_error`), `alert_min_severity = high # ...` turned alerting off, and the alert limits kept their defaults. Both showed as `config_error` in `secure-sudo health`, so the failure was visible but easy to cause.
+- **Affected:** `userspace/config/secure-sudo.conf` (template only).
+- **What changed:** every example comment is on its own line, and the template says that a `#` after a value is part of the value. `pheonixbox.conf` now shows `trust = local|signed` and its fail-secure handling.
+- **Why it is secure now:** uncommenting an example line gives the value it shows, so log forwarding over TLS and alerting work as configured (NIST CM-6, AU-4(1)).
+- **Verification:** `tests/userspace/test-cli.sh` (the shipped config passes lint with 0 errors and 0 warnings) and `tests/userspace/test-config-docs.sh`. HistoryTest runs listed in the PR.
+
 ## 2026-11-23 — nftables.service stop deleted secure_sudo's network-mode table
 - **Type:** patch
 - **CVE / CWE / advisory:** none; CWE-693 (protection mechanism failure)
