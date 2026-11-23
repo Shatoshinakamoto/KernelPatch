@@ -1,0 +1,177 @@
+# ProcGuard (kills processes): in a private PID namespace
+ok 1 - ProcGuard builds with test paths (-Werror)
+ok 2 - empty allowlist: refuses to run (would mean kill everything)
+ok 3 - monitor mode: the offender is not killed
+ok 4 - ... and the log says what would have been killed
+ok 5 - enforce, not armed yet: the offender is not killed
+ok 6 - ... the log says what it would have killed and how to arm it
+ok 7 - ... and it does not arm itself while there is an offender
+ok 8 - the operator arms it
+ok 9 - enforce: a process not on the allowlist is killed
+ok 10 - ... an allowlisted one is not
+ok 11 - ... and the kill is logged
+ok 12 - enforce: a name containing secure-sudo is no exemption
+ok 13 - enforce: the shells it runs under are never killed
+ok 14 - respawning 3 times: the executable is removed from disk
+ok 15 - ... after a compressed sample went to the quarantine
+ok 16 - an executable in a system directory is never deleted
+ok 17 - ... it is quarantined and the log says it was left
+ok 18 - a path swapped after the program started: the new file is left alone
+ok 19 - ... the log says it is no longer the binary that ran
+ok 20 - ... and the quarantined copy is the binary that actually ran
+ok 21 - back to monitor mode: disarmed
+ok 22 - a clean enforce pass arms it by itself
+# ns: /tmp/tmp.NdCpZGviiM/ns.sh: line 34:    24 Killed                  "$T/evil/evil" 1000
+# ns: /tmp/tmp.NdCpZGviiM/ns.sh: line 34:    25 Killed                  "$T/evil/secure-sudo-x" 1000
+# ns: /tmp/tmp.NdCpZGviiM/ns.sh: line 51:    49 Killed                  "$1" 1000
+# ns: /tmp/tmp.NdCpZGviiM/ns.sh: line 51:    82 Killed                  "$1" 1000
+# ns: /tmp/tmp.NdCpZGviiM/ns.sh: line 51:   119 Killed                  "$1" 1000
+# BootGuard (restores /boot at the next boot)
+ok 23 - BootGuard and DriverGuard build with test paths (-Werror)
+ok 24 - refresh with no baseline does nothing (the guard is not in use)
+ok 25 - enforce: tamper is staged for the next boot, the live file is left alone
+ok 26 - apply-now without --i-understand-the-risk is refused
+ok 27 - restore-staged (at boot) puts the known-good file back and clears the flag
+ok 28 - scan while a package manager holds its lock is deferred, nothing staged
+ok 29 - the package hook re-baselines and logs each changed file with the reason
+ok 30 - ... so the update is not treated as tampering afterwards
+ok 31 - refresh drops a staged restore that predates the update (logged)
+ok 32 - monitor: tamper reported, nothing staged
+# DriverGuard (restores module files)
+ok 33 - monitor: a changed module is reported, not restored
+ok 34 - enforce, not armed yet: reported, not repaired, and it does not arm itself
+ok 35 - ... and status says so
+ok 36 - armed by the operator: the module is restored from its backup (logged)
+ok 37 - enforce: scan during a package transaction is deferred (the update is kept)
+ok 38 - after the package hook the updated module is the known-good one (logged)
+# TamperWatch (kills the writer of a protected file)
+ok 39 - TamperWatch builds with test paths (-Werror)
+ok 40 - log mode: the writer is named, not killed
+ok 41 - quarantine mode, not armed: the writer is named, not killed
+ok 42 - armed: the writer is killed after its executable is quarantined
+ok 43 - ... but not while a package manager is running (logged as not killed)
+ok 44 - tamperwatch: a writer whose path was swapped: the binary that ran is quarantined
+# Config checking (ssaddon_conf): every add-on refuses a bad config
+ok 45 - Locus, BiosGuard and the failure reporter build with test paths (-Werror)
+ok 46 - the shipped config templates pass every add-on's check-config
+ok 47 - an unknown key is an error (file:line named)
+ok 48 - a mistyped mode is an error, not a silent 'monitor'
+ok 49 - ... and scan refuses to run (exit 78, EX_CONFIG)
+ok 50 - ... while status still works and says so
+ok 51 - numbers must parse in full and be in range
+ok 52 - a key set twice is an error
+ok 53 - an inline comment is an error (it would be part of the value)
+ok 54 - a relative path is an error
+ok 55 - a path with '..' is an error
+ok 56 - a value longer than its buffer is an error, never truncated
+ok 57 - a config writable by group or others is an error
+ok 58 - a config not owned by root is an error
+ok 59 - an allowlist entry that is not an absolute path is an error
+ok 60 - logging.conf is checked by every guard (remote_enabled needs a host)
+ok 61 - ... and BootGuard's scan refuses to run with it
+ok 62 - a port out of range is an error
+ok 63 - locus-client.conf: a host must be a host name or address
+ok 64 - tamperwatch.conf: protected paths must be absolute, with no '..'
+ok 65 - locus.conf: a root set twice, a bad purpose, alloc and GUI on one port
+ok 66 - ... (the shared port is caught once the rest is valid)
+ok 67 - ... and Locus refuses to serve
+ok 68 - biosguard.conf: an unknown key is an error
+ok 69 - secure-sudo-gui check-config: a bad port and an unknown key
+ok 70 - the console rolls back a change check-config rejects
+ok 71 - ... and keeps one it accepts
+# Failure reporting (OnFailure= -> secure-sudo-addon-failure)
+ok 72 - a unit that failed on its config is reported CRITICAL, logged and notified
+ok 73 - ... one killed at its memory limit says so
+ok 74 - ... and a hostile unit name or result cannot run a command
+ok 75 - a message of 999 quotes reaches the command whole, as one argument (ASan)
+ok 76 - shell syntax in a message is passed as text, never run
+ok 77 - the same notification five times in a row runs the command once
+ok 78 - a newline in a message reaches the command as \x0a, not a line break
+ok 79 - a notify_cmd that exits non-zero is logged ERROR
+ok 80 - ... one that cannot start is logged ERROR
+ok 81 - ... and one that hangs is killed after the timeout and logged
+ok 82 - at most 10 different notifications run in a minute
+ok 83 - ... and all 15 are still in the log
+# Baseline trust, verified restores and evidence (ssaddon_trust)
+ok 84 - a new baseline is announced with its SHA-256 (on record off-box)
+ok 85 - enforce repair: the module is back, with its owner and mode kept
+ok 86 - ... and a symlink planted at the temporary name was not written through
+ok 87 - ... and the tampered bytes were kept as evidence first (hash, owner, mode, times, copy)
+ok 88 - a swapped backup is refused: the file is not overwritten with it
+ok 89 - ... and the restore walks back to the newest backup that matches
+ok 90 - signed mode, unsigned baseline: reported, nothing repaired, the unit fails (3)
+ok 91 - ... and status says why
+ok 92 - signed by the operator's key: the repair goes ahead
+ok 93 - an edited baseline no longer verifies: nothing repaired
+ok 94 - a baseline signed with another key is refused
+ok 95 - a signing key writable by group or others is not trusted
+ok 96 - a refresh (package hook) drops the old signature and names the key to sign with
+ok 97 - the staged restore records each file's baseline hash
+ok 98 - a swapped boot backup is refused at boot
+ok 99 - ... a good one is applied, and what it replaced is kept as evidence
+ok 100 - a restore staged by an older release (no hash) is checked against the baseline
+ok 101 - signed mode, unsigned baseline: the boot restore is refused and kept for the operator
+ok 102 - ... and applied once the operator signs the baseline
+ok 103 - ProcGuard: the removed implant's hash, owner and mode are on record
+ok 104 - tamperwatch: the tamperer's executable is on record before the kill
+ok 105 - the console keeps the same record before its quarantine kill
+# Adversarial: hostile names, edited baselines, symlinks, full disks, bad requests
+ok 106 - a file name with a newline is not baselined, and is logged escaped (\x0a)
+ok 107 - ... so no log line was forged: every line starts with its own timestamp
+ok 108 - the baseline records the hash of exactly the bytes it backed up
+ok 109 - baseline entries outside the module tree are ignored, never repaired over (3)
+ok 110 - a module replaced by a symlink (even to identical bytes) is tampering, and repaired
+ok 111 - ... the evidence records the link and where it pointed, not what it pointed at
+ok 112 - a restore keeps the mode only without setuid/setgid and group/world write
+ok 113 - baseline with no room for its backups is refused, the previous baseline kept
+ok 114 - ... and no partial backup is left behind
+ok 115 - with no room to keep the evidence, the tampered module is not overwritten
+ok 116 - back in monitor mode: disarmed (logged)
+ok 117 - an enforce pass with nothing to repair arms itself
+ok 118 - a restore.list entry outside boot_dir is refused
+ok 119 - a restore.list hash that is not the baseline's is refused
+ok 120 - BootGuard: a boot file replaced by a symlink is staged and restored as a real file
+ok 121 - BootGuard: a baseline with no room for its backups is refused, the old one kept
+ok 122 - Locus: a well-formed request is served
+ok 123 - ... a purpose with an underscore (allowed in its config) is served too
+ok 124 - ... a purpose naming a path is refused
+ok 125 - ... an oversized purpose is refused, not cut to a valid prefix
+ok 126 - ... an unknown verb is refused
+ok 127 - ... a client that connects and says nothing does not stall it for others
+ok 128 - failure reporter: a newline in a unit name cannot forge a log line
+ok 129 - BiosGuard: a table name with a quote runs no command (it went through a shell)
+ok 130 - BiosGuard: an ACPI table that appeared after the baseline is reported
+ok 131 - BiosGuard: a changed table is reported, and nothing is written back
+ok 132 - BiosGuard: a table name with a newline is reported escaped, not fingerprinted
+ok 133 - BiosGuard: the baseline counts every source class it measured
+ok 134 - BiosGuard: the default measures PCRs 0, 2 and 7, not 1
+ok 135 - BiosGuard: an unchanged firmware with all sources is intact
+ok 136 - BiosGuard: Secure Boot turned off, a new dbx, a PCR 0 change, a new ESRT version and an SMBIOS change are each reported
+ok 137 - BiosGuard: PCR 1 is not measured, so its change is not reported
+ok 138 - BiosGuard: a Secure Boot variable that vanished is reported
+ok 139 - BiosGuard: refresh logs each changed source CRITICAL with its reason, then re-baselines
+ok 140 - BiosGuard: after refresh the new state is the baseline
+ok 141 - BiosGuard: a malformed tpm_pcrs is a config error
+ok 142 - BiosGuard: a PCR number out of range is a config error
+ok 143 - BiosGuard: tpm_pcrs empty, efi = 0 and smbios = 0 measure only DMI and ACPI
+ok 144 - BiosGuard: status says what this host exposes and what is switched off
+ok 145 - BiosGuard: on a legacy-BIOS host without a TPM, status says so
+ok 146 - console: no token is refused (401)
+ok 147 - ... a wrong token is refused (401)
+ok 148 - ... another Host (DNS rebinding) is refused even with the token (403)
+ok 149 - ... with both, the API answers
+ok 150 - ... a non-numeric count is a client error (400)
+ok 151 - ... a log name that is not a guard's is refused
+ok 152 - ... a negative Content-Length is refused (413)
+ok 153 - ... an oversized body is refused unread (413)
+ok 154 - ... a config name outside its list is refused
+ok 155 - ... a JSON body that is not an object is refused
+ok 156 - ... quarantining PID 1 is refused
+ok 157 - initramfs: nothing staged -> does nothing, exit 0
+ok 158 - initramfs: secure_sudo.bootguard=off skips the restore
+ok 159 - initramfs: a boot filesystem that cannot be found keeps the restore staged (no chroot), boot continues
+ok 160 - initramfs: with no separate boot filesystem it runs restore-staged in the root with the initramfs stage
+ok 161 - initramfs: a read-only root is remounted read-write for the restore and back to read-only after
+ok 162 - initramfs: a root that is already read-write is not remounted
+ok 163 - initramfs: a missing/non-executable bootguard binary skips, boot continues
+1..163

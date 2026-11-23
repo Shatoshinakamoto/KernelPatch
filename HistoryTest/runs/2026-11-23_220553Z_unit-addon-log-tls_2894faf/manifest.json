@@ -1,0 +1,26 @@
+{
+  "area": "unit-addon-log-tls",
+  "commit": "2894faf",
+  "date": "2026-11-23T22:05:53+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "84ea62dc2a02009ba156edd3037c0f15b71236a62f2fe4602de45114c9a94bfc",
+    "command.txt": "559ef630b4cb7911b213e3eebde1008dc1563c5c64673fa27c951a91c605093d",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "58269ddf5855b23e1f5d0118a17fedf7951171899d3dd0f6b1ba2593887f4a9b",
+    "results/tap-summary.txt": "6a792810dfc5cf4e731ecd4258ca04e9de5b541b662a2bb4e536d19df093df27"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "1a0403bc7935844e689932a922d454566b6e358216f4de0236340a9f83ddb7a2",
+  "previous_run": "2026-11-23_215528Z_gate_aaffc26",
+  "run_id": "2026-11-23_220553Z_unit-addon-log-tls_2894faf",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 20,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu)"
+}

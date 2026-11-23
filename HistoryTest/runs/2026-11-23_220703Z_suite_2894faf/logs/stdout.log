@@ -1,0 +1,1491 @@
+# ===== install/test-install.sh
+ok 1 - --help prints the commands
+ok 2 - installer passes bash -n
+ok 3 - stage-userspace builds the userspace
+ok 4 - stage has usr/bin/secure-sudo
+ok 5 - stage has usr/sbin/secure-sudod
+ok 6 - stage has usr/bin/secure-sudo-otp
+ok 7 - stage has usr/bin/secure-sudo-pheonixbox
+ok 8 - stage has lib/x86_64-linux-gnu/security/pam_secure_sudo.so
+ok 9 - stage has lib/x86_64-linux-gnu/security/pam_secure_otp.so
+ok 10 - stage has usr/libexec/secure-sudo/apply-net.sh
+ok 11 - stage has usr/libexec/secure-sudo/quarantine.sh
+ok 12 - stage has usr/libexec/secure-sudo/contain.sh
+ok 13 - stage has usr/libexec/secure-sudo/oscap-results.py
+ok 14 - stage has usr/libexec/secure-sudo/cis-nftables.sh
+ok 15 - stage has lib/systemd/system/secure-sudod.service
+ok 16 - stage has usr/libexec/secure-sudo/secure-sudo-attest
+ok 17 - stage has usr/libexec/secure-sudo/attest-report.sh
+ok 18 - stage has usr/bin/secure-sudo-attest-verify
+ok 19 - stage has usr/share/secure-sudo/defaults/secure-sudo.conf
+ok 20 - stage has .secure-sudo-stage
+ok 21 - preflight userspace passes on a supported root
+ok 22 - preflight names the files it would install
+ok 23 - preflight says PAM is left alone
+ok 24 - preflight userspace --prebuilt accepts a stage directory
+ok 25 - preflight userspace --prebuilt blocks on a directory that is not a stage
+ok 26 - preflight changed nothing in the root
+ok 27 - preflight --dry-run is the same report
+ok 28 - preflight build-kernel did not create BUILD_ROOT
+ok 29 - unsupported distro is BLOCKED
+ok 30 - os-release VERSION does not clobber the installer's version
+ok 31 - secure boot state: enabled from efivars
+ok 32 - Secure Boot on without a MOK key blocks install-kernel
+ok 33 - secure boot state: disabled from efivars
+ok 34 - Secure Boot off: no Secure Boot block
+ok 35 - BIOS boot reports Secure Boot disabled
+ok 36 - install-kernel refuses to run against SS_ROOT
+ok 37 - rollback refuses to run against SS_ROOT
+ok 38 - verify with nothing installed says so
+ok 39 - uninstall with nothing installed says so
+ok 40 - userspace --prebuilt installs into the root
+ok 41 - the manifest exists and is private
+ok 42 - every staged file is in the manifest
+ok 43 - manifest hashes match the installed files
+ok 44 - the CLI is the new one
+ok 45 - the foreign file it replaced was backed up
+ok 46 - ... and recorded as such
+ok 47 - configs created and recorded as C
+ok 48 - directories it created are recorded
+ok 49 - directories that already existed are not claimed
+ok 50 - modes come from the stage
+ok 51 - no temporary files left behind
+ok 52 - PAM was not touched
+ok 53 - the guidance points at docs/RECOVERY.md
+ok 54 - verify passes after install
+ok 55 - verify fails on a changed file and names it
+ok 56 - reinstall (upgrade) succeeds
+ok 57 - upgrade makes no new backups of our own files
+ok 58 - upgrade keeps the administrator's admin_gid
+ok 59 - ... and says the detected groups differ
+ok 60 - an unchanged file the new version no longer ships is removed
+ok 61 - a changed obsolete file is kept
+ok 62 - manifest has no duplicate entries
+ok 63 - uninstall refuses while PAM uses the modules
+ok 64 - ... and shows the line
+ok 65 - ... and changed nothing
+ok 66 - ... not even the manifest
+ok 67 - uninstall --remove-pam-lines runs
+ok 68 - the secure_sudo PAM line is gone
+ok 69 - the other PAM lines are untouched
+ok 70 - a copy of the old PAM file is kept
+ok 71 - installed binaries are removed
+ok 72 - PAM modules are removed
+ok 73 - the foreign file we replaced is restored
+ok 74 - the changed config is kept, with a warning
+ok 75 - a file the admin added is never removed
+ok 76 - a changed installed file is kept
+ok 77 - empty directories we created are removed
+ok 78 - pre-existing directories stay
+ok 79 - with things kept, the record stays for a second pass
+ok 80 - uninstall --purge finishes the job
+ok 81 - --purge removed /etc/secure_sudo
+ok 82 - install then uninstall succeeds
+ok 83 - ... and says everything is gone
+ok 84 - install + uninstall leaves the root exactly as it was
+ok 85 - ... including the daemon's heartbeat, cursor, load, node-scan and TimeVault state
+ok 86 - uninstall keeps undelivered remote events
+ok 87 - ... and says so
+ok 88 - uninstall keeps a configured OTP
+ok 89 - ... and says how to remove it
+ok 90 - an install that cannot place a file stops with an error
+ok 91 - ... after recording what it placed
+ok 92 - uninstall after the failed install restores the root
+ok 93 - an installed program with a missing library fails the install
+ok 94 - ... and is removed again by uninstall
+ok 95 - verify checks shared libraries
+ok 96 - grub_entry: kernel inside the Advanced submenu
+ok 97 - grub_entry: a prefix of a release does not match
+ok 98 - grub_entry: unknown release
+ok 99 - boot_entry_present: the installed kernel
+ok 100 - boot_entry_present: not a prefix
+ok 101 - grub_entry: new kernel, normal entry (not recovery)
+ok 102 - grub_entry: the old kernel is still found
+ok 103 - grub_entry: flat menu (GRUB_DISABLE_SUBMENU), new kernel
+ok 104 - grub_entry: flat menu, the old kernel
+ok 105 - grub_has_password: set superusers
+ok 106 - grub_entry_open: an entry inside the (restricted) Advanced submenu needs the password
+ok 107 - grub_entry_open: the unrestricted top-level entry does not
+ok 108 - grub_entry_open: an unknown entry is reported as such
+ok 109 - grub_entry_open: flat menu, the new kernel boots without the password
+ok 110 - grub_entry_open: an entry without --unrestricted needs the password
+ok 111 - grub_has_password: none set
+ok 112 - verify fails when the default boot entry needs the GRUB password
+ok 113 - verify passes when it boots without the password
+ok 114 - verify says nothing about it with no GRUB password
+ok 115 - an older drop-in is stale (preflight plans to rewrite it)
+ok 116 - trial boot after an older install succeeds
+ok 117 - ... the drop-in now lists every kernel at the top level
+ok 118 - ... and still keeps GRUB_DEFAULT=saved
+ok 119 - ... its manifest hash is the new one
+ok 120 - ... the known-good kernel is the default, by its top-level entry
+ok 121 - ... and the new kernel boots once, by its top-level entry
+ok 122 - a current drop-in is not stale
+ok 123 - a drop-in the administrator changed is left as it is
+ok 124 - ... with a warning
+ok 125 - grub_entry: a top-level entry has no submenu prefix
+ok 126 - grub_entry: BLS entry id
+ok 127 - boot_entry_present: BLS
+ok 128 - grub_default reads /etc/default/grub
+ok 129 - grub_default: grub.d drop-ins win, in order
+ok 130 - SS_KERNEL_TREE without a provenance record is refused
+ok 131 - a provenance record without verified_by= is refused
+ok 132 - a recorded tree is accepted
+ok 133 - ... and its record becomes the build's kernel-source.txt
+ok 134 - installer no longer adds module.sig_enforce=1 to GRUB_CMDLINE_LINUX
+ok 135 - runtime_missing lists only the missing package
+ok 136 - no candidate yet: the package lists are refreshed, then it is installed
+ok 137 - a known package is installed without a refresh
+ok 138 - a failed package install stops with a clear message
+ok 139 - a missing library brings in its package (64-bit time_t name offered)
+ok 140 - every library secure-sudo-attest links against is covered
+ok 141 - tpm-lockout sets a lockout password and disables clear
+ok 142 - ... shows the password once, the same one the TPM got
+ok 143 - ... and never puts it on a command line
+ok 144 - ... nor leaves its temporary file
+ok 145 - a TPM whose lockout password is set is left alone
+ok 146 - SS_TPM_LOCKOUT=0 skips it
+ok 147 - no TPM: `all` skips it quietly
+1..147
+# ===== oscap/test-oscap-results.sh
+ok 1 - tally counts every kind
+ok 2 - rules --not-pass lists short ids
+ok 3 - release: the expected result passes
+ok 4 - release: notchecked are flagged for manual review
+ok 5 - release: the independent check is used and named
+ok 6 - release: a scanner pass the scanner cannot vouch for fails without a cross-check
+ok 7 - release: ... and says no independent check was recorded
+ok 8 - diagnostic: a missing cross-check is a note, not a failure
+ok 9 - release: with the cross-check the false pass becomes the expected fail
+ok 10 - release: ... and the override is reported
+ok 11 - release: an encrypted disk (cross-check pass) passes: a listed rule passing is no regression
+ok 12 - release: a cross-check fail the scanner missed fails the gate
+ok 13 - release: ... naming the rule
+ok 14 - release: --crosscheck FILE names the checks explicitly
+ok 15 - a malformed cross-check file is an error
+ok 16 - release: one more fail fails the gate
+ok 17 - release: ... and names the rule
+ok 18 - release: same totals, different failing rule -> fail (IDs, not totals)
+ok 19 - release: error fails even when listed container-only
+ok 20 - release: ... saying error is never allowed
+ok 21 - diagnostic: listed container-only error tolerated
+ok 22 - diagnostic: output says it is not a release result
+ok 23 - release: unknown fails
+ok 24 - diagnostic: unexplained unknown fails too
+ok 25 - release: unexplained notchecked fails
+ok 26 - release: a listed rule missing from the results fails (profile changed)
+ok 27 - diagnostic: an unexplained fail still fails
+ok 28 - no results at all fails
+ok 29 - reads oscap console output (\r-rewritten lines)
+ok 30 - skip-fix: one block dropped
+ok 31 - skip-fix: the matching fix is gone
+ok 32 - skip-fix: the other fixes stay
+ok 33 - skip-fix: dropped rule listed in .skipped
+ok 34 - skip-fix: a block without END marker is an error
+ok 35 - skip-fix: ... and the file is left unchanged
+ok 36 - recorded container scan FAILS the release gate
+ok 37 - ... because of the AppArmor error (OSB-13)
+ok 38 - recorded container scan passes as a diagnostic only
+ok 39 - release gate refuses to scan inside a container
+1..39
+# ===== provenance/test-verify-kernel-source.sh
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   2  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 2u
+ok 1 - good archive + pinned signer verifies
+ok 2 - metadata records the signer fingerprint
+ok 3 - metadata records the archive sha256
+ok 4 - metadata records the release
+ok 5 - tampered archive is rejected
+ok 6 - truncated archive is rejected
+ok 7 - missing signature is rejected
+ok 8 - empty signature is rejected
+ok 9 - signature of a different file is rejected
+ok 10 - signer whose key is not shipped is rejected
+ok 11 - shipped but unpinned signer is rejected
+ok 12 - empty pinned list is rejected
+ok 13 - install.sh fetch_kernel refuses a tampered archive
+ok 14 - install.sh did not extract the tampered archive
+ok 15 - install.sh fetch_kernel accepts the good archive
+ok 16 - install.sh extracted the verified tree
+ok 17 - install.sh wrote source provenance metadata
+ok 18 - install.sh re-extracts a tree whose marker does not match
+ok 19 - re-extracted tree has the verified content
+1..19
+# ===== userspace/test-addon-log-tls.sh
+ok 1 - add-on logging harness builds with TLS support (-Werror)
+ok 2 - check-config accepts remote_proto = tls with a readable CA bundle
+ok 3 - check-config rejects a missing remote_ca_file under tls
+ok 4 - check-config rejects a remote_ca_file that holds no certificate
+ok 5 - check-config rejects a relative remote_ca_file
+ok 6 - check-config still rejects a key set twice
+ok 7 - two lines arrive over one verified TLS connection (conns=1, frames=2)
+ok 8 - each line is an RFC 5424 record (PRI 108 = log audit + warning)
+ok 9 - a newline in a message is escaped, not shipped as a second record
+ok 10 - no shipping failure is logged when the collector is healthy
+ok 11 - an IP collector is verified against the certificate's IP SAN
+ok 12 - a collector whose certificate is not from remote_ca_file gets nothing
+ok 13 - the refusal is logged locally once, naming the certificate problem
+ok 14 - lines are still written to the local log while shipping fails
+ok 15 - a trusted certificate for another host name is refused
+ok 16 - a trusted certificate naming another DNS host is refused
+ok 17 - a dead collector costs one attempt per retry period, not one per line (0.0 s)
+ok 18 - shipping resumes once the collector is back, and the recovery is logged
+ok 19 - a collector that closed the connection is reconnected without losing a line (conns=2)
+ok 20 - remote_proto = tcp still ships octet-framed lines, reconnecting after a close
+1..20
+# ===== userspace/test-addons.sh
+# ProcGuard (kills processes): in a private PID namespace
+ok 1 - ProcGuard builds with test paths (-Werror)
+ok 2 - empty allowlist: refuses to run (would mean kill everything)
+ok 3 - monitor mode: the offender is not killed
+ok 4 - ... and the log says what would have been killed
+ok 5 - enforce, not armed yet: the offender is not killed
+ok 6 - ... the log says what it would have killed and how to arm it
+ok 7 - ... and it does not arm itself while there is an offender
+ok 8 - the operator arms it
+ok 9 - enforce: a process not on the allowlist is killed
+ok 10 - ... an allowlisted one is not
+ok 11 - ... and the kill is logged
+ok 12 - enforce: a name containing secure-sudo is no exemption
+ok 13 - enforce: the shells it runs under are never killed
+ok 14 - respawning 3 times: the executable is removed from disk
+ok 15 - ... after a compressed sample went to the quarantine
+ok 16 - an executable in a system directory is never deleted
+ok 17 - ... it is quarantined and the log says it was left
+ok 18 - a path swapped after the program started: the new file is left alone
+ok 19 - ... the log says it is no longer the binary that ran
+ok 20 - ... and the quarantined copy is the binary that actually ran
+ok 21 - back to monitor mode: disarmed
+ok 22 - a clean enforce pass arms it by itself
+# ns: /tmp/tmp.B0clYV48nM/ns.sh: line 34:    24 Killed                  "$T/evil/evil" 1000
+# ns: /tmp/tmp.B0clYV48nM/ns.sh: line 34:    25 Killed                  "$T/evil/secure-sudo-x" 1000
+# ns: /tmp/tmp.B0clYV48nM/ns.sh: line 51:    49 Killed                  "$1" 1000
+# ns: /tmp/tmp.B0clYV48nM/ns.sh: line 51:    82 Killed                  "$1" 1000
+# ns: /tmp/tmp.B0clYV48nM/ns.sh: line 51:   119 Killed                  "$1" 1000
+# BootGuard (restores /boot at the next boot)
+ok 23 - BootGuard and DriverGuard build with test paths (-Werror)
+ok 24 - refresh with no baseline does nothing (the guard is not in use)
+ok 25 - enforce: tamper is staged for the next boot, the live file is left alone
+ok 26 - apply-now without --i-understand-the-risk is refused
+ok 27 - restore-staged (at boot) puts the known-good file back and clears the flag
+ok 28 - scan while a package manager holds its lock is deferred, nothing staged
+ok 29 - the package hook re-baselines and logs each changed file with the reason
+ok 30 - ... so the update is not treated as tampering afterwards
+ok 31 - refresh drops a staged restore that predates the update (logged)
+ok 32 - monitor: tamper reported, nothing staged
+# DriverGuard (restores module files)
+ok 33 - monitor: a changed module is reported, not restored
+ok 34 - enforce, not armed yet: reported, not repaired, and it does not arm itself
+ok 35 - ... and status says so
+ok 36 - armed by the operator: the module is restored from its backup (logged)
+ok 37 - enforce: scan during a package transaction is deferred (the update is kept)
+ok 38 - after the package hook the updated module is the known-good one (logged)
+# TamperWatch (kills the writer of a protected file)
+ok 39 - TamperWatch builds with test paths (-Werror)
+ok 40 - log mode: the writer is named, not killed
+ok 41 - quarantine mode, not armed: the writer is named, not killed
+/home/<user>/kernelpatch/tests/lib/tap.sh: line 10: 23555 Killed                  "$T/evil/mybash" -c 'echo x >> "$1"; for _ in $(seq 40); do sleep 0.1; done' w "$T/prot/a.conf"
+ok 42 - armed: the writer is killed after its executable is quarantined
+ok 43 - ... but not while a package manager is running (logged as not killed)
+/home/<user>/kernelpatch/tests/userspace/test-addons.sh: line 318: 23590 Killed                  "$T/evil/wb2" -c 'sleep 1; echo x >> "$1"; sleep 4; :' w "$T/prot/a.conf"
+ok 44 - tamperwatch: a writer whose path was swapped: the binary that ran is quarantined
+# Config checking (ssaddon_conf): every add-on refuses a bad config
+ok 45 - Locus, BiosGuard and the failure reporter build with test paths (-Werror)
+ok 46 - the shipped config templates pass every add-on's check-config
+ok 47 - an unknown key is an error (file:line named)
+ok 48 - a mistyped mode is an error, not a silent 'monitor'
+ok 49 - ... and scan refuses to run (exit 78, EX_CONFIG)
+ok 50 - ... while status still works and says so
+ok 51 - numbers must parse in full and be in range
+ok 52 - a key set twice is an error
+ok 53 - an inline comment is an error (it would be part of the value)
+ok 54 - a relative path is an error
+ok 55 - a path with '..' is an error
+ok 56 - a value longer than its buffer is an error, never truncated
+ok 57 - a config writable by group or others is an error
+ok 58 - a config not owned by root is an error
+ok 59 - an allowlist entry that is not an absolute path is an error
+ok 60 - logging.conf is checked by every guard (remote_enabled needs a host)
+ok 61 - ... and BootGuard's scan refuses to run with it
+ok 62 - a port out of range is an error
+ok 63 - locus-client.conf: a host must be a host name or address
+ok 64 - tamperwatch.conf: protected paths must be absolute, with no '..'
+ok 65 - locus.conf: a root set twice, a bad purpose, alloc and GUI on one port
+ok 66 - ... (the shared port is caught once the rest is valid)
+ok 67 - ... and Locus refuses to serve
+ok 68 - biosguard.conf: an unknown key is an error
+ok 69 - secure-sudo-gui check-config: a bad port and an unknown key
+ok 70 - the console rolls back a change check-config rejects
+ok 71 - ... and keeps one it accepts
+# Failure reporting (OnFailure= -> secure-sudo-addon-failure)
+ok 72 - a unit that failed on its config is reported CRITICAL, logged and notified
+ok 73 - ... one killed at its memory limit says so
+ok 74 - ... and a hostile unit name or result cannot run a command
+ok 75 - a message of 999 quotes reaches the command whole, as one argument (ASan)
+ok 76 - shell syntax in a message is passed as text, never run
+ok 77 - the same notification five times in a row runs the command once
+ok 78 - a newline in a message reaches the command as \x0a, not a line break
+ok 79 - a notify_cmd that exits non-zero is logged ERROR
+ok 80 - ... one that cannot start is logged ERROR
+ok 81 - ... and one that hangs is killed after the timeout and logged
+ok 82 - at most 10 different notifications run in a minute
+ok 83 - ... and all 15 are still in the log
+# Baseline trust, verified restores and evidence (ssaddon_trust)
+ok 84 - a new baseline is announced with its SHA-256 (on record off-box)
+ok 85 - enforce repair: the module is back, with its owner and mode kept
+ok 86 - ... and a symlink planted at the temporary name was not written through
+ok 87 - ... and the tampered bytes were kept as evidence first (hash, owner, mode, times, copy)
+ok 88 - a swapped backup is refused: the file is not overwritten with it
+ok 89 - ... and the restore walks back to the newest backup that matches
+ok 90 - signed mode, unsigned baseline: reported, nothing repaired, the unit fails (3)
+ok 91 - ... and status says why
+ok 92 - signed by the operator's key: the repair goes ahead
+ok 93 - an edited baseline no longer verifies: nothing repaired
+ok 94 - a baseline signed with another key is refused
+ok 95 - a signing key writable by group or others is not trusted
+ok 96 - a refresh (package hook) drops the old signature and names the key to sign with
+ok 97 - the staged restore records each file's baseline hash
+ok 98 - a swapped boot backup is refused at boot
+ok 99 - ... a good one is applied, and what it replaced is kept as evidence
+ok 100 - a restore staged by an older release (no hash) is checked against the baseline
+ok 101 - signed mode, unsigned baseline: the boot restore is refused and kept for the operator
+ok 102 - ... and applied once the operator signs the baseline
+ok 103 - ProcGuard: the removed implant's hash, owner and mode are on record
+ok 104 - tamperwatch: the tamperer's executable is on record before the kill
+ok 105 - the console keeps the same record before its quarantine kill
+# Adversarial: hostile names, edited baselines, symlinks, full disks, bad requests
+ok 106 - a file name with a newline is not baselined, and is logged escaped (\x0a)
+ok 107 - ... so no log line was forged: every line starts with its own timestamp
+ok 108 - the baseline records the hash of exactly the bytes it backed up
+ok 109 - baseline entries outside the module tree are ignored, never repaired over (3)
+ok 110 - a module replaced by a symlink (even to identical bytes) is tampering, and repaired
+ok 111 - ... the evidence records the link and where it pointed, not what it pointed at
+ok 112 - a restore keeps the mode only without setuid/setgid and group/world write
+ok 113 - baseline with no room for its backups is refused, the previous baseline kept
+ok 114 - ... and no partial backup is left behind
+ok 115 - with no room to keep the evidence, the tampered module is not overwritten
+ok 116 - back in monitor mode: disarmed (logged)
+ok 117 - an enforce pass with nothing to repair arms itself
+ok 118 - a restore.list entry outside boot_dir is refused
+ok 119 - a restore.list hash that is not the baseline's is refused
+ok 120 - BootGuard: a boot file replaced by a symlink is staged and restored as a real file
+ok 121 - BootGuard: a baseline with no room for its backups is refused, the old one kept
+ok 122 - Locus: a well-formed request is served
+ok 123 - ... a purpose with an underscore (allowed in its config) is served too
+ok 124 - ... a purpose naming a path is refused
+ok 125 - ... an oversized purpose is refused, not cut to a valid prefix
+ok 126 - ... an unknown verb is refused
+ok 127 - ... a client that connects and says nothing does not stall it for others
+ok 128 - failure reporter: a newline in a unit name cannot forge a log line
+ok 129 - BiosGuard: a table name with a quote runs no command (it went through a shell)
+ok 130 - BiosGuard: an ACPI table that appeared after the baseline is reported
+ok 131 - BiosGuard: a changed table is reported, and nothing is written back
+ok 132 - BiosGuard: a table name with a newline is reported escaped, not fingerprinted
+ok 133 - BiosGuard: the baseline counts every source class it measured
+ok 134 - BiosGuard: the default measures PCRs 0, 2 and 7, not 1
+ok 135 - BiosGuard: an unchanged firmware with all sources is intact
+ok 136 - BiosGuard: Secure Boot turned off, a new dbx, a PCR 0 change, a new ESRT version and an SMBIOS change are each reported
+ok 137 - BiosGuard: PCR 1 is not measured, so its change is not reported
+ok 138 - BiosGuard: a Secure Boot variable that vanished is reported
+ok 139 - BiosGuard: refresh logs each changed source CRITICAL with its reason, then re-baselines
+ok 140 - BiosGuard: after refresh the new state is the baseline
+ok 141 - BiosGuard: a malformed tpm_pcrs is a config error
+ok 142 - BiosGuard: a PCR number out of range is a config error
+ok 143 - BiosGuard: tpm_pcrs empty, efi = 0 and smbios = 0 measure only DMI and ACPI
+ok 144 - BiosGuard: status says what this host exposes and what is switched off
+ok 145 - BiosGuard: on a legacy-BIOS host without a TPM, status says so
+ok 146 - console: no token is refused (401)
+ok 147 - ... a wrong token is refused (401)
+ok 148 - ... another Host (DNS rebinding) is refused even with the token (403)
+ok 149 - ... with both, the API answers
+ok 150 - ... a non-numeric count is a client error (400)
+ok 151 - ... a log name that is not a guard's is refused
+ok 152 - ... a negative Content-Length is refused (413)
+ok 153 - ... an oversized body is refused unread (413)
+ok 154 - ... a config name outside its list is refused
+ok 155 - ... a JSON body that is not an object is refused
+ok 156 - ... quarantining PID 1 is refused
+ok 157 - initramfs: nothing staged -> does nothing, exit 0
+ok 158 - initramfs: secure_sudo.bootguard=off skips the restore
+ok 159 - initramfs: a boot filesystem that cannot be found keeps the restore staged (no chroot), boot continues
+ok 160 - initramfs: with no separate boot filesystem it runs restore-staged in the root with the initramfs stage
+ok 161 - initramfs: a read-only root is remounted read-write for the restore and back to read-only after
+ok 162 - initramfs: a root that is already read-write is not remounted
+ok 163 - initramfs: a missing/non-executable bootguard binary skips, boot continues
+1..163
+# ===== userspace/test-attest.sh
+ok 1 - secure-sudo-attest builds (-Werror)
+ok 2 - the attestation key is the same key every time (nothing stored on disk)
+ok 3 - ... and a different TPM has a different key
+ok 4 - a nonce shorter than 16 bytes is refused
+ok 5 - a PCR outside 0-23 is refused
+ok 6 - the tool has no extend/clear/NV command (only ak and quote)
+ok 7 - the bundle is valid JSON and its report too (escaped command line)
+ok 8 - enroll from a trusted boot
+ok 9 - ... records the key, the boot-chain PCRs and the policy
+ok 10 - verify: the same boot, a fresh nonce: pass
+ok 11 - verify --json reports the result and every check
+ok 12 - replay: an old bundle with a new nonce fails
+ok 13 - ... on the freshness check
+ok 14 - a report edited after signing fails (freshness/integrity check)
+ok 15 - a PCR value edited in the bundle fails (not what the TPM quoted)
+ok 16 - a bundle from another TPM fails (not the enrolled key)
+ok 17 - a policy that is not allowed fails
+ok 18 - an unlocked policy fails when the host requires the lock
+ok 19 - a kernel without the secure_sudo LSM fails
+ok 20 - a changed boot chain fails, naming the PCR
+ok 21 - re-enroll after an update with --previous (same TPM): ok
+ok 22 - ... and the new boot chain now verifies
+ok 23 - re-enroll from a different TPM with --previous is refused
+ok 24 - the bundle carries the kernel policy log and quotes PCR 13
+ok 25 - enroll with a measured policy
+ok 26 - ... records it as measured and keeps PCR 13 out of the boot chain
+ok 27 - 'policy' shows the measured state and the enrolled digest
+ok 28 - ... and ignores the root-reported digest
+ok 29 - verify a measured, locked policy: pass
+ok 30 - a policy log edited by root does not replay to the PCR
+ok 31 - hiding the log (falling back to a reported policy) fails
+ok 32 - ... and cannot be re-enrolled over a measured host (no downgrade)
+ok 33 - a pending (not yet extended) policy event fails
+ok 34 - a knob that only tightens after the lock replays, as a new policy
+ok 35 - a list change after the lock (not the kernel's) fails
+ok 36 - a tpm_openers text that is not the measured one fails
+ok 37 - systemd-pcrextend on tpm_openers is refused (root could forge PCR 13 events)
+ok 38 - ... unless enrolled with --accept-pcr-extenders
+ok 39 - an extend the kernel did not make is marked foreign and refused
+ok 40 - the event log parser replays a real OVMF/GRUB log to that TPM's PCRs
+ok 41 - ... and reads the measured Secure Boot state and kernel command line
+ok 42 - enroll with a firmware event log that replays
+ok 43 - ... records its events and the measured Secure Boot state
+ok 44 - verify: the log replays to the quoted PCRs 0-9
+ok 45 - a log edited by root (another GRUB hash) does not replay, naming PCR 4
+ok 46 - a truncated log fails as not well formed
+ok 47 - hiding the log from a host enrolled with one fails
+ok 48 - a reported command line that GRUB did not measure fails
+ok 49 - a reported Secure Boot 'enabled' that the firmware measured as off fails
+ok 50 - a changed boot chain names the event: PCR 4, grubx64.efi changed
+ok 51 - a log that does not replay is refused at enroll, unless --ignore-eventlog
+ok 52 - the IMA parser replays the real log to that guest's PCR 10
+ok 53 - enroll with an IMA log: PCR 10 is quoted but not part of the boot chain
+ok 54 - verify: the IMA log meets the quoted PCR 10 at record 2000 of 2099
+ok 55 - ... IMA's boot_aggregate is this boot's PCRs 0-9, and the count is shown
+ok 56 - every measured file matches a reference list from a known-good host
+ok 57 - a program whose hash is not the reference one fails, by name
+ok 58 - a file not on the list is shown (INFO), and fails with --ima-unknown fail
+ok 59 - an IMA log edited by root (another hash for /usr/bin/sh) does not replay
+ok 60 - hiding the IMA log from a host enrolled with one fails
+ok 61 - 'ima --list' shows the records up to the quote
+ok 62 - a software TPM with a manufacturer-style EK certificate is made
+ok 63 - 'attest ek' prints the EK and its NV certificate
+ok 64 - enroll with --ek-ca: the certificate chains and a challenge is written
+ok 65 - verify fails until the credential is activated
+ok 66 - another TPM cannot answer the challenge
+ok 67 - a made-up answer is refused
+ok 68 - the host's TPM answers it and the verifier accepts the answer
+ok 69 - ... once only (the same answer cannot be used again)
+ok 70 - verify: the attestation key is bound to the certified TPM
+ok 71 - re-enrollment with --previous (same AK) keeps the activation
+ok 72 - an EK certificate from a CA that is not trusted fails
+ok 73 - another TPM's EK with this TPM's certificate fails
+ok 74 - ... and with --ek-no-cert neither TPM can complete it (AK and EK not in one TPM)
+ok 75 - a bundle in the older single-EK form still enrolls
+ok 76 - --ek-ca on a TPM without an EK certificate fails
+ok 77 - # SKIP ECC EK tests need tpm2-tools
+1..77
+# ===== userspace/test-cis-firewall.sh
+ok 1 - generator: the sshd port and --allow-tcp are allowed inbound
+ok 2 - generator: never flushes the whole ruleset (OSB-23)
+ok 3 - generator: resets only its own table
+ok 4 - generator: three default-deny base chains
+ok 5 - generator: loopback accepted and spoofed loopback dropped
+ok 6 - generator: --forward drop routes nothing
+ok 7 - generator: a bad port is refused
+ok 8 - generator: --apply needs root or refuses cleanly
+ok 9 - stig-harden: --cis-firewall is wired to cis-nftables.sh --apply
+ok 10 - stig-harden: the CIS table is loaded before the baseline scan
+ok 11 - stig-harden: only on --remediate (a scan changes nothing)
+ok 12 - install.sh ships cis-nftables.sh next to stig-harden.sh
+ok 13 - drop-in: clears the vendor ExecStop
+ok 14 - drop-in: deletes only inet filter on stop
+ok 15 - drop-in: never flushes the ruleset
+ok 16 - --apply in a namespace: loads, installs the drop-in, keeps secure_sudo's table
+ok 17 - --apply: the drop-in is mode 0644
+ok 18 - before: inbound 8080 reachable with no firewall
+ok 19 - CIS: inbound SSH port reachable
+ok 20 - CIS: other inbound port dropped
+ok 21 - CIS: outbound new connection allowed (and its replies)
+ok 22 - coexist: secure_sudo's drop wins over CIS's outbound accept
+ok 23 - coexist: other outbound destinations still work
+ok 24 - coexist: CIS's SSH allowance is unaffected
+ok 25 - coexist: reloading the CIS file keeps the secure_sudo table
+ok 26 - coexist: ... and its drop still applies
+ok 27 - coexist: a secure_sudo accept does not open CIS's inbound drop
+ok 28 - coexist: removing the CIS table leaves the secure_sudo table
+ok 29 - after: inbound 8080 reachable again without the CIS table
+1..29
+# ===== userspace/test-cli.sh
+ok 1 - CLI builds with test paths (-Werror)
+# lint: configuration syntax and values
+ok 2 - shipped config passes lint (--source-tree)
+ok 3 - fresh install config: no errors
+ok 4 - unknown key is an error with its line
+ok 5 - non-boolean value
+ok 6 - value below the kernel's range
+ok 7 - value above the kernel's range
+ok 8 - number with junk
+ok 9 - bad net_mode
+ok 10 - bad admin_gid list
+ok 11 - more GIDs than the kernel holds
+ok 12 - inline comment in a value
+ok 13 - line without '='
+ok 14 - over-long line
+# lint: list files the kernel would refuse or cut short
+ok 15 - timevault_allow: a bare path is an error (the kernel refuses the whole list)
+ok 16 - timevault_allow: a token that is not a hash, auto or autodir
+ok 17 - timevault_allow: the same path twice
+ok 18 - timevault_allow: hash, auto and autodir entries pass
+ok 19 - timevault_allow: more entries than timevault_max_entries
+ok 20 - node_allowed_children: an absolute path is accepted (the kernel matches it exactly)
+ok 21 - node_allowed_children: a bare name gets a note that a path is stricter
+ok 22 - node_allowed_children: a relative path is an error
+ok 23 - blacklist: more entries than the kernel reads (it would drop them silently)
+ok 24 - driver_blacklist: more hashes than the kernel keeps
+ok 25 - tpm_openers: a file larger than the kernel accepts
+ok 26 - duplicate key is a warning naming the first line
+ok 27 - bad daemon value (vault_action)
+ok 28 - bad alert_min_severity
+ok 29 - alert_max_per_minute below its range
+ok 30 - alert_dedup_seconds above its range
+ok 31 - alert_cmd with an unbalanced quote
+ok 32 - alert_cmd with an unknown placeholder
+ok 33 - a good alert block passes lint
+ok 34 - bad daemon value (remote_syslog)
+ok 35 - remote syslog port is bounded
+ok 36 - remote transport is explicit
+ok 37 - remote CA path must be absolute
+ok 38 - remote CA bundle cannot be empty
+ok 39 - remote queue has a bounded maximum
+ok 40 - node-scan interval must be whole minutes
+ok 41 - node-scan directories must be absolute
+ok 42 - valid node-scan settings pass lint
+ok 43 - timevault_enabled is not an error
+ok 44 - ... and lint explains load never engages TimeVault
+# lint: allowlists, admin groups, combinations
+ok 45 - missing list file warns that load clears the list
+ok 46 - relative path in a path list
+ok 47 - listed program that does not exist warns
+ok 48 - malformed home_map line
+ok 49 - path where a module name is expected
+ok 50 - admin GID that does not exist
+ok 51 - admin_gid unset + block_setid_exec locks admins out of sudo
+ok 52 - operator not in admin_gid: warning
+ok 53 - ... an error with block_setid_exec (would lose sudo)
+ok 54 - block_home_write with an empty home_map
+ok 55 - prguard_observe without prguard_enabled warns
+ok 56 - block_setid_exec with an empty allowlist warns
+ok 57 - lock effects listed (modules + kernel memory)
+ok 58 - vault_action = wipe warns that evidence is lost
+# lint: running kernel
+ok 59 - fake kernel with every knob: no errors
+ok 60 - setting the running kernel does not have
+ok 61 - config already locked
+# lint: PAM order
+ok 62 - recommended one-line stack: clean
+ok 63 - old documented stack is an error (denies the right password)
+ok 64 - pam_secure_sudo after the password check warns
+ok 65 - cooldown on but nothing feeds it warns
+ok 66 - OTP wired before any OTP is set up: lockout error
+ok 67 - ... clean once the OTP secret exists
+ok 68 - OTP use_first_pass before any password module
+ok 69 - OTP module not installed: lockout error
+ok 70 - missing @include warns
+# load
+ok 71 - load of a clean config exits 0
+ok 72 - settings reach the kernel files
+ok 73 - every setting reported accepted with its line
+ok 74 - lists are loaded before the settings
+ok 75 - summary line counts the results
+ok 76 - successful load persists a root-only complete result
+ok 77 - health JSON reports last successful load
+ok 78 - missing list file: reported as cleared, kernel list emptied
+ok 79 - daemon keys reported skipped
+ok 80 - load reports what node-scan found
+ok 81 - load sends the config's entries first, then node-scan's, once each
+ok 82 - load counts every entry of a list (not just the first)
+# health
+ok 83 - health reports degraded fake kernel and exits non-zero
+ok 84 - health JSON reports live/config policy mismatch
+ok 85 - health JSON reports daemon heartbeat
+ok 86 - health reports an unknown load outcome before the first run
+ok 87 - health reports an enabled kernel audit feed
+ok 88 - configured audit feed degrades when kernel auditing is inactive
+ok 89 - health JSON reports remote forwarding state
+ok 90 - health JSON reports remote transport
+ok 91 - health JSON reports active log retention
+ok 92 - health reports an active evidence retention hold
+ok 93 - health JSON reports heartbeat metric availability
+ok 94 - health JSON reports add-on and timer unit states
+ok 95 - health degrades for a failed enabled add-on
+ok 96 - disabled optional add-on does not degrade health
+ok 97 - health reports unavailable systemd inspection
+ok 98 - enabled scanning timer without baseline degrades health
+ok 99 - fresh baseline and timer trigger are reported
+ok 100 - health reports scan service result and last successful scan time
+ok 101 - failed scan result degrades enabled timer health
+ok 102 - scan older than the hourly interval degrades timer health
+ok 103 - stale baseline degrades an enabled scanning timer
+ok 104 - health does not treat UDP send as confirmed delivery
+ok 105 - health reports TLS queue backlog and drops
+ok 106 - health reports local log write failures
+ok 107 - health degrades when the daemon saw event-stream gaps
+ok 108 - health degrades when net_mode rules are pending (P1-8)
+ok 109 - health degrades when net_mode rules are failing (P1-8)
+ok 110 - health shows the network policy rules state
+ok 111 - heartbeat keys match whole names only (xretention_state is not retention_state)
+ok 112 - a heartbeat without the event-gap counters is incomplete
+ok 113 - health marks incomplete daemon metrics unavailable
+ok 114 - health JSON reports event-ring loss
+ok 115 - health detects invalid daemon configuration
+ok 116 - health detects unknown policy keys
+ok 117 - health JSON reports and degrades for persisted partial load
+ok 118 - health rejects a load result from a previous boot
+ok 119 - lint error: load exits 1
+ok 120 - lint error: load refused, nothing written
+ok 121 - lint error: says why
+ok 122 - refused load is persisted for health
+ok 123 - --force: still exits 1 (partial policy)
+ok 124 - --force: the bad value is rejected, not written
+ok 125 - --force: the other settings were applied
+ok 126 - --force: says the policy is incomplete
+ok 127 - partial load rejection count and setting are persisted
+ok 128 - health degrades and reports rejected partial load
+ok 129 - kernel rejects one setting: exit 1
+ok 130 - kernel rejection reported with the kernel's reason
+ok 131 - kernel rejection: the rest still loaded and counted
+ok 132 - no LSM: load fails and says so
+ok 133 - LSM-inactive refusal is persisted
+ok 134 - non-root: load refused
+ok 135 - non-root: lint runs (read-only)
+ok 136 - world-writable list file is an error
+ok 137 - config not owned by root is an error
+# P1-6: diff (preview), snapshots, history, restore
+ok 138 - diff before any load lists every difference
+ok 139 - ... list entries to add and remove, with counts
+ok 140 - load --dry-run is the same preview
+ok 141 - diff and --dry-run change nothing (kernel, config, no snapshot)
+ok 142 - load takes a snapshot first and names it
+ok 143 - ... with the old live state and the config files
+ok 144 - ... root-only, with reason and SHA256SUMS
+ok 145 - after a clean load diff reports 0 changes
+ok 146 - history records the load: result, counts, lint, snapshot
+ok 147 - ... and who ran it (SUDO_USER)
+ok 148 - history file is root-only
+ok 149 - snapshot verify: intact snapshot passes
+ok 150 - partial load: INCOMPLETE names what was rejected and the restore point
+ok 151 - partial load is in the history with the rejected setting
+ok 152 - diff after a partial load shows what did not apply
+ok 153 - restore previews and stops without 'yes'
+ok 154 - restore -y: files back as in the snapshot, and loaded
+ok 155 - ... after saving what it replaced
+ok 156 - ... recorded as a restore with its source
+ok 157 - snapshot verify: an edited file fails
+ok 158 - restore refuses a snapshot that fails verification
+ok 159 - (forged snapshot with rewritten sums checks out on its own)
+ok 160 - ... but the next snapshot sees its predecessor changed
+ok 161 - history --verify flags the record whose snapshot changed
+ok 162 - history --verify: intact chain passes
+ok 163 - history --verify: an edited record breaks the chain
+ok 164 - history --verify: a removed record breaks the chain
+ok 165 - history prints the latest records readably
+ok 166 - set is recorded with what it set
+ok 167 - a set the kernel refuses is recorded as rejected, not persisted
+ok 168 - lock warns when the running policy is not the config's
+ok 169 - lock is recorded with its pre-lock snapshot
+ok 170 - restore refused while locked (points at --no-load)
+ok 171 - restore --no-load while locked: files only, for the next boot
+ok 172 - restore refuses an id that is not a snapshot id
+ok 173 - manual snapshot with a reason
+ok 174 - snapshot list shows id, reason, lock state
+ok 175 - contain: recorded with what was asked
+ok 176 - release that fails: recorded as failed, exit status passed on
+ok 177 - dry runs, unconfirmed actions and status are not recorded
+ok 178 - history chain still verifies after every action
+ok 179 - otp passes its subcommand to the helper (not "otp")
+ok 180 - ... with its options
+1..180
+# ===== userspace/test-config-docs.sh
+ok 1 - the repo passes
+ok 2 - it says ok
+ok 3 - a kernel key with no row
+ok 4 - a daemon key with no row
+ok 5 - a row for a key the code does not read
+ok 6 - a wrong kernel built-in default
+ok 7 - the template changed but the doc did not
+ok 8 - a commented key uncommented in the template
+ok 9 - a template key the code does not read
+ok 10 - a net.conf default that differs from apply-net.sh
+ok 11 - a net.conf shipped value that differs
+ok 12 - no trust row
+ok 13 - a page not linked from docs/README.md
+ok 14 - a page without the key-table markers
+ok 15 - a policy list with no docs/files page
+ok 16 - a list page whose limit differs from the kernel's
+ok 17 - a shipped entry with no row
+ok 18 - a shipped entry whose row was deleted
+ok 19 - a row for an entry the template does not ship
+ok 20 - a list page not linked from docs/README.md
+ok 21 - an add-on key with no row
+ok 22 - a key added to an add-on parser without a row
+ok 23 - a GUI row the console does not accept
+ok 24 - an add-on template value that differs from its page
+ok 25 - a ProcGuard allowlist entry with no row
+1..25
+# ===== userspace/test-contain.sh
+# network
+ok 1 - dry run: plan lists loopback, --allow, the SSH client and the collector
+ok 2 - dry run: shows the ruleset and loads nothing
+ok 3 - an --allow that is not an address is refused
+ok 4 - no 'yes': aborted (exit 3), nothing loaded
+ok 5 - no SSH client found: warns that a remote operator would be cut off
+ok 6 - network -y: one table, policy drop both ways, lo and allowed kept
+ok 7 - ... replaces itself in one transaction, leaves net_mode's table alone
+ok 8 - ... state is root-only and status says contained
+ok 9 - release network removes the table
+# account
+ok 10 - account: root refused
+ok 11 - account: any UID 0 name refused
+ok 12 - account: the operator's own account refused
+ok 13 - account: unknown user refused
+ok 14 - account: a name that is not a user name refused
+# process
+ok 15 - process: PID 1 refused
+ok 16 - process: a kernel thread refused
+ok 17 - process: the operator's own shell chain refused
+ok 18 - process dry run: plan, nothing stopped
+ok 19 - process -y: stopped
+ok 20 - ... evidence first: cmdline, status, maps, fds, executable copy and hash
+ok 21 - ... status lists it
+ok 22 - release process continues it, evidence kept
+ok 23 - process: its descendants are stopped too
+ok 24 - process --kill: killed after the evidence is saved
+ok 25 - release of a killed process is refused
+# account (root: a real process of another user)
+ok 26 - account -y: password locked and account expired
+ok 27 - ... its processes stopped, not killed, and listed in the evidence
+ok 28 - ... containing it again is refused
+ok 29 - release account: expiry cleared, password unlocked, processes continue
+ok 30 - release puts back what was there: an expiry date, a password that was already locked stays locked
+ok 31 - account --terminate kills the processes and the sessions
+ok 32 - # SKIP real nft in a namespace (needs nft, unshare and ping)
+1..32
+/home/<user>/kernelpatch/tests/userspace/test-contain.sh: line 18:  2884 Killed                  sleep 300
+# ===== userspace/test-daemon-events.sh
+ok 1 - daemon event harness builds (-Werror)
+ok 2 - a kernel record parses (typed fields, nested actor skipped)
+ok 3 - message escapes decode (\u00XX is the original byte)
+ok 4 - a plain-text (pre-JSON) line is not a record
+ok 5 - a cut-off record is rejected
+ok 6 - trailing data after the object is rejected
+ok 7 - an escaped NUL inside a value is rejected
+ok 8 - cooldown block: UID taken from target_uid
+ok 9 - cooldown block from a kernel without target_uid: anchored message
+ok 10 - cooldown text inside another event's path does not kill anything
+ok 11 - a cooldown-active denial is not a new block
+ok 12 - TimeVault denial: exact path, even with " (" inside it
+ok 13 - TimeVault text inside another event's path is ignored
+ok 14 - a TimeVault denial for another reason quarantines nothing
+ok 15 - a truncated TimeVault record is never acted on
+ok 16 - the TimeVault path comes from the typed object, never the message
+ok 17 - a TimeVault object that is not an absolute path is not acted on
+ok 18 - a 244-byte TimeVault path is taken whole from object
+ok 19 - a path longer than the caller's buffer is not acted on
+ok 20 - wipe removes the named file
+ok 21 - a symlinked directory on the path is refused; its target is kept
+ok 22 - a symlink as the last component is refused; its target is kept
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/d/tool (x) -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220923-j1140Hd9-tool__x_.zip
+ok 23 - quarantine archives a copy, then removes the original
+ok 24 - a failed archive leaves the original in place (and no staging copy)
+ok 25 - node-scan starts as a child, without waiting for it
+ok 26 - a second start while one runs forks nothing
+ok 27 - a scan still running is not reaped
+ok 28 - a finished scan is reaped
+ok 29 - it runs `secure-sudo node-scan --quiet` at nice 10
+ok 30 - a failed scan is logged with its exit status
+ok 31 - a record split across two reads is logged once, whole
+ok 32 - a new boot's stream is recorded once; consecutive records are no gap
+ok 33 - a sequence jump is written as an event_gap record (4..6, 3 missing)
+ok 34 - a repeated sequence is flagged, not counted as loss
+ok 35 - the stream position survives a daemon restart (cursor file)
+ok 36 - records lost while the daemon was down are reported after restart
+ok 37 - a reboot is recorded with both boot ids; its first 2 records are reported missing
+ok 38 - the heartbeat carries the gap counters and is renamed into place
+ok 39 - a newline in a daemon message cannot start a forged record
+ok 40 - a log_checkpoint record is written
+ok 41 - a log changed outside the daemon is recorded (log_modified)
+ok 42 - the next checkpoint covers the file as it is now
+ok 43 - G2: the first scan after `timevault on` is a baseline: 4 files recorded, none quarantined
+ok 44 - G2: the baseline record carries a 64-hex Merkle root
+ok 45 - G2: the manifest file is v2 (header line)
+ok 46 - G2: rescans of an unchanged tree act on nothing and log nothing
+ok 47 - G2: the checkpoint record repeats the same root (a legitimate rescan)
+ok 48 - G2: after a restart the manifest is loaded (escaped names too) with the same root
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/sub/b -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-wMwG21bV-b.zip
+ok 49 - G2: a changed file is quarantined and the scan record says so
+ok 50 - G2: quarantining does not change the manifest (root unchanged)
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/c -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-89yC4m7B-c.zip
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/sub/b -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-jcjVd2fZ-b.zip
+ok 51 - G2: the same tampered file dropped again is caught again; a new file too
+ok 52 - G2: the original content put back matches the baseline again
+ok 53 - G2: manifest re-read
+ok 54 - G2: the root is a function of the entries alone
+ok 55 - G2: one changed hash changes the root
+ok 56 - G2: one changed path changes the root
+ok 57 - G2: a dropped entry changes the root
+ok 58 - G2: hash of the planted file
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/sub/b -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-ooeFtZ75-b.zip
+ok 59 - G2: a rewritten manifest is recorded with both roots and put back
+ok 60 - G2: the blessed file is still quarantined; the file on disk has the baseline root again
+ok 61 - G2: a manifest only touched (same content) is not reported
+ok 62 - G2: a deleted manifest is reported and written back
+ok 63 - G2: TimeVault off: the engagement's manifest is set aside (.prev)
+ok 64 - G2: and that is recorded once
+ok 65 - G2: engaged with no engage record seen: a baseline marked no_manifest
+ok 66 - G2: an unreadable manifest: nothing quarantined, reported once
+ok 67 - G2: a v1 manifest is read (spaces in names, first entry wins) and rewritten as v2
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/sub/b -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-G9qyYByl-b.zip
+# quarantine.sh: quarantined /tmp/tmp.7arUe0NPB3/tv-watch/new
+# line\x -> /tmp/tmp.7arUe0NPB3/quarantine/20261123T220924-BV0IUeY6-new_line_x.zip
+ok 68 - G2: files the v1 manifest never listed are treated as new
+ok 69 - P1-8: no LAN subnet yet (helper 3): pending, retried on every pass
+ok 70 - P1-8: the real rules load once a subnet appears
+ok 71 - P1-8: an applied lan-only mode is refreshed (DHCP/subnet changes are picked up)
+ok 72 - P1-8: a failed refresh is reported (the loaded rules stay)
+ok 73 - P1-8: losing the subnet after a refresh failure: pending
+ok 74 - P1-8: monitor is applied once and not refreshed
+ok 75 - P1-8: the heartbeat reports the network policy state
+ok 76 - P1-8: a clean stop runs the helper's on_stop policy
+ok 77 - P2-3: a denied credential change is critical
+ok 78 - P2-3: ... observed (would-deny) is low
+ok 79 - P2-3: a bpf denial is medium
+ok 80 - P2-3: an unknown event type that denied is medium
+ok 81 - P2-3: a daemon log_modified record is critical
+ok 82 - P2-3: a plain text line is low
+ok 83 - P2-3: forwarded syslog PRI follows severity (authpriv.crit .. .info)
+ok 84 - P2-3: alert_cmd is checked (quotes, placeholders)
+ok 85 - P2-3: a critical record runs alert_cmd with its severity, type and message
+ok 86 - P2-3: shell syntax in the message is an argument, never run
+ok 87 - P2-3: the alert is counted as sent
+ok 88 - P2-3: below alert_min_severity nothing runs
+ok 89 - P2-3: the same alert within alert_dedup_seconds is counted, not run
+ok 90 - P2-3: ... once the window passes it runs, with the count held back (%n)
+ok 91 - P2-3: at most alert_max_per_minute run; the rest are counted
+ok 92 - P2-3: the dropped alerts are reported in an alert_rate_limited record
+ok 93 - P2-3: a failing alert_cmd is an alert_failed record and the state is failing
+ok 94 - P2-3: the heartbeat carries the alert state and counters
+ok 95 - P2-3: an alert_cmd past alert_timeout_seconds is killed and reported
+ok 96 - P2-3: the next good alert clears failing
+ok 97 - P2-3: alert records never raise alerts themselves (no loops)
+ok 98 - the daemon's checkpoints match an independent chain of its log
+ok 99 - G2: evidence-verify's Merkle root matches the daemon's; RFC 6962 shape
+ok 100 - G2: the collector check passes a rescan and flags a rewritten or re-baselined manifest
+1..100
+# ===== userspace/test-evidence-export.sh
+ok 1 - root export creates a bundle
+ok 2 - bundle has checksums and event-chain checkpoints
+ok 3 - bundle archive has private mode 0600
+ok 4 - bundle checksum manifest verifies
+ok 5 - independent verifier accepts an unsigned intact bundle
+ok 6 - bundle omits secret-named configuration
+ok 7 - independent verifier rejects modified bundle contents
+ok 8 - independent verifier rejects path traversal in archive
+ok 9 - external Ed25519 key signs the final event-chain checkpoint
+ok 10 - external Ed25519 key signs the bundle checksum manifest
+ok 11 - independent verifier validates signed bundle with trusted key
+ok 12 - independent verifier rejects an untrusted signing key
+ok 13 - export refuses to overwrite an existing bundle
+ok 14 - shell and Python exporters write the same event chain
+ok 15 - off-host checkpoint verifies the logs and reports the unanchored tail
+ok 16 - a log edited on the host fails against the off-host checkpoint
+ok 17 - a log truncated on the host fails against the off-host checkpoint
+ok 18 - a malformed checkpoint record is rejected, not skipped
+ok 19 - --timevault-root prints a 64-hex root
+ok 20 - G2: the exported TimeVault manifest matches the collector's root
+ok 21 - G2: a manifest rewritten on the host fails against the collector's root
+ok 22 - G2: a root that changes mid-engagement is flagged
+ok 23 - G2: --timevault with no root in the collector's records fails
+ok 24 - P1-6: the bundle carries the policy change history
+1..24
+# ===== userspace/test-gui.sh
+ok 1 - the console starts read-only by default
+ok 2 - console: no token: <redacted>
+ok 3 - console: wrong token: <redacted>
+ok 4 - console: another Host with the right token: <redacted> (DNS rebinding)
+ok 5 - console: right token: <redacted>
+ok 6 - console: the page asks for no framing, no caching, no referrer, and has a CSP
+ok 7 - console: a cross-site Origin is refused even with the token (CSRF)
+ok 8 - console: Origin: null is refused
+ok 9 - console: the console's own Origin is accepted
+ok 10 - console: the page itself needs no token and holds none
+ok 11 - console: status says the console is read-only
+ok 12 - console: read-only: POST /api/config is refused (403)
+ok 13 - console: read-only: POST /api/setkey is refused (403)
+ok 14 - console: read-only: POST /api/action is refused (403)
+ok 15 - console: read-only: POST /api/action is refused (403)
+ok 16 - console: read-only: a refused POST without a token is still 401, not a hint
+ok 17 - console: read-only: the config file was not written
+ok 18 - console: status: the knobs are exactly the kernel's sysfs values
+ok 19 - console: status: a guard's text is exactly what its own CLI prints
+ok 20 - console: status: a guard that is not installed says so
+ok 21 - console: health: is the CLI's own `health --json`
+ok 22 - console: event loss: the daemon's counters are shown
+ok 23 - console: event loss: a counter that is not about loss is left out
+ok 24 - console: event loss: event_gap records in the log are listed
+ok 25 - console: timeline: kernel and guard records are merged
+ok 26 - console: timeline: sorted by time
+ok 27 - console: timeline: a guard CRIT line is critical
+ok 28 - console: timeline: a kernel deny is high
+ok 29 - console: timeline: ?n= is bounded and checked
+ok 30 - console: policy changes: exactly the CLI history
+ok 31 - console: policy changes: the hash-chain verdict is shown
+ok 32 - console: evidence: records and blob files are listed
+ok 33 - console: evidence export: a JSON download with every record
+ok 34 - console: evidence export: blobs carry their SHA-256, never their content
+ok 35 - console: evidence: a symlink planted in the evidence tree is not followed
+ok 36 - console: a flood of bad tokens is throttled (429)
+ok 37 - console: ... and even the right token waits out the window
+ok 38 - the driver ran to the end
+ok 39 - gui.conf: a mode that is neither read_only nor admin is refused
+ok 40 - gui.conf: mode = admin is accepted
+1..40
+# ===== userspace/test-helpers.sh
+# part 1: no root needed
+ok 1 - net: unknown mode exits 2
+ok 2 - net: unknown mode loads nothing (current rules stay)
+ok 3 - net: host mode exits 0
+ok 4 - net: host mode only removes the table
+ok 5 - net: lan-only exits 0
+ok 6 - net: replaces the old table in the same transaction
+ok 7 - net: lan-only LAN set has the IPv4 subnet
+ok 8 - net: lan-only LAN set has the IPv6 prefix
+ok 9 - net: lan-only drops non-LAN IPv4 out
+ok 10 - net: lan-only drops non-LAN IPv6 out (was let through before)
+ok 11 - net: lan-only drops non-LAN IPv6 in
+ok 12 - net: lan-only keeps link-local IPv6 (neighbour discovery)
+ok 13 - net: public-only exits 0
+ok 14 - net: public-only drops the IPv4 LAN
+ok 15 - net: public-only drops the IPv6 LAN
+ok 16 - net: public-only keeps DHCP
+ok 17 - net: public-only keeps DHCPv6
+ok 18 - net: public-only keeps DNS to the IPv4 gateway
+ok 19 - net: public-only keeps DNS to the IPv6 gateway
+ok 20 - net: public-only keeps neighbour discovery (ICMPv6 nd-*)
+ok 21 - net: public-only no longer passes every ICMPv6 type (echo reached the LAN)
+ok 22 - net: exemptions come before the LAN drop
+ok 23 - net: no default route: the LAN is still known, rules apply (exit 0)
+ok 24 - net: ... with no gateway, no DNS exemption
+ok 25 - net: no address and no rules yet: fail-closed pending rules (exit 3)
+ok 26 - net: ... pending lan-only allows only loopback in the LAN set
+ok 27 - net: pending public-only (exit 3)
+ok 28 - net: ... pending public-only drops every private range
+ok 29 - net: a bad net.conf value is refused (exit 1)
+ok 30 - net: ... nothing loaded
+ok 31 - net: extra_lan adds IPv4 and IPv6 subnets
+ok 32 - net: a non-Ethernet link (WireGuard/tun type) is never LAN
+ok 33 - net: IPv4-only host still works
+ok 34 - net: IPv4-only host still drops IPv6 in lan-only
+ok 35 - net: nft load failure is reported (non-zero exit)
+ok 36 - net: the real run feeds nft the same ruleset
+ok 37 - quar: missing file exits 0
+ok 38 - quar: exits 0
+ok 39 - quar: original removed
+ok 40 - quar: quarantine dir is 0700
+ok 41 - quar: archive holds the file
+ok 42 - quar: metadata records the original path
+ok 43 - quar: metadata sha256 matches the file
+ok 44 - quar: no leftover metadata or reservation files
+ok 45 - quar: same name twice in a second -> two archives, both kept
+ok 46 - quar: archive name is sanitised
+ok 47 - quar: a newline in the name cannot forge a metadata line
+ok 48 - quar: a relative name starting with '-' is archived, not parsed
+ok 49 - quar: archive failure exits non-zero
+ok 50 - quar: archive failure leaves the original in place (was deleted before)
+ok 51 - quar: archive failure leaves no partial files
+not ok 52 - quar: without zip falls back to tar.gz (got '127', want '0')
+ok 53 - quar: tar.gz holds the file and its metadata
+not ok 54 - quar: tar fallback removed the original
+ok 55 - quar: tar failure keeps the original too
+# part 2: ROOT-ONLY - real nft in throwaway network namespaces
+ok 56 - # SKIP network namespace tests (need root, ip, nft, nsenter, ping, nc)
+1..56
+# ===== userspace/test-history-test.sh
+ok 1 - run: a failing suite exits 1
+ok 2 - run: the run id has the documented form
+ok 3 - run: has RUN.md
+ok 4 - run: has manifest.json
+ok 5 - run: has command.txt
+ok 6 - run: has environment.md
+ok 7 - run: has logs/stdout.log
+ok 8 - run: has logs/stderr.log
+ok 9 - run: has results/tap-summary.txt
+ok 10 - run: has results/
+ok 11 - run: has logs/
+ok 12 - run: has artifacts/
+ok 13 - run: has projects/input/
+ok 14 - run: has projects/output/
+ok 15 - run: verdict fail and the failing test are in RUN.md
+ok 16 - run: TAP counts are recorded
+ok 17 - redaction: no e-mail address is stored
+ok 18 - redaction: no home-directory user name is stored
+ok 19 - redaction: no private IPv4 address is stored
+ok 20 - redaction: no token value is stored
+ok 21 - redaction: loopback and documentation addresses stay readable
+ok 22 - environment.md names no host
+ok 23 - manifest: the first run has no predecessor
+ok 24 - add: archives received results
+ok 25 - manifest: the second run links the first run's manifest
+ok 26 - index: INDEX.csv lists both runs
+ok 27 - index: the README table is generated between the markers
+ok 28 - verify: a clean archive verifies
+ok 29 - ids sort in archive order even within one second (chain stays valid)
+ok 30 - add: a binary file is refused
+ok 31 - add: a refused file leaves no half-written run
+ok 32 - note: appends a dated entry
+ok 33 - note: is redacted too
+ok 34 - verify: notes do not break the seal
+ok 35 - invalidate: the index shows invalid
+ok 36 - verify: still verifies after invalidate
+ok 37 - verify: a changed file is caught
+ok 38 - verify: a file outside the manifest is caught
+ok 39 - verify: an edited earlier manifest breaks the chain
+ok 40 - verify: unredacted data is caught
+ok 41 - verify: a hand-edited index is caught
+ok 42 - verify: clean again after the index is regenerated
+ok 43 - run: a hostile area is refused
+ok 44 - note: a hostile run id is refused
+ok 45 - release: HistoryTest/ is not in the release file list
+1..45
+# ===== userspace/test-licenses.sh
+ok 1 - LICENSE appendix names the project
+ok 2 - LICENSE appendix names the holder and year
+ok 3 - LICENSE is otherwise the unmodified Apache-2.0 text
+ok 4 - LICENSES/GPL-2.0 notice names the project
+ok 5 - LICENSES/GPL-2.0 notice names the holder and year
+ok 6 - LICENSES/GPL-2.0 carries the unmodified GPL v2 text
+ok 7 - NOTICE names the project
+ok 8 - NOTICE names the copyright holder
+ok 9 - found 163 source files to check
+ok 10 - every source file has an SPDX line in its first 5 lines
+ok 11 - every SPDX line names the right license (163 files)
+ok 12 - every source file names the copyright holder
+ok 13 - no file has more than one SPDX line
+ok 14 - rule rejects Apache-only kernel file and GPL-only userspace file
+1..14
+# ===== userspace/test-maturity-criteria.sh
+ok 1 - the shipped criteria are approved and complete
+ok 2 - ... they are the ones the operator chose (14-day soak, 30 days enforcing)
+ok 3 - a 14-day soak with every alert explained meets beta
+ok 4 - a 13-day soak does not
+ok 5 - an alert without an explanation does not
+ok 6 - a promotion nobody approved does not
+ok 7 - beta plus 30 days enforcing and a recovery drill meets stable
+ok 8 - stable without a beta record does not
+ok 9 - 18 days enforcing does not
+ok 10 - stable without a recovery drill does not
+ok 11 - criteria without the operator's approval fail the gate
+1..11
+# ===== userspace/test-netpolicy.sh
+ok 1 - # SKIP net policy tests need root, nft, ping and network namespaces
+1..1
+# ===== userspace/test-node-scan.sh
+ok 1 - CLI builds with test paths (-Werror)
+# finding
+ok 2 - a dry run exits 0
+ok 3 - an SEA (fuse flipped to :1) is found as sea
+ok 4 - a renamed node binary (fuse :0) is found as node
+ok 5 - a pkg build is found as pkg
+ok 6 - a marker split across two reads is found
+ok 7 - the :1 flag in the next read still reads as sea
+ok 8 - an ELF without a marker is not listed
+ok 9 - a file without the exec bit is not listed
+ok 10 - a script that only mentions the marker is not listed
+ok 11 - an Electron app is not registered
+ok 12 - ... and is reported, with how to confine it by hand
+ok 13 - a symlink adds nothing (each file once, by its real path)
+ok 14 - a name with a newline is reported, not listed
+ok 15 - exactly the five runtimes are found, one line each
+ok 16 - the summary goes to stderr
+ok 17 - a dry run writes nothing
+ok 18 - a dry run leaves the kernel list alone
+# real: /opt/node22/bin/node	node
+# real: /tmp/tmp.JLD91rlVD6/real/my-sea-app	sea
+ok 19 - the real node binary (v22.23.5) is found as node
+ok 20 - a real node with the fuse flipped is found as sea
+# registering
+ok 21 - a scan exits 0
+ok 22 - new runtimes are reported
+ok 23 - the hand-written entry comes first in the kernel list
+ok 24 - then every found runtime (1 + 5 lines)
+ok 25 - the found list is kept apart from the config
+ok 26 - ... and the config file is not touched
+ok 27 - the state files are root-only (0600)
+ok 28 - a second scan reads nothing it has seen (cache)
+ok 29 - ... and reports no changes
+ok 30 - a file that gains a marker is read again and found
+ok 31 - a removed runtime is reported gone
+ok 32 - ... and leaves the kernel list
+ok 33 - --quiet prints nothing when nothing changed
+ok 34 - a scan of one directory keeps what was found in the others
+ok 35 - ... and reports nothing gone
+ok 36 - ... from the cache, without reading them again
+ok 37 - a scan of a directory drops what is gone from it
+ok 38 - the cache still knows the other directories afterwards
+# directories from the config
+ok 39 - node_sea_scan_dirs is used when no DIR is given
+# limits
+ok 40 - a scan that cannot register everything exits 1
+ok 41 - it says how many were NOT registered
+ok 42 - the kernel list stops at its 256 entries
+ok 43 - ... with every hand-written entry kept
+ok 44 - a file a non-root user owns is listed last
+ok 45 - so is a root-owned file others can write
+# refused
+ok 46 - a kernel refusal makes the scan exit 1
+ok 47 - ... and is reported
+ok 48 - node-scan needs root
+1..48
+# ===== userspace/test-otp.sh
+ok 1 - RFC 4226 HOTP counter 0 = 755224 (got 755224)
+ok 2 - RFC 4226 HOTP counter 1 = 287082 (got 287082)
+ok 3 - RFC 4226 HOTP counter 2 = 359152 (got 359152)
+ok 4 - RFC 4226 HOTP counter 3 = 969429 (got 969429)
+ok 5 - RFC 4226 HOTP counter 4 = 338314 (got 338314)
+ok 6 - RFC 4226 HOTP counter 5 = 254676 (got 254676)
+ok 7 - RFC 4226 HOTP counter 6 = 287922 (got 287922)
+ok 8 - RFC 4226 HOTP counter 7 = 162583 (got 162583)
+ok 9 - RFC 4226 HOTP counter 8 = 399871 (got 399871)
+ok 10 - RFC 4226 HOTP counter 9 = 520489 (got 520489)
+ok 11 - RFC 6238 SHA-1 T=59 = 287082 (got 287082)
+ok 12 - RFC 6238 SHA-1 T=1111111109 = 081804 (got 081804)
+ok 13 - RFC 6238 SHA-1 T=1111111111 = 050471 (got 050471)
+ok 14 - RFC 6238 SHA-1 T=1234567890 = 005924 (got 005924)
+ok 15 - RFC 6238 SHA-1 T=2000000000 = 279037 (got 279037)
+ok 16 - RFC 6238 SHA-1 T=20000000000 = 353130 (got 353130)
+ok 17 - RFC 4648 base32 "" -> "" (got "")
+ok 18 - base32 decode ""
+ok 19 - RFC 4648 base32 "f" -> "MY" (got "MY")
+ok 20 - base32 decode "MY"
+ok 21 - RFC 4648 base32 "fo" -> "MZXQ" (got "MZXQ")
+ok 22 - base32 decode "MZXQ"
+ok 23 - RFC 4648 base32 "foo" -> "MZXW6" (got "MZXW6")
+ok 24 - base32 decode "MZXW6"
+ok 25 - RFC 4648 base32 "foob" -> "MZXW6YQ" (got "MZXW6YQ")
+ok 26 - base32 decode "MZXW6YQ"
+ok 27 - RFC 4648 base32 "fooba" -> "MZXW6YTB" (got "MZXW6YTB")
+ok 28 - base32 decode "MZXW6YTB"
+ok 29 - RFC 4648 base32 "foobar" -> "MZXW6YTBOI" (got "MZXW6YTBOI")
+ok 30 - base32 decode "MZXW6YTBOI"
+ok 31 - base32 decode ignores case, spaces, padding and stray characters
+ok 32 - seed encodes to the RFC key GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+ok 33 - OTP dir created 0700
+ok 34 - secret stored
+ok 35 - secret and master key are 0600
+ok 36 - secret file holds no plaintext seed (encoded or raw)
+ok 37 - current code accepted
+ok 38 - the same code is refused a second time (RFC 6238 5.2)
+ok 39 - an older code is refused once a newer one was used
+ok 40 - code one step ahead accepted (clock skew window)
+ok 41 - code one step behind accepted (clock skew window)
+ok 42 - code two steps behind refused
+ok 43 - code two steps ahead refused
+ok 44 - wrong code refused
+ok 45 - 5-digit input refused
+ok 46 - extra characters refused when no prefix is set
+ok 47 - empty input (EOF) refused
+ok 48 - valid code still accepted after the failures
+ok 49 - prefix stored 0600
+ok 50 - prefix stored as a yescrypt hash, not plaintext
+ok 51 - code alone refused once a prefix is set
+ok 52 - wrong prefix + right code refused
+ok 53 - right prefix + wrong code refused
+ok 54 - right prefix + right code accepted
+ok 55 - over-long input refused
+ok 56 - reset without --prefix keeps the prefix
+ok 57 - setup without --prefix removes it
+ok 58 - test seed stored again
+ok 59 - tampered ciphertext refused (GCM tag)
+ok 60 - tampered tag refused
+ok 61 - wrong master key refused
+ok 62 - restored files verify again
+ok 63 - replay record not writable: code refused (fails closed)
+ok 64 - record writable again: code accepted
+ok 65 - disable removes secret, master key and replay record
+ok 66 - nothing verifies after disable
+ok 67 - G3: no TPM: setup falls back to the root-only key file
+secure-sudo-otp: cannot seal the key to the TPM (no usable TPM, or /usr/bin/systemd-creds missing); nothing changed
+ok 68 - G3: --key-store=tpm2 with no TPM fails and changes nothing
+secure-sudo-otp: --key-store must be auto, tpm2 or file
+ok 69 - G3: an unknown --key-store is refused
+secure-sudo-otp: cannot seal the key to the TPM; nothing changed
+ok 70 - G3: seal with no TPM fails and keeps the key file
+ok 71 - G3: with a TPM, setup seals the key (masterkey.tpm2, no key file)
+ok 72 - G3: the TPM unseals it
+ok 73 - G3: test seed stored under the sealed key
+ok 74 - G3: a code verifies with the sealed key
+ok 75 - G3: the sealed file does not hold the key in clear
+ok 76 - G3: another TPM (the disk moved to another machine) cannot unseal it
+ok 77 - G3: ... and a key that will not unseal is never replaced behind the admin's back
+ok 78 - G3: back on its own TPM it verifies again
+ok 79 - G3: a damaged sealed key is refused
+ok 80 - G3: restored, it verifies
+ok 81 - G3: unseal moves the same key to the key file
+ok 82 - G3: seal moves it back into the TPM; the key file is gone
+ok 83 - G3: the seed survives seal/unseal (no re-enrolment)
+ok 84 - G3: TPM gone: reset --key-store=file recovers (new seed, key file)
+ok 85 - G3: setup --key-store=tpm2 seals
+ok 86 - G3: disable removes the sealed key too
+1..86
+# ===== userspace/test-pam.sh
+ok 1 - harness and modules build with -Werror
+# part 1: no root needed
+ok 2 - otp: helper exit 0 -> PAM_SUCCESS
+ok 3 - otp: token reaches the helper on stdin
+ok 4 - otp: helper argv is 'verify --pam' (no token on argv)
+ok 5 - otp: prompts 'OTP password:<redacted>
+ok 6 - otp: helper exit 1 -> PAM_AUTH_ERR
+ok 7 - otp: helper exit 127 -> PAM_AUTHINFO_UNAVAIL
+ok 8 - otp: helper killed by a signal -> PAM_AUTHINFO_UNAVAIL
+ok 9 - otp: helper missing -> PAM_AUTHINFO_UNAVAIL
+ok 10 - otp: no answer (^D) -> PAM_AUTH_ERR
+ok 11 - otp: helper not run without a token
+ok 12 - otp after password: <redacted> right -> PAM_SUCCESS, two prompts
+ok 13 - otp after password: <redacted> gets the OTP, not the Unix password
+ok 14 - otp before password: <redacted> right -> PAM_SUCCESS, two prompts
+ok 15 - otp before password: <redacted> gets the OTP
+ok 16 - otp after password: <redacted> password -> PAM_AUTH_ERR
+ok 17 - otp after password: <redacted> password stops before the OTP prompt
+ok 18 - otp after password: <redacted> password, wrong OTP -> PAM_AUTH_ERR
+ok 19 - otp use_first_pass: one prompt
+ok 20 - otp use_first_pass: takes the earlier module's password
+ok 21 - otp use_first_pass with no earlier password -> PAM_AUTH_ERR
+ok 22 - ss: right password -> PAM_SUCCESS (module does not change it)
+ok 23 - ss: right password reports ok
+ok 24 - ss: success without pam_setcred is reported ok at pam_end
+ok 25 - ss: three wrong passwords -> PAM_AUTH_ERR
+ok 26 - ss: each failed try is reported
+ok 27 - ss: two typos then the right password
+ok 28 - ss: ^D at the prompt counts as a failure
+ok 29 - ss: right password but account check fails -> fail
+ok 30 - ss: kernel file absent (LSM off) -> auth unaffected
+ok 31 - ss + otp: both right -> ok
+ok 32 - ss + otp: wrong OTP -> fail
+ok 33 - ss: explicit authfail reports at once
+ok 34 - ss: explicit authsucc reports at once
+ok 35 - ss: never grants on its own
+ok 36 - old 4-line stack denied the right password (why it was replaced)
+ok 37 - old 4-line stack never reported a failure
+ok 38 - installer, Ansible and docs no longer recommend the old stack
+# part 2: ROOT-ONLY - real pam_unix/pam_faillock in a private mount namespace
+ok 39 - pam_unix: right password -> PAM_SUCCESS
+ok 40 - pam_unix: right password reports ok
+ok 41 - pam_unix: wrong password reports fail
+ok 42 - pam_unix: two typos then right, like sudo's retries
+ok 43 - pam_faillock stack: right password -> PAM_SUCCESS
+ok 44 - pam_faillock stack: reports ok
+ok 45 - pam_faillock stack: wrong password reports fail
+ok 46 - pam_unix + otp: both right -> PAM_SUCCESS, two prompts
+ok 47 - pam_unix + otp: helper gets the OTP, not the Unix password
+ok 48 - otp first + pam_unix: both right -> PAM_SUCCESS
+ok 49 - otp first + pam_unix: pam_unix did not get the OTP
+ok 50 - pam_unix, old 4-line stack: right password denied
+1..50
+# ===== userspace/test-pheonixbox.sh
+ok 1 - PheonixBox helper builds with -Werror
+# part 1: no root needed
+ok 2 - refuses to run without root
+# part 2: ROOT-ONLY - the real helper in a private mount namespace
+ok 3 - the test starts without /etc/secure_sudo (inside the namespace)
+ok 4 - ... and the host still has its own
+# getfacl absent: the ACL path is skipped
+ok 5 - add a directory to the protected set
+ok 6 - the config lands in /etc/secure_sudo (inside the namespace only)
+ok 7 - the write went to the scratch overlay, not the host's /etc
+ok 8 - on succeeds
+ok 9 - on reports ENABLED
+ok 10 - a name with a newline is skipped, not stored
+ok 11 - no command ran from a file name
+ok 12 - the store is root-only (0700)
+ok 13 - files are locked read-only
+ok 14 - every file is locked, recursively
+ok 15 - the manifest has one line per stored file (3)
+ok 16 - scan succeeds
+ok 17 - scan reports the repairs
+ok 18 - a rewritten file gets its contents back
+ok 19 - a deleted file comes back
+ok 20 - a repaired file is locked read-only again
+ok 21 - a second scan finds nothing to repair
+ok 22 - no command ran from a file name during scans
+# adversarial (TODO P2-2 part 3)
+ok 23 - the rewritten file's bytes were kept as evidence before the repair
+ok 24 - a symlink planted at a protected path is replaced by the real file
+ok 25 - ... and the file it pointed at is untouched (contents and mode)
+ok 26 - a swapped snapshot blob is refused: the file is not overwritten with it
+ok 27 - ... and the real snapshot repairs it
+ok 28 - an edited manifest entry with a .. component is never acted on
+ok 29 - with no room for the evidence copy, the tampered file is not overwritten
+ok 30 - ... and is repaired once there is room
+ok 31 - status says ENABLED with 3 snapshot entries
+ok 32 - snapshot while enabled is refused
+ok 33 - off succeeds
+ok 34 - off restores the original mode (0640)
+ok 35 - off does not change permissions through a planted symlink
+ok 36 - while off, scan repairs nothing
+# check-config (TODO P2-2)
+ok 37 - check-config passes on the config add/remove wrote
+ok 38 - check-config: a relative path, a duplicate and a .. component (3 problems)
+ok 39 - on refuses while the config has an error (78)
+ok 40 - ... and so does snapshot
+ok 41 - check-config: a group-writable config is an error
+# signed snapshot (TODO P2-2: baseline trust)
+ok 42 - check-config: an unknown trust value is an error
+ok 43 - check-config: trust = signed without a signing key is an error
+ok 44 - check-config passes with trust = signed and a key
+ok 45 - on with trust = signed says nothing is repaired until it is signed
+ok 46 - status: an unsigned snapshot is NOT TRUSTED
+ok 47 - # SKIP ACL hashes in the manifest (no getfacl)
+ok 48 - unsigned snapshot: tampering is reported, not repaired
+ok 49 - ... and its bytes are kept as evidence
+ok 50 - the next scan does not report (or copy) the same change again
+ok 51 - status: once the operator signs it, the snapshot is trusted
+ok 52 - a signed snapshot repairs
+ok 53 - (the test edited the manifest)
+ok 54 - an edited manifest is not trusted: nothing is written back
+ok 55 - a forged signature is not trusted either
+ok 56 - ... and the signed manifest repairs it again
+ok 57 - a scan notices trust lowered from signed to local
+ok 58 - off with an untrusted manifest only unlocks (and says so)
+ok 59 - ... the setuid mode the edited manifest names is not applied (mode 640)
+ok 60 - ... and the file is writable by its owner again
+ok 61 - # SKIP captured ACLs applied only when their hash matches (needs getfacl, setfacl, ACL support)
+1..61
+# ===== userspace/test-process-docs.sh
+ok 1 - the shipped process documents pass
+ok 2 - a SECURITY.md without the reporting section fails
+ok 3 - no response time in days fails
+ok 4 - a maintenance process without dependency updates fails
+ok 5 - a link to a file that is gone fails
+ok 6 - a missing SECURITY.md fails
+1..6
+# ===== userspace/test-remote-forwarding.sh
+ok 1 - remote forwarding harness builds (-Werror)
+ok 2 - TLS verifies collector CA/hostname and delivers RFC 5425 frame
+ok 3 - atomic CA-bundle rotation applies to the next TLS connection
+ok 4 - persistent TLS queue drains after collector recovery
+ok 5 - TLS rejects a trusted certificate with the wrong hostname
+ok 6 - TLS rejects a certificate issued by an untrusted CA
+ok 7 - TLS refuses a missing CA bundle
+ok 8 - queue exhaustion is counted and unsent events persist
+ok 9 - outage retains queued event for a later retry
+ok 10 - a queue flush sends its events in order over one TLS connection
+ok 11 - events only queue; a failing collector is retried after 5 s, 10 s, ... not per event
+1..11
+# ===== userspace/test-stig-patches.sh
+ok 1 - OSB-03: the token in ssh_confirm.sh becomes newlines
+ok 2 - OSB-03: no token is left in issue.net
+ok 3 - OSB-03: issue.net now has two lines
+ok 4 - OSB-03: backups are kept
+ok 5 - OSB-03: the repaired script passes bash -n
+ok 6 - OSB-03: reported as fixed
+ok 7 - second run changes nothing (idempotent)
+ok 8 - second run reports no fix
+ok 9 - OSB-03: a repair that fails bash -n restores the original
+ok 10 - OSB-03: the failure is reported, not counted as fixed
+ok 11 - OSB-04: retry = 3 is set once
+ok 12 - OSB-04: other settings are kept
+ok 13 - OSB-04: a missing retry line is added
+ok 14 - OSB-04: an existing retry value is not overridden
+ok 15 - OSB-05: the mapping is added to the domain section
+ok 16 - OSB-05: sssd.conf is 0600
+ok 17 - OSB-05: backup kept
+ok 18 - OSB-05: second run does not add it again
+ok 19 - OSB-05: no domain section means no change
+ok 20 - OSB-06: chgrp syslog runs on /var/log when the group exists
+ok 21 - OSB-06: nothing is installed when the group exists
+ok 22 - OSB-06: rsyslog is installed when the group is missing
+ok 23 - OSB-20: the audit directory is tightened to 0700
+ok 24 - OSB-20: with another log_group it is left alone
+ok 25 - OSB-07: a 0666 log becomes 0640 (u-x,g-wx,o-rwx)
+ok 26 - OSB-07: a 0644 log in a subdirectory becomes 0640 or stricter
+ok 27 - OSB-07: a 0640 log is untouched
+ok 28 - OSB-07: the number of files tightened is reported
+ok 29 - OSB-15: the import failure under the default python3 is reported
+ok 30 - OSB-15: the working interpreter and the exact command are printed
+ok 31 - OSB-15: nothing is enforced (advise only)
+ok 32 - OSB-15: the -config helper is never offered
+ok 33 - OSB-15: silent when the AppArmor tools are absent or work
+ok 34 - OSB-23: no 'flush ruleset' is left
+ok 35 - OSB-23: the file's inet table is reset by name
+ok 36 - OSB-23: a table without a family is reset as ip
+ok 37 - OSB-23: the rules themselves are kept
+ok 38 - OSB-23: backup kept and reported
+ok 39 - OSB-23: a second run changes nothing
+ok 40 - OSB-23: the rewritten file passes nft -c
+ok 41 - OSB-23: the original file deletes the secure_sudo table (the bug)
+ok 42 - OSB-23: loading the rewritten file twice keeps the secure_sudo table
+ok 43 - OSB-23: a rewrite that fails nft -c restores the original
+ok 44 - OSB-23: ... and says so, not fixed
+ok 45 - OSB-23: a file that defines no table is left alone for review
+ok 46 - OSB-23: ... and that is reported
+ok 47 - OSB-24: a drop-in is written for the flushing unit
+ok 48 - OSB-24: it clears the vendor ExecStop
+ok 49 - OSB-24: it deletes only the conf's tables
+ok 50 - OSB-24: it never flushes the ruleset
+ok 51 - OSB-24: reported as fixed
+ok 52 - OSB-24: a second run leaves the drop-in alone
+ok 53 - OSB-24: no flushing unit, no drop-in
+ok 54 - OSB-24: a conf with no table gets no drop-in, and that is reported
+ok 55 - OSB-24: the vendor unit's stop deletes the secure_sudo table (the bug)
+ok 56 - OSB-24: with the drop-in a restart keeps the secure_sudo table
+ok 57 - drift: the rsyslog install ran and created a log
+ok 58 - drift: the log the install created is tightened in the same run
+ok 59 - drift: the OSB-07 step is reported after the install
+ok 60 - flow: passes, then post_patch, then the final scan and summary
+ok 61 - flow: no package install after post_patch in the remediation flow
+ok 62 - stig-harden.sh passes bash -n
+ok 63 - STIG_ROOT defaults to the real system (empty)
+1..63
+# ===== userspace/test-stig-selection.sh
+ok 1 - datastream: the exact release is chosen
+ok 2 - datastream: an unknown release falls back to the newest of the family
+ok 3 - datastream: debian uses the major version
+ok 4 - datastream: no content for the distro gives nothing
+ok 5 - profile: the DISA STIG wins
+ok 6 - profile: without a STIG, CIS level 2 wins
+ok 7 - profile: only the standard baseline is used when nothing else exists
+ok 8 - profile: stig is preferred over stig_gui
+ok 9 - profile: an unknown profile is never picked silently
+ok 10 - profile: a name that merely starts with stig does not match
+ok 11 - OSB-18: a STIG profile is reported as the DISA STIG
+ok 12 - OSB-18: a forced CIS profile says it was chosen
+ok 13 - OSB-18: ... and does not claim there is no STIG
+ok 14 - OSB-18: a fallback picked by the script says there is no STIG
+ok 15 - summary: written
+ok 16 - summary: mode 0600
+ok 17 - summary: before and after tallies are both present
+ok 18 - summary: lists 'fail | b'
+ok 19 - summary: lists 'error | d'
+ok 20 - summary: lists 'notchecked | e'
+ok 21 - summary: lists 'unknown | f'
+ok 22 - summary: a rule at pass is not listed as a problem
+ok 23 - summary: a fixed rule is not listed
+1..23
+# ===== userspace/test-support-matrix.sh
+ok 1 - the real matrix passes for the real VERSION
+ok 2 - a matrix for another release than VERSION fails
+ok 3 - a review date that is not a date fails
+ok 4 - an invented status fails
+ok 5 - a tested row without a date fails
+ok 6 - a matrix without the end-of-support section fails
+1..6
+# ===== 1376 checks in 27 suites
+# FAILED: userspace/test-helpers.sh (exit 1, 2 failing)

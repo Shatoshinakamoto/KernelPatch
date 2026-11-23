@@ -1,0 +1,21 @@
+ok 1 - add-on logging harness builds with TLS support (-Werror)
+ok 2 - check-config accepts remote_proto = tls with a readable CA bundle
+ok 3 - check-config rejects a missing remote_ca_file under tls
+ok 4 - check-config rejects a remote_ca_file that holds no certificate
+ok 5 - check-config rejects a relative remote_ca_file
+ok 6 - check-config still rejects a key set twice
+ok 7 - two lines arrive over one verified TLS connection (conns=1, frames=2)
+ok 8 - each line is an RFC 5424 record (PRI 108 = log audit + warning)
+ok 9 - a newline in a message is escaped, not shipped as a second record
+ok 10 - no shipping failure is logged when the collector is healthy
+ok 11 - an IP collector is verified against the certificate's IP SAN
+ok 12 - a collector whose certificate is not from remote_ca_file gets nothing
+ok 13 - the refusal is logged locally once, naming the certificate problem
+ok 14 - lines are still written to the local log while shipping fails
+ok 15 - a trusted certificate for another host name is refused
+ok 16 - a trusted certificate naming another DNS host is refused
+ok 17 - a dead collector costs one attempt per retry period, not one per line (0.0 s)
+ok 18 - shipping resumes once the collector is back, and the recovery is logged
+ok 19 - a collector that closed the connection is reconnected without losing a line (conns=2)
+ok 20 - remote_proto = tcp still ships octet-framed lines, reconnecting after a close
+1..20

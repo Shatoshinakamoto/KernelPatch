@@ -9,9 +9,11 @@
  *
  *   - timestamped, leveled lines written to a per-feature local log file
  *     under a root-only directory, with size-based rotation; and
- *   - optional shipping of each line to an EXTERNAL log server (UDP or TCP
- *     syslog, RFC 5424 framing) for off-box backup, so a compromised host
- *     cannot erase the evidence that something happened.
+ *   - optional shipping of each line to an EXTERNAL log server (UDP, TCP or
+ *     TLS syslog, RFC 5424 records, octet-framed on TCP and TLS) for off-box
+ *     backup, so a compromised host cannot erase the evidence that something
+ *     happened. TLS verifies the collector (ssaddon_tls.c); a collector that
+ *     is down is retried every 30 s and the outage is noted in the local log.
  *
  * Configuration is read once from /etc/secure_sudo/addons/logging.conf (see
  * temporary/config/logging.conf for the documented template). Missing file or

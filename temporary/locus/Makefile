@@ -6,9 +6,9 @@ CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security
 CPPFLAGS += -I../common
 PREFIX   ?= /usr
 BINDIR   ?= $(PREFIX)/bin
-COMMON    = ../common/ssaddon_log.c ../common/ssaddon_store.c ../common/ssaddon_conf.c ../common/ssaddon_trust.c
-HDRS      = ../common/ssaddon_log.h ../common/ssaddon_store.h ../common/ssaddon_conf.h ../common/ssaddon_trust.h
-LDLIBS   := -lcrypto -lz
+COMMON    = ../common/ssaddon_log.c ../common/ssaddon_tls.c ../common/ssaddon_store.c ../common/ssaddon_conf.c ../common/ssaddon_trust.c
+HDRS      = ../common/ssaddon_log.h ../common/ssaddon_tls.h ../common/ssaddon_store.h ../common/ssaddon_conf.h ../common/ssaddon_trust.h
+LDLIBS   := -lssl -lcrypto -lz
 BIN       = secure-sudo-locus
 SRC       = locus.c
 

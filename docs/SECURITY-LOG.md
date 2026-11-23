@@ -8,6 +8,16 @@ stays the detailed record. Each entry here points to it.
 CVSS and EPSS scores are given only where a CVE exists. These are project
 findings without CVE IDs, so none are given; no scores are invented.
 
+## 2026-11-23 — add-on logs can be shipped over verified TLS, and reconnect
+- **Type:** patch (hardening)
+- **CVE / CWE / advisory:** none; CWE-319, CWE-295, CWE-297
+- **Severity:** no CVSS (no CVE). Project rating: medium. Add-on log records (quarantined file names, host state) could only leave the host as plain UDP or TCP syslog, readable and changeable on the path, and the collector was not authenticated. A TCP collector restart silently ended shipping.
+- **Affected:** `temporary/common/ssaddon_log.c`, new `temporary/common/ssaddon_tls.c`/`.h`, the seven add-on Makefiles (now `-lssl`), `temporary/config/logging.conf`.
+- **What changed:** `remote_proto = tls` with `remote_ca_file`: TLS 1.2+, certificate chain and host name (or IP) checks, SNI, 3 s timeouts, SIGPIPE blocked. `tcp` and `tls` detect a closed connection before each write and reconnect; a collector that stays down is retried every 30 s and the outage and recovery are logged locally once each. `check-config` rejects a CA file that does not load.
+- **Why it is secure now:** with `tls`, only the collector holding a certificate from the operator's CA receives the records, and they cannot be read or changed on the way (NIST SC-8, SC-8(1), SC-23, AU-9(2)). Shipping no longer stops silently.
+- **Remaining:** `udp` stays the shipped default for compatibility; the docs recommend `tls`. Lines logged during an outage are not resent.
+- **Verification:** `tests/userspace/test-addon-log-tls.sh` 20/0 (`HistoryTest/runs/2026-11-23_220553Z_unit-addon-log-tls_2894faf/`); mutation runs with verification, the host check or the peer-close check turned off each fail it. `test-addons.sh` 163/0 (`HistoryTest/runs/2026-11-23_220600Z_unit-addons_2894faf/`). Gate lint pass (`HistoryTest/runs/2026-11-23_220640Z_gate-lint_2894faf/`). Whole suite 1374 ok, 2 failing only from the sandbox rm wrapper (`HistoryTest/runs/2026-11-23_220703Z_suite_2894faf/`, see its note). PC build gate overall pass, 1423 checks, 0 not ok (`HistoryTest/runs/2026-11-23_224258Z_gate_20f89d5/`). SECURITY_REVIEW #79.
+
 ## 2026-11-23 — kernel refuses over-long policy lists instead of dropping entries
 - **Type:** patch
 - **CVE / CWE / advisory:** none; CWE-1284

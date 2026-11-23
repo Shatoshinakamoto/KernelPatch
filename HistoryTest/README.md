@@ -87,6 +87,11 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_224258Z_gate_20f89d5`](runs/2026-11-23_224258Z_gate_20f89d5/RUN.md) | 2026-11-23T22:42:58+00:00 | gate | `20f89d5` | **pass** | Pheonix's PC, Docker container on WSL2 | 0 / 0 / 0 |
+| [`2026-11-23_220703Z_suite_2894faf`](runs/2026-11-23_220703Z_suite_2894faf/RUN.md) | 2026-11-23T22:07:03+00:00 | suite | `2894faf` | **fail** | cloud container (Ubuntu) | 1374 / 2 / 6 |
+| [`2026-11-23_220640Z_gate-lint_2894faf`](runs/2026-11-23_220640Z_gate-lint_2894faf/RUN.md) | 2026-11-23T22:06:40+00:00 | gate-lint | `2894faf` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
+| [`2026-11-23_220600Z_unit-addons_2894faf`](runs/2026-11-23_220600Z_unit-addons_2894faf/RUN.md) | 2026-11-23T22:06:00+00:00 | unit-addons | `2894faf` | **pass** | cloud container (Ubuntu) | 163 / 0 / 0 |
+| [`2026-11-23_220553Z_unit-addon-log-tls_2894faf`](runs/2026-11-23_220553Z_unit-addon-log-tls_2894faf/RUN.md) | 2026-11-23T22:05:53+00:00 | unit-addon-log-tls | `2894faf` | **pass** | cloud container (Ubuntu) | 20 / 0 / 0 |
 | [`2026-11-23_215528Z_gate_aaffc26`](runs/2026-11-23_215528Z_gate_aaffc26/RUN.md) | 2026-11-23T21:55:27+00:00 | gate | `aaffc26` | **pass** | Pheonix's PC, Docker container on WSL2, QEMU TCG (no KVM) | 0 / 0 / 0 |
 | [`2026-11-23_215527Z_vm-functest_aaffc26`](runs/2026-11-23_215527Z_vm-functest_aaffc26/RUN.md) | 2026-11-23T21:55:27+00:00 | vm-functest | `aaffc26` | **pass** | Pheonix's PC, Docker container on WSL2, QEMU TCG (no KVM) | 0 / 0 / 0 |
 | [`2026-11-23_214119Z_gate-lint_e82717f`](runs/2026-11-23_214119Z_gate-lint_e82717f/RUN.md) | 2026-11-23T21:41:19+00:00 | gate-lint | `e82717f` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |

@@ -1,0 +1,23 @@
+{
+  "area": "gate",
+  "commit": "20f89d5",
+  "date": "2026-11-23T22:42:58+00:00",
+  "files": {
+    "RUN.md": "a65e6979f0b4a0dad68afe66cf6a349de8bfff0f922987faa26b1a6a34dbd548",
+    "command.txt": "f2ba466c7299a406e16d9d07c432e15d9dcacc3094a3e867299f0f95a581505b",
+    "environment.md": "202e5233cf85fef5f00dcc5523db6e2f95dde2f0e97f960ca319acb73930700b",
+    "results/gate67.txt": "ea85158dcd21060d8c7cacf25fc5a55f3163e658f27607991249e70d869fe69b"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "b5e5634ab41ce7ebb4e9821fa4d06df782a3ac09a12a6e4d7790c76cfe099ecd",
+  "previous_run": "2026-11-23_220703Z_suite_2894faf",
+  "run_id": "2026-11-23_224258Z_gate_20f89d5",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "Pheonix's PC, Docker container on WSL2"
+}

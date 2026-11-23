@@ -1,0 +1,2 @@
+/home/<user>/kernelpatch/tests/lib/tap.sh: line 10:  9922 Killed                  "$T/evil/mybash" -c 'echo x >> "$1"; for _ in $(seq 40); do sleep 0.1; done' w "$T/prot/a.conf"
+tests/userspace/test-addons.sh: line 318:  9957 Killed                  "$T/evil/wb2" -c 'sleep 1; echo x >> "$1"; sleep 4; :' w "$T/prot/a.conf"

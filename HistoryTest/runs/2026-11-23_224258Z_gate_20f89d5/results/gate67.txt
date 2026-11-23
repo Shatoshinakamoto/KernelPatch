@@ -1,0 +1,25 @@
+secure_sudo build gate record
+date=2026-11-23T22:16:04Z
+version=0.12.0
+source_tree_sha256=6363cf51eb88f3c40d0498a2869c5d687d76cb5a4b708fb3333a7ba3fab9fb2e
+host=ubuntu 24.04 x86_64
+cc=gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+make=GNU Make 4.3
+shellcheck=0.9.0
+kernel_tree=/work/pr67/kt/linux-6.12.114 (6.12.114)
+kernel_variant_config_sha256 default 50aa43e6711974dfcea6851b6299dde536d22b93ed0f7fd352069d726d222222
+kernel_variant_config_sha256 modsig 1eadf83f327a15e351622776d82d1e782d3116e03aeb4fd1f396375ab145d1df
+kernel_variant_config_sha256 no-audit a9ee7d25d281378bd4dfc9a7321057da34b922ce296b552f664df3517abe2d16
+kernel_variant_config_sha256 no-bpf df735b7ef76c915ff50e0b0f9085301e481e19cc8b01d096595d02a7adaeb2b4
+kernel_variant_config_sha256 no-modules f9cd2c6a30d1ad267a43fbca19b97fba010c99b3c40d9ba4e493862f6c60f2e0
+kernel_variant_config_sha256 stack-apparmor 7b5041dd0cbcfd8ee8226699f6b9f9870c10259f059bfbf98524b782ab2a6e03
+stage_lint=pass (68 shell scripts)
+stage_userspace=pass (6 components, -Werror)
+stage_addons=pass (7 components, -Werror)
+stage_lsm-headers=skip (no supported kernel headers installed; unsupported, not compiled: 6.8.0)
+stage_lsm-tree=pass (6.12.114, 6 variants)
+stage_tests=pass (1423 checks)
+stage_package=pass (reproducible, sha256 615436b0403f6823)
+overall=pass
+source_tree_sha256 matches gen-sbom.sh --tree-hash on the clean checkout.
+Tests stage: 1423 checks, 0 not ok. test-addon-log-tls.sh alone as root: 20/20 ok, rc=0.
