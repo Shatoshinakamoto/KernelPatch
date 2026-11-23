@@ -55,6 +55,14 @@ eq "profile: an unknown profile is never picked silently" "$(pick_profile)" ""
 profiles stigma
 eq "profile: a name that merely starts with stig does not match" "$(pick_profile)" ""
 
+# OSB-18: the profile message
+eval "osb18() { $(sed -n '/^# OSB-18/,/^esac/p' "$S"); }"
+msg() { PROFILE="$1" FORCE_PROFILE="$2"; info() { echo "$*"; }; osb18; info() { :; }; }
+check "OSB-18: a STIG profile is reported as the DISA STIG" grep -q "(DISA STIG)" <<<"$(msg "${PFX}stig" "")"
+check "OSB-18: a forced CIS profile says it was chosen" grep -q "(chosen with --profile)" <<<"$(msg "${PFX}cis_level2_server" "${PFX}cis_level2_server")"
+refute "OSB-18: ... and does not claim there is no STIG" grep -q "no DISA STIG" <<<"$(msg "${PFX}cis_level2_server" "${PFX}cis_level2_server")"
+check "OSB-18: a fallback picked by the script says there is no STIG" grep -q "no DISA STIG for this distro" <<<"$(msg "${PFX}standard" "")"
+
 # summarize
 xc() { # file "<result> <rule>"...
 	local f="$1" r; shift

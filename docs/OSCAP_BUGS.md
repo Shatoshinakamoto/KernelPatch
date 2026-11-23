@@ -109,8 +109,12 @@ the rsyslog install, the audit directory mode, log-file modes. A second run
 changes nothing. It does not need oscap, so it covers what the VM run cannot
 re-create cheaply; `test-stig-selection.sh` (19 checks) covers datastream and profile selection
 (preference order, no silent pick of an unknown profile) and that the summary
-lists every rule not at pass. OSB-15 (AppArmor python), 16-18 and package-install
-drift are not covered yet.
+lists every rule not at pass. Since 2026-11-23 they also cover OSB-15 (the AppArmor-tools Python mismatch is
+reported with the exact command and nothing is enforced) and OSB-18 (the
+profile message). OSB-16's `--skip-rules` stripping is covered by
+`tests/oscap/test-oscap-results.sh`. OSB-17 is environment-only (stacked
+container tmpfs) and needs a real host. Package-install drift is not covered
+yet.
 
 Full scan after the patch run: **61 pass / 1 fail / 1 error / 164 not
 applicable / 3 not checked**, matching the best result.

@@ -361,7 +361,7 @@ post_patch() {
 	if command -v aa-enforce >/dev/null && \
 	   ! python3 -c 'import LibAppArmor' >/dev/null 2>&1; then
 		local py
-		for py in /usr/bin/python3.[0-9]*; do
+		for py in "$R"/usr/bin/python3.[0-9]*; do
 			case "$py" in *-config) continue ;; esac
 			if "$py" -c 'import LibAppArmor' >/dev/null 2>&1; then
 				info "  OSB-15: aa-* tools cannot import LibAppArmor under $(python3 --version 2>&1);"

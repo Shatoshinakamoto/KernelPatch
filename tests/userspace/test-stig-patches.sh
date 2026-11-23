@@ -95,6 +95,23 @@ eq "OSB-07: a 0644 log in a subdirectory becomes 0640 or stricter" "$(stat -c %a
 eq "OSB-07: a 0640 log is untouched" "$(stat -c %a "$T/r/var/log/c.log")" 640
 check "OSB-07: the number of files tightened is reported" grep -q "tightened 2 log file" <<<"$out"
 
+# OSB-15: the AppArmor tools cannot import LibAppArmor under the default
+# python3; another installed Python can. Detect and advise only: the exact
+# command is printed and nothing is enforced.
+fresh; mkdir -p "$T/py15" "$T/r/usr/bin"
+printf '#!/bin/sh\necho "aa-enforce $*" >> "%s/calls"\n' "$T" > "$T/py15/aa-enforce"
+printf '#!/bin/sh\ncase "$*" in --version) echo "Python 3.13.0";; *LibAppArmor*) exit 1;; esac\n' > "$T/py15/python3"
+printf '#!/bin/sh\ncase "$*" in *LibAppArmor*) exit 0;; esac\necho "python3.12 $*" >> "%s/calls"\n' "$T" > "$T/r/usr/bin/python3.12"
+printf '#!/bin/sh\nexit 1\n' > "$T/r/usr/bin/python3.12-config"
+chmod +x "$T/py15/"* "$T/r/usr/bin/"*
+out="$(PATH="$T/py15:$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
+check "OSB-15: the import failure under the default python3 is reported" grep -q "OSB-15: aa-\* tools cannot import LibAppArmor under Python 3.13" <<<"$out"
+check "OSB-15: the working interpreter and the exact command are printed" grep -qF "$T/r/usr/bin/python3.12 $T/py15/aa-enforce /etc/apparmor.d/*" <<<"$out"
+refute "OSB-15: nothing is enforced (advise only)" grep -qE "aa-enforce|python3.12 " "$T/calls"
+refute "OSB-15: the -config helper is never offered" grep -q "python3.12-config" <<<"$out"
+fresh; out="$(PATH="$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
+refute "OSB-15: silent when the AppArmor tools are absent or work" grep -q "OSB-15" <<<"$out"
+
 # The script itself still parses and keeps the hook default-off.
 check "stig-harden.sh passes bash -n" bash -n "$ROOT/scripts/stig-harden.sh"
 # shellcheck disable=SC2016
