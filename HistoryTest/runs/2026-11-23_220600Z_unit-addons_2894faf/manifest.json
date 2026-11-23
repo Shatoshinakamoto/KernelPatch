@@ -1,0 +1,26 @@
+{
+  "area": "unit-addons",
+  "commit": "2894faf",
+  "date": "2026-11-23T22:06:00+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "4f01499075559c8a67f398e80724c1b926939409275d1c2fbdf933431f139ab2",
+    "command.txt": "c504a7d0940680dbceb9092e067bc66e09cafb69516dd9a373bc56eab1cf1b01",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "95918a22a3a6e5c10dd1846cb6bb0d1686364ccb80614e44cab388acb3257b6e",
+    "logs/stdout.log": "04706931a708dc0b9bb9686369e5c39c71e4db49c913fe8aee5aa4d8c0c9f83e",
+    "results/tap-summary.txt": "c418641162f17cfafad594c9d7979b1ec1b7c308bd323c01b07f1e65a9aee196"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "67aa56c2d8e93f23a49903dfc9fa8141aa4053648b5a38ab69729f1e6fb0a8a1",
+  "previous_run": "2026-11-23_220553Z_unit-addon-log-tls_2894faf",
+  "run_id": "2026-11-23_220600Z_unit-addons_2894faf",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 163,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu)"
+}

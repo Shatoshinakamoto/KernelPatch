@@ -1,0 +1,20 @@
+
+=== lint
+check-lsm-hooks: 35 hooks, each registered once
+add-on maturity: 165 checks, 0 failed
+ok 22 matrix rows checked
+ok security and maintenance process documents are complete
+check-config-docs: ok
+history_test verify: 29 runs, 0 problems
+--- lint: pass (68 shell scripts)
+
+secure_sudo build gate record
+date=2026-11-23T22:06:53Z
+version=0.12.0
+source_tree_sha256=490a8832958ce318431acf478aa60488f6ef0c073dc69e20676c911b75cbd5a3
+host=ubuntu 24.04 x86_64
+cc=gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+make=GNU Make 4.3
+shellcheck=0.11.0
+stage_lint=pass (68 shell scripts)
+overall=pass
