@@ -1,0 +1,23 @@
+PC build gate on main 4b5474f, run twice as root (SS_REQUIRE_SWTPM=1, all stages,
+--kernel-tree = signature-verified 6.12.114). Both runs identical:
+
+stage_lint=pass (66 shell scripts)   (includes history_test.py verify)
+stage_userspace=pass (6 components, -Werror)
+stage_addons=pass (7 components, -Werror)
+stage_lsm-headers=skip (no supported kernel headers installed; unsupported, not compiled: 6.8.0)
+stage_lsm-tree=pass (6.12.114, 6 variants)
+stage_tests=FAIL (1 failing)
+stage_package=pass (reproducible, sha256 48df332a5e7d3af6)
+overall=FAIL
+
+Pristine tree hash (gen-sbom.sh --tree-hash) 672f8d62...6773 in both records.
+
+Failing check:
+not ok 8 - generator: --apply needs root or refuses cleanly (wrong reason:
+  bash: <scratch>/src/scripts/cis-nftables.sh: Permission denied)
+# FAILED: userspace/test-cis-firewall.sh (exit 1, 1 failing)
+
+Cause: the gate copies the tree into a root-owned 0700 mktemp directory; the
+check drops to uid 65534, which cannot read the script there. Reproduced: as
+root from a 0755 directory ok 8; from a fresh 0700 mktemp directory not ok 8.
+Every other test passed. Records and logs kept on the PC (kp-work volume).
