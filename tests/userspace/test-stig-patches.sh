@@ -140,6 +140,35 @@ fresh; printf 'flush ruleset\ninclude "/etc/nftables.d/*.nft"\n' > "$T/r/etc/nft
 check "OSB-23: a file that defines no table is left alone for review" cmp -s "$T/nft0" "$T/r/etc/nftables.conf"
 check "OSB-23: ... and that is reported" grep -q "defines no table; left as is" <<<"$out"
 
+# OSB-24: nftables.service stops with "nft flush ruleset"; a drop-in must
+# replace it with a delete of only nftables.conf's own tables.
+unitfile() { mkdir -p "$T/r/lib/systemd/system"; printf '[Service]\nType=oneshot\nExecStart=/usr/sbin/nft -f /etc/nftables.conf\nExecReload=/usr/sbin/nft -f /etc/nftables.conf\nExecStop=/usr/sbin/nft flush ruleset\n' > "$T/r/lib/systemd/system/nftables.service"; }
+DI="$T/r/etc/systemd/system/nftables.service.d/secure-sudo-keep-tables.conf"
+fresh; unitfile; nftconf > "$T/r/etc/nftables.conf"; out="$(run)"
+check "OSB-24: a drop-in is written for the flushing unit" test -f "$DI"
+check "OSB-24: it clears the vendor ExecStop" grep -qx 'ExecStop=' "$DI"
+check "OSB-24: it deletes only the conf's tables" bash -c "grep -qx 'ExecStop=-/usr/sbin/nft delete table inet filter' '$DI' && grep -qx 'ExecStop=-/usr/sbin/nft delete table ip filter' '$DI' && [ \$(grep -c '^ExecStop=-' '$DI') = 2 ]"
+refute "OSB-24: it never flushes the ruleset" grep -q 'flush ruleset' "$DI"
+check "OSB-24: reported as fixed" grep -q "OSB-24 fixed" <<<"$out"
+cp "$DI" "$T/di1"; run >/dev/null
+check "OSB-24: a second run leaves the drop-in alone" cmp -s "$T/di1" "$DI"
+fresh; nftconf > "$T/r/etc/nftables.conf"; run >/dev/null
+check "OSB-24: no flushing unit, no drop-in" test ! -e "$DI"
+fresh; unitfile; printf 'include "/etc/nftables.d/*.nft"\n' > "$T/r/etc/nftables.conf"; out="$(run)"
+check "OSB-24: a conf with no table gets no drop-in, and that is reported" bash -c "test ! -e '$DI' && grep -q 'OSB-24: .* defines no table' <<<\"\$1\"" _ "$out"
+if command -v nft >/dev/null && [ "$(id -u)" -eq 0 ] && unshare -n true 2>/dev/null; then
+	fresh; unitfile; nftconf > "$T/r/etc/nftables.conf"; run >/dev/null
+	# restart = every ExecStop (a leading "-" means ignore failure), then ExecStart
+	restart() { # unit-or-dropin conf
+		unshare -n bash -c 'nft add table inet secure_sudo || exit 9
+			sed -n "s/^ExecStop=-\{0,1\}//p" "$1" | while IFS= read -r c; do [ -n "$c" ] && { ${c#/usr/sbin/} || true; }; done
+			nft -f "$2" && nft list table inet secure_sudo' _ "$1" "$2" >/dev/null 2>&1; }
+	refute "OSB-24: the vendor unit's stop deletes the secure_sudo table (the bug)" restart "$T/r/lib/systemd/system/nftables.service" "$T/r/etc/nftables.conf"
+	check "OSB-24: with the drop-in a restart keeps the secure_sudo table" restart "$DI" "$T/r/etc/nftables.conf"
+else
+	skip "OSB-24: real nft restart (needs root, nft and unshare)"
+fi
+
 # Package-install drift (OSB-07 with OSB-06): the rsyslog install that
 # post_patch itself performs creates a world-readable log. The OSB-07 step
 # runs after it, so the new file is tightened in the same run.

@@ -74,6 +74,7 @@ manual-review controls (OSB-14).
 | **OSB-10** | The post-remediation tally never printed. | The final `scan after` was redirected to `/dev/null`. | Redirect removed; every pass prints its tally and a Markdown summary is written (`summary-<ts>.md`). |
 | **OSB-22** | `file_permissions_var_log_stig` fails on the first scan after `--remediate` although the OSB-07 step tightened `/var/log` just before remediation's last scan (CI VM run, 6.12.114, 2026-10-31: the only failure the expectation file does not explain). | Our reports. The default `--outdir` is under `/var/log`, and the "after" scan's result, report and cross-check and the summary are written after the OSB-07 step, with mode 0644. The rule wants every file under `/var/log` at 0640 or stricter. | Everything `stig-harden.sh` writes to its outdir is 0600 (umask 077 for its own writes, not for the remediation it runs). The VM run prints every `/var/log` file the rule would flag after the final scan. Verified: the next CI VM run (41243002797) lists none and passes the rule. |
 | **OSB-23** | secure_sudo's network-mode table `inet secure_sudo` disappears whenever `/etc/nftables.conf` is loaded (boot, `systemctl restart nftables`, the CIS nftables fixes, which enable that service). Shown in a network namespace on 2026-11-23 with Ubuntu 24.04's stock file. | The stock file starts with `flush ruleset`, which deletes every table, not only the file's own. The daemon re-applies its table on the next refresh, so the mode is off for up to one refresh interval. | `post_patch` replaces `flush ruleset` with a reset of only the tables the file defines (`table F N` + `delete table F N`), checks the result with `nft -c` and restores the original if that fails; backup `.pre-patch`. A file that defines no table (only `include`s) is left alone and reported. `test-stig-patches.sh` loads the original and the rewritten file in a namespace: the original deletes the secure_sudo table, the rewritten one keeps it. |
+| **OSB-24** | `systemctl restart nftables` deleted `inet secure_sudo` although `/etc/nftables.conf` no longer flushes (CIS L2 VM run, 2026-11-23, checks 13 and 17). | Ubuntu 24.04's `nftables.service` (nftables 1.0.9-1ubuntu0.1) has `ExecStop=/usr/sbin/nft flush ruleset`; a restart runs stop first. | A drop-in `nftables.service.d/secure-sudo-keep-tables.conf` clears that ExecStop and deletes only the CIS/conf tables: written by `cis-nftables.sh --apply` and by `stig-harden.sh` post_patch when the unit flushes. Tested with real nft (vendor stop deletes the table, drop-in stop keeps it) in `test-stig-patches.sh` and `test-cis-firewall.sh`. | Fixed; VM re-check pending |
 
 ### Cannot pass inside a container (documented, not patchable here)
 
@@ -125,6 +126,18 @@ Full scan after the patch run: **61 pass / 1 fail / 1 error / 164 not
 applicable / 3 not checked**, matching the best result.
 
 ---
+
+## 4a. CIS Level 2 with `--cis-firewall` in a VM (2026-11-23)
+
+Main e6aacc7, Ubuntu 24.04 VM, kernel 6.12.114-secure-sudo, SSG 0.1.78, no
+`--skip-rules`: baseline **242 pass / 128 fail**, after remediation **441 pass
+/ 9 fail / 0 error / 0 unknown**, the same under `lan-only`. No firewall rule
+fails while secure_sudo's table is loaded. The 9 left are site decisions:
+`grub2_password`, `grub2_uefi_password` (site secret), six `partition_for_*`
+rules (needs a partitioned install), `sshd_limit_user_access` (site list).
+`systemctl restart nftables` dropped secure_sudo's table (OSB-24, fixed after
+the run). Full record:
+[`vm/results/13-pc-cis-l2-2026-11-23/summary.txt`](vm/results/13-pc-cis-l2-2026-11-23/summary.txt).
 
 ## 4. CIS Benchmark: Ubuntu 24.04 Level 2 Server (v11)
 

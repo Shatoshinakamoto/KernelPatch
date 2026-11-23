@@ -431,6 +431,39 @@ open(p,"w").write(s)' "$f" "$reset"
 		fi
 	fi
 
+	# OSB-24: Ubuntu's nftables.service stops with "nft flush ruleset", so
+	# "systemctl stop|restart nftables" deletes every table, secure_sudo's
+	# "inet secure_sudo" included, even when /etc/nftables.conf is clean (found
+	# by the CIS VM run, 2026-11-23). SECURITY (NIST SC-7, CM-7): a drop-in
+	# replaces that ExecStop with a delete of only the tables nftables.conf
+	# defines. Not written when no such unit exists or the conf defines no
+	# table (nothing safe to delete instead); reported either way.
+	local unit dropin
+	dropin="$R/etc/systemd/system/nftables.service.d/secure-sudo-keep-tables.conf"
+	for unit in "$R/usr/lib/systemd/system/nftables.service" "$R/lib/systemd/system/nftables.service"; do
+		[ -f "$unit" ] && grep -qE '^ExecStop=.*flush[[:space:]]+ruleset' "$unit" && break
+		unit=""
+	done
+	if [ -n "$unit" ] && [ ! -f "$dropin" ]; then
+		local ts=""
+		[ -f "$R/etc/nftables.conf" ] && ts="$(sed -n -E 's/^[[:space:]]*table[[:space:]]+([a-z0-9]+[[:space:]]+)?([A-Za-z0-9_.-]+)[[:space:]]*\{.*/\1\2/p' "$R/etc/nftables.conf" |
+			awk 'NF==1{print "ip " $1; next} {print $1 " " $2}' | awk '!seen[$0]++')"
+		if [ -z "$ts" ]; then
+			info "  OSB-24: $unit flushes every table on stop; /etc/nftables.conf defines no table, so no drop-in was written. Review by hand"
+		else
+			install -d -m 0755 "$(dirname "$dropin")"
+			{
+				echo "# Installed by secure_sudo stig-harden.sh (OSB-24): stop deletes only the"
+				echo "# tables /etc/nftables.conf defines, never secure_sudo's \"inet secure_sudo\"."
+				echo "[Service]"
+				echo "ExecStop="
+				printf '%s\n' "$ts" | awk '{print "ExecStop=-/usr/sbin/nft delete table " $1 " " $2}'
+			} > "$dropin.tmp" && chmod 0644 "$dropin.tmp" && mv -f "$dropin.tmp" "$dropin"
+			[ -z "$R" ] && command -v systemctl >/dev/null && systemctl daemon-reload >/dev/null 2>&1
+			info "  OSB-24 fixed: nftables.service stop no longer flushes other tables ($dropin)"
+		fi
+	fi
+
 	# OSB-07: log-file permission drift. Package installs (including the ones
 	# remediation itself performs) create new logs with wider modes, so this
 	# runs LAST, after every install, right before the final scan.

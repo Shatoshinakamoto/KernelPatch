@@ -38,6 +38,23 @@ check "stig-harden: the CIS table is loaded before the baseline scan" bash -c "a
 check "stig-harden: only on --remediate (a scan changes nothing)" grep -q 'CIS_FW" -eq 1 \] && \[ "\$MODE" = remediate' "$S"
 check "install.sh ships cis-nftables.sh next to stig-harden.sh" grep -q 'stig-harden.sh oscap-results.py cis-nftables.sh' "$ROOT/install/install.sh"
 
+# OSB-24: the nftables.service drop-in
+bash "$CIS" --print-dropin > "$T/dropin.conf"
+check "drop-in: clears the vendor ExecStop" grep -qx 'ExecStop=' "$T/dropin.conf"
+check "drop-in: deletes only inet filter on stop" bash -c "[ \"\$(grep '^ExecStop=-' '$T/dropin.conf')\" = 'ExecStop=-/usr/sbin/nft delete table inet filter' ]"
+refute "drop-in: never flushes the ruleset" bash -c "grep -v '^#' '$T/dropin.conf' | grep -q 'flush ruleset'"
+if [ "$(id -u)" -eq 0 ] && command -v nft >/dev/null && unshare -n true 2>/dev/null; then
+	mkdir -p "$T/apply/etc" "$T/apply/units"
+	check "--apply in a namespace: loads, installs the drop-in, keeps secure_sudo's table" unshare -n bash -c '
+		nft add table inet secure_sudo || exit 9
+		SS_CIS_NFT_CONF="$1/etc/nftables.conf" SS_CIS_UNIT_DIR="$1/units" SS_CIS_NO_SYSTEMCTL=1 SS_CIS_SSH_PORTS=22 bash "$2" --apply >/dev/null || exit 1
+		test -f "$1/units/nftables.service.d/secure-sudo-keep-tables.conf" || exit 2
+		nft list table inet filter >/dev/null && nft list table inet secure_sudo >/dev/null' _ "$T/apply" "$CIS"
+	eq "--apply: the drop-in is mode 0644" "$(stat -c %a "$T/apply/units/nftables.service.d/secure-sudo-keep-tables.conf" 2>/dev/null)" 644
+else
+	skip "--apply in a namespace (needs root, nft and unshare)"
+fi
+
 if [ "$(id -u)" -ne 0 ] || ! command -v nft >/dev/null || ! command -v python3 >/dev/null ||
    ! ip netns add "sscis-probe-$$" 2>/dev/null; then
 	skip "real nft and TCP in network namespaces (need root, nft, python3, ip netns)"
