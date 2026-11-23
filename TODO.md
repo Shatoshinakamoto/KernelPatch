@@ -436,8 +436,8 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     test (`tests/userspace/test-stig-patches.sh`). Profile/datastream selection and the final summary
     (every non-pass rule listed) are tested by `test-stig-selection.sh`;
     skip-rule matching and result parsing by `test-oscap-results.sh`. OSB-15 and OSB-18 are
-    tested too; OSB-16 skip-rule stripping by `test-oscap-results.sh`. Still
-    open: OSB-17 (needs a real host), package-install drift, the CIS gate and target-host scans beyond Ubuntu 24.04.
+    tested too; OSB-16 skip-rule stripping by `test-oscap-results.sh`. Package-install drift is
+    tested as well. Still open: OSB-17 (needs a real host), the CIS gate and target-host scans beyond Ubuntu 24.04.
   - Keep OSB-03..07 and OSB-15..18 regression tests: deliberately recreate
     each reproducible bug, run the relevant patch/remediation, and assert the
     exact expected rule result. Add tests for package-install permission

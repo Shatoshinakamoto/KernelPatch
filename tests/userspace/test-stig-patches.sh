@@ -112,6 +112,23 @@ refute "OSB-15: the -config helper is never offered" grep -q "python3.12-config"
 fresh; out="$(PATH="$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
 refute "OSB-15: silent when the AppArmor tools are absent or work" grep -q "OSB-15" <<<"$out"
 
+# Package-install drift (OSB-07 with OSB-06): the rsyslog install that
+# post_patch itself performs creates a world-readable log. The OSB-07 step
+# runs after it, so the new file is tightened in the same run.
+fresh; mkdir -p "$T/drift"
+printf '#!/bin/sh\necho "apt-get $*" >> "%s/calls"\ncase "$*" in *install*rsyslog*) echo new > "$STIG_ROOT/var/log/syslog"; chmod 0644 "$STIG_ROOT/var/log/syslog";; esac\n' "$T" > "$T/drift/apt-get"
+chmod +x "$T/drift/apt-get"
+out="$(PATH="$T/drift:$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
+check "drift: the rsyslog install ran and created a log" test -f "$T/r/var/log/syslog"
+eq "drift: the log the install created is tightened in the same run" "$(stat -c %a "$T/r/var/log/syslog")" 640
+check "drift: the OSB-07 step is reported after the install" bash -c "printf '%s\n' \"\$1\" | grep -n -e 'OSB-06: syslog group missing' -e 'OSB-07 fixed' | cut -d: -f1 | sort -c -n" _ "$out"
+
+# Ordering in the remediation flow: every pass, then post_patch, then the
+# final scan, so no later install in the script can undo OSB-07.
+order="$(grep -nE '^(done|post_patch|scan after|summarize )' "$ROOT/scripts/stig-harden.sh" | tail -4 | cut -d: -f2- | tr '\n' ' ')"
+eq "flow: passes, then post_patch, then the final scan and summary" "$order" "done post_patch scan after summarize \"\$BEFORE_RES\" \"\$SCAN_RESULT\" "
+refute "flow: no package install after post_patch in the remediation flow" bash -c "sed -n '/^post_patch\$/,\$p' '$ROOT/scripts/stig-harden.sh' | grep -q pkg_install"
+
 # The script itself still parses and keeps the hook default-off.
 check "stig-harden.sh passes bash -n" bash -n "$ROOT/scripts/stig-harden.sh"
 # shellcheck disable=SC2016
