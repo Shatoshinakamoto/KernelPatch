@@ -15,6 +15,9 @@
 #   - every policy list (ss_lists) has docs/files/<list>.md whose limit marker
 #     matches the kernel limit in ss_lists and whose entries table lists
 #     exactly the template's active entries;
+#   - each temporary/ add-on config page lists exactly the keys its parser
+#     table accepts, with shipped values matching temporary/config/, and
+#     procguard_allow.md matches its template's entries;
 #   - every page in docs/configuration/ and docs/files/ is linked from
 #     docs/README.md.
 # Usage: check-config-docs.py ROOT. Prints "FAIL ..." lines to stderr and
@@ -189,6 +192,56 @@ for stem, limit in lists:
         bad(f"{page}: shipped entry {e} has no row (why, who, when)")
     for e in sorted(doc - tmpl_entries):
         bad(f"{page}: row {e} is not in userspace/config/{stem}.conf")
+
+# ---- temporary/ add-ons ------------------------------------------------------
+ADDONS = (  # page stem, config file, parser source
+    ("driverguard-conf", "driverguard.conf", "temporary/driverguard/driverguard.c"),
+    ("bootguard-conf", "bootguard.conf", "temporary/bootguard/bootguard.c"),
+    ("biosguard-conf", "biosguard.conf", "temporary/biosguard/biosguard.c"),
+    ("procguard-conf", "procguard.conf", "temporary/procguard/procguard.c"),
+    ("tamperwatch-conf", "tamperwatch.conf", "temporary/tamperwatch/tamperwatch.c"),
+    ("logging-conf", "logging.conf", "temporary/common/ssaddon_log.c"),
+    ("locus-conf", "locus.conf", "temporary/locus/locus.c"),
+    ("locus-client-conf", "locus-client.conf", "temporary/common/ssaddon_store.c"),
+    ("gui-conf", "gui.conf", "temporary/gui/secure-sudo-gui"),
+)
+for stem, conf, src in ADDONS:
+    page = f"docs/configuration/{stem}.md"
+    rows = doc_rows(page)
+    code = read(src)
+    if src.endswith("secure-sudo-gui"):
+        m = re.search(r"if k not in \(([^)]*)\)", code)
+        keys = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
+    else:
+        keys = set(re.findall(r'\{\s*"([a-z_]+)",\s*SSC_[A-Z]+', code))
+    if code and not keys:
+        bad(f"could not read the config keys from {src}")
+    for k in sorted(keys - set(rows)):
+        bad(f"{page}: no row for {k} ({src} accepts it)")
+    for k in sorted(set(rows) - keys):
+        bad(f"{page}: row {k} is not a key {src} accepts")
+    atmpl = template(f"temporary/config/{conf}")
+    for k, cells in rows.items():
+        if len(cells) != 5:
+            bad(f"{page}: row {k} has {len(cells)} columns, want 5")
+            continue
+        shipped_ok(page, k, cells[4], atmpl)
+    for k in sorted(set(k for k, v in atmpl.items() if v is not None) - keys):
+        bad(f"temporary/config/{conf}: {k} is not a key {src} accepts")
+
+page = "docs/files/procguard_allow.md"
+text = read(page)
+m = re.search(r"<!-- list-entries:begin -->(.*?)<!-- list-entries:end -->", text, re.S)
+if text and not m:
+    bad(f"{page}: no <!-- list-entries:begin/end --> table")
+elif m:
+    doc = set(re.findall(r"^\|\s*`([^`]+)`\s*\|", m.group(1), re.M))
+    have = {l.strip() for l in read("temporary/config/procguard_allow.conf").splitlines()
+            if l.strip() and not l.strip().startswith("#")}
+    for e in sorted(have - doc):
+        bad(f"{page}: shipped entry {e} has no row (why, who, when)")
+    for e in sorted(doc - have):
+        bad(f"{page}: row {e} is not in temporary/config/procguard_allow.conf")
 
 # ---- index -----------------------------------------------------------------
 index = read("docs/README.md")

@@ -365,6 +365,13 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     `tests/vm/distro/alert-trace-guest.sh` in the distro VM run
     (SECURITY_REVIEW #73). Traced end to end on Ubuntu 24.04 with kernel
     6.12.114 on 2026-11-07 (install test 71/71). Open: the other distros.
+  - Gap found 2026-11-23 (docs/configuration/logging-conf.md): the add-ons'
+    off-box log shipping (`logging.conf` remote_proto) is udp or tcp only,
+    unencrypted and unauthenticated, while the core daemon has TLS (P1-2).
+    Add a `tls` transport with CA/host checks to ssaddon_log. ProcGuard's
+    `sync_cmd` still runs through /bin/sh (the path is quoted, so it is not
+    injectable); moving it to the no-shell argv runner would match
+    notify_cmd and alert_cmd.
 
 - [ ] **P2-4: Make boot and firmware assurance stronger.**
   - Progress (2026-11-15): BiosGuard coverage extended and documented, an
