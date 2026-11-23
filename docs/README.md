@@ -45,6 +45,16 @@ here (CLAUDE.MD section 5).
 | [files/binvault_allow.md](files/binvault_allow.md) | `binvault_allow.conf`: directories exempt from BinaryVault (#17) |
 | [files/prguard_allow.md](files/prguard_allow.md) | `prguard_allow.conf`: programs exempt from the runtime memory guard (#20) |
 | [files/tpm_openers.md](files/tpm_openers.md) | `tpm_openers.conf`: programs that may use the TPM once locked (#5, G4) |
+| [configuration/driverguard-conf.md](configuration/driverguard-conf.md) | Add-on `driverguard.conf`: module tree, backups, mode, baseline trust |
+| [configuration/bootguard-conf.md](configuration/bootguard-conf.md) | Add-on `bootguard.conf`: boot directory, staged restore, baseline trust |
+| [configuration/biosguard-conf.md](configuration/biosguard-conf.md) | Add-on `biosguard.conf`: what the detection-only firmware fingerprint covers |
+| [configuration/procguard-conf.md](configuration/procguard-conf.md) | Add-on `procguard.conf`: process allowlist enforcement and quarantine |
+| [files/procguard_allow.md](files/procguard_allow.md) | Add-on `procguard_allow.conf`: executables ProcGuard allows |
+| [configuration/tamperwatch-conf.md](configuration/tamperwatch-conf.md) | Add-on `tamperwatch.conf`: tamper attribution and quarantine |
+| [configuration/logging-conf.md](configuration/logging-conf.md) | Add-on `logging.conf`: local logs, off-box shipping, notifications |
+| [configuration/locus-conf.md](configuration/locus-conf.md) | Add-on `locus.conf`: the rotating-location allocator |
+| [configuration/locus-client-conf.md](configuration/locus-client-conf.md) | Add-on `locus-client.conf`: where guards ask for a location |
+| [configuration/gui-conf.md](configuration/gui-conf.md) | Add-on `gui.conf`: the local console's address and read-only/admin mode |
 | [EVENTS.md](EVENTS.md) | Event and log record formats, severities, integrations |
 
 ## Features in depth

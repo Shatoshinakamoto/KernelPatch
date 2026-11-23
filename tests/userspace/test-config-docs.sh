@@ -8,7 +8,10 @@
 # wrong shipped value, a net.conf default that differs from apply-net.sh, a
 # missing trust row, a page not linked from docs/README.md, and for the
 # policy-list pages in docs/files/: a missing page, a wrong kernel limit, a
-# shipped entry with no row and a row for an entry the template lacks.
+# shipped entry with no row and a row for an entry the template lacks; and
+# for the temporary/ add-on pages: a parser key with no row, a row the parser
+# does not accept, a shipped value that differs and a ProcGuard allowlist entry
+# with no row.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -21,7 +24,12 @@ userspace/config/secure-sudo.conf userspace/config/net.conf
 userspace/config/pheonixbox.conf userspace/daemon/helpers/apply-net.sh
 docs/README.md docs/configuration/secure-sudo-conf.md
 docs/configuration/net-conf.md docs/configuration/pheonixbox-conf.md
-$(cd "$ROOT" && ls userspace/config/*.conf docs/files/*.md)"
+$(cd "$ROOT" && ls userspace/config/*.conf docs/files/*.md docs/configuration/*.md temporary/config/*.conf)
+temporary/driverguard/driverguard.c temporary/bootguard/bootguard.c
+temporary/biosguard/biosguard.c temporary/procguard/procguard.c
+temporary/tamperwatch/tamperwatch.c temporary/common/ssaddon_log.c
+temporary/locus/locus.c temporary/common/ssaddon_store.c
+temporary/gui/secure-sudo-gui"
 fresh() {
 	rm -rf "$T/r"
 	for f in $FILES; do mkdir -p "$T/r/$(dirname "$f")"; cp "$ROOT/$f" "$T/r/$f"; done
@@ -76,4 +84,14 @@ fresh; sub docs/files/blacklist.md '(<!-- list-entries:begin -->\n.*\n.*\n)' '\1
 fails "a row for an entry the template does not ship" 'row /usr/bin/nc is not in userspace/config/blacklist.conf'
 fresh; sub docs/README.md '^.*\(files/prguard_allow\.md\).*\n' ''
 fails "a list page not linked from docs/README.md" 'does not link files/prguard_allow.md'
+fresh; sub docs/configuration/procguard-conf.md '^\| `sync_cmd` \|.*\n' ''
+fails "an add-on key with no row" 'procguard-conf.md: no row for sync_cmd'
+fresh; sub temporary/locus/locus.c '(\{ "default_root", SSC_PATH)' '{ "tls_cert", SSC_PATH, C.default_root, sizeof(C.default_root), 0, 0, NULL },\n\t\t\1'
+fails "a key added to an add-on parser without a row" 'locus-conf.md: no row for tls_cert'
+fresh; sub docs/configuration/gui-conf.md '^(\| `port` \|.*\n)' '\1| `theme` | enum | x | y | (absent) |\n'
+fails "a GUI row the console does not accept" 'gui-conf.md: row theme is not a key'
+fresh; sub temporary/config/bootguard.conf '^mode = enforce$' 'mode = monitor'
+fails "an add-on template value that differs from its page" "bootguard-conf.md: mode Shipped is 'enforce', the template has 'monitor'"
+fresh; echo "/usr/sbin/sshd" >> "$T/r/temporary/config/procguard_allow.conf"
+fails "a ProcGuard allowlist entry with no row" 'procguard_allow.md: shipped entry /usr/sbin/sshd has no row'
 tap_done

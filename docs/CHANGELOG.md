@@ -8,6 +8,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 ## [Unreleased]
 
 ### Added
+- 2026-11-23: configuration pages for the nine `temporary/` add-on config files and the ProcGuard allowlist (`docs/configuration/*-conf.md`, `docs/files/procguard_allow.md`). `ci/check-config-docs.py` now also checks them against each add-on's parser table and template. Found while writing them: add-on log shipping has no TLS (tracked in TODO P2-3).
 - 2026-11-23: `docs/files/` pages for all 12 policy lists: format, matching, kernel limits, how to change safely, security impact, NIST reference and every shipped entry with why, who and when (with the two TPM openers removed on 2026-11-01). `ci/check-config-docs.py` now holds them to the templates and kernel limits.
 - 2026-11-23: `docs/configuration/` pages for `secure-sudo.conf`, `net.conf` and `pheonixbox.conf`: every key's type, allowed values, built-in and shipped value, security impact and NIST reference. `ci/check-config-docs.py` keeps them in step with the code in the gate's lint stage.
 - 2026-11-23: `HistoryTest/` test-run archive with the recorder `scripts/history_test.py` (run, add, note, invalidate, index, verify). Its integrity is checked in the build gate's lint stage. Also added: `docs/README.md`, this changelog and `docs/SECURITY-LOG.md` (CLAUDE.MD).

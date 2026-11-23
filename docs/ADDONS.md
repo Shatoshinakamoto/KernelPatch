@@ -9,6 +9,14 @@ enforcing behaviour is opt-in and starts in a safe mode.
 
 Everything here is local. Nothing is pushed anywhere.
 
+Per-file configuration references, with every key's type, range, default,
+shipped value and security impact: [driverguard](configuration/driverguard-conf.md),
+[bootguard](configuration/bootguard-conf.md), [biosguard](configuration/biosguard-conf.md),
+[procguard](configuration/procguard-conf.md) and its
+[allowlist](files/procguard_allow.md), [tamperwatch](configuration/tamperwatch-conf.md),
+[logging](configuration/logging-conf.md), [locus](configuration/locus-conf.md),
+[locus-client](configuration/locus-client-conf.md) and [gui](configuration/gui-conf.md).
+
 The add-ons:
 
 | Add-on | Purpose | Enforcing? |
