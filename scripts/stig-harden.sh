@@ -295,6 +295,9 @@ crosscheck() {
 # problem is actually present first, so running it on a clean host is a no-op.
 post_patch() {
 	info "applying known-issue patches"
+	# STIG_ROOT: test hook (tests/userspace/test-stig-patches.sh) that points the
+	# patches at a fake tree. Empty (the default) means the real system.
+	local R="${STIG_ROOT:-}"
 
 	# OSB-03: SSG 0.1.78's banner fixes write the OVAL regex token
 	# "(?:[n]+|(?:n)+)" literally instead of newlines: in
@@ -302,7 +305,7 @@ post_patch() {
 	# the container) and in /etc/issue.net and /etc/issue (banner_etc_issue_net,
 	# found in the VM, where those rules apply). Restore the newlines.
 	local f
-	for f in /etc/profile.d/ssh_confirm.sh /etc/issue.net /etc/issue; do
+	for f in "$R/etc/profile.d/ssh_confirm.sh" "$R/etc/issue.net" "$R/etc/issue"; do
 		[ -f "$f" ] && grep -qF '(?:[n]+|(?:n)+)' "$f" || continue
 		cp -p "$f" "$f.pre-patch"
 		python3 -I -c 'import sys;p=sys.argv[1];s=open(p).read();open(p,"w").write(s.replace("(?:[n]+|(?:n)+)","\n"))' "$f"
@@ -315,7 +318,7 @@ post_patch() {
 	done
 
 	# OSB-04: pwquality `retry` is left commented out ("# retry = 3").
-	f=/etc/security/pwquality.conf
+	f="$R/etc/security/pwquality.conf"
 	if [ -f "$f" ] && ! grep -qE '^\s*retry\s*=' "$f"; then
 		if grep -qE '^\s*#\s*retry\s*=' "$f"; then
 			sed -i -E 's/^\s*#\s*retry\s*=.*/retry = 3/' "$f"
@@ -328,7 +331,7 @@ post_patch() {
 	# OSB-05: SSSD certificate mapping. The generated fix sets pam_cert_auth,
 	# but the rule's OVAL check looks for ldap_user_certificate in the domain
 	# section. Only touched when sssd.conf already has a [domain/...] section.
-	f=/etc/sssd/sssd.conf
+	f="$R/etc/sssd/sssd.conf"
 	if [ -f "$f" ] && grep -qE '^\[domain/' "$f" && \
 	   ! grep -qE '^\s*ldap_user_certificate\s*=' "$f"; then
 		cp -p "$f" "$f.pre-patch"
@@ -344,8 +347,8 @@ post_patch() {
 		pkg_install rsyslog >/dev/null 2>&1 || info "  OSB-06: rsyslog install failed"
 	fi
 	if getent group syslog >/dev/null 2>&1 && \
-	   [ "$(stat -c %G /var/log)" != "syslog" ]; then
-		chgrp syslog /var/log
+	   [ "$(stat -c %G "$R/var/log")" != "syslog" ]; then
+		chgrp syslog "$R/var/log"
 		info "  OSB-06 fixed: /var/log group -> syslog"
 	fi
 
@@ -374,11 +377,11 @@ post_patch() {
 	# directory_permissions_var_log_audit wants the audit log directory at 0700
 	# instead of 0750, but that rule passed on the scan the fix was generated
 	# from, so nothing tightens the directory (seen in the VM after pass 2).
-	f=/etc/audit/auditd.conf
+	f="$R/etc/audit/auditd.conf"
 	if [ -f "$f" ] && grep -qE '^[ ]*log_group[ ]+=[ ]+root[ ]*$' "$f"; then
 		local d
 		d="$(sed -n -E 's/^log_file\s*=\s*(.*)$/\1/p' "$f" | head -1)"
-		d="$(dirname "${d:-/var/log/audit/audit.log}")"
+		d="$R$(dirname "${d:-/var/log/audit/audit.log}")"
 		if [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 0 -perm /7077)" ]; then
 			chmod 0700 "$d"
 			info "  OSB-20 fixed: $d -> 0700 (auditd log_group is root)"
@@ -389,9 +392,9 @@ post_patch() {
 	# remediation itself performs) create new logs with wider modes, so this
 	# runs LAST, after every install, right before the final scan.
 	local n
-	n=$(find /var/log -type f -perm /0137 2>/dev/null | wc -l)
+	n=$(find "$R/var/log" -type f -perm /0137 2>/dev/null | wc -l)
 	if [ "$n" -gt 0 ]; then
-		find /var/log -type f -perm /0137 -exec chmod u-x,g-wx,o-rwx {} + 2>/dev/null || true
+		find "$R/var/log" -type f -perm /0137 -exec chmod u-x,g-wx,o-rwx {} + 2>/dev/null || true
 		info "  OSB-07 fixed: tightened $n log file(s) under /var/log"
 	fi
 }

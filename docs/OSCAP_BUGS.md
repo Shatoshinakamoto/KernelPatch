@@ -99,6 +99,17 @@ host**, confirming oscap fails the rule, running
 | `file_permissions_var_log_stig` (OSB-07) | **fail** (real drift from the header install) | fail (plus a 0666 test log) | pass |
 | `accounts_password_pam_retry` (OSB-04) | pass | pass (config line commented) | pass |
 
+**Automated since 2026-11-23:** `tests/userspace/test-stig-patches.sh` (30
+checks, in the gate's test stage) re-creates OSB-03, 04, 05, 06, 07 and 20 in a
+fake tree (`STIG_ROOT`, a test hook that is empty by default), runs the real
+`post_patch` function from `scripts/stig-harden.sh` and asserts the exact
+result: newlines restored and backups kept, a repair that fails `bash -n`
+rolled back, `retry` handling, the SSSD mapping and mode, the `syslog` group and
+the rsyslog install, the audit directory mode, log-file modes. A second run
+changes nothing. It does not need oscap, so it covers what the VM run cannot
+re-create cheaply; OSB-15 (AppArmor python), 16-18 and the scan/summary parsing
+are not covered yet.
+
 Full scan after the patch run: **61 pass / 1 fail / 1 error / 164 not
 applicable / 3 not checked**, matching the best result.
 

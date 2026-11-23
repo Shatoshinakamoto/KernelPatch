@@ -432,6 +432,10 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
       unknown (OSB-02) results on an appropriate VM/host. Container-only
       behavior must be labelled as such and must not mask target-host
       failures.
+  - Progress (2026-11-23): OSB-03..07 and OSB-20 have an automated regression
+    test (`tests/userspace/test-stig-patches.sh`). Still open: OSB-15..18,
+    package-install drift, profile selection, skip-rule matching, summary
+    parsing, the CIS gate and target-host scans beyond Ubuntu 24.04.
   - Keep OSB-03..07 and OSB-15..18 regression tests: deliberately recreate
     each reproducible bug, run the relevant patch/remediation, and assert the
     exact expected rule result. Add tests for package-install permission
