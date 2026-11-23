@@ -7,6 +7,7 @@
 #define _GNU_SOURCE
 #include "ssaddon_log.h"
 #include "ssaddon_conf.h"
+#include "ssaddon_tls.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,14 @@
 #endif
 #define DEF_DIR		SSL_DEF_DIR
 #define DEF_MAX		(8UL * 1024 * 1024)	/* rotate at 8 MiB */
+#define DEF_CA		"/etc/ssl/certs/ca-certificates.crt"
+/* A stream collector (tcp, tls) that is down is tried again at most this
+ * often, so a dead collector costs one timeout per period, not per line. */
+#ifndef SSL_RETRY_SECS
+#define SSL_RETRY_SECS	30
+#endif
+
+enum { PROTO_UDP, PROTO_TCP, PROTO_TLS };
 
 /* Module state, set up once by ssl_init(). */
 static struct {
@@ -39,10 +48,14 @@ static struct {
 	char dir[256];
 	unsigned long max_bytes;
 	int remote_enabled;
-	int remote_tcp;			/* 1 = TCP, 0 = UDP */
+	int remote_proto;		/* PROTO_UDP, PROTO_TCP or PROTO_TLS */
 	char host[256];
 	char port[16];
-	int sock;			/* remote socket, -1 if none */
+	char ca_file[256];		/* remote_proto = tls: trusted CA bundle */
+	int sock;			/* udp/tcp socket, -1 if none */
+	struct sst *tls;		/* tls connection, NULL if none */
+	time_t next_try;		/* stream protos: no reconnect before this */
+	int remote_down;		/* a failure was logged locally */
 	char logpath[512];
 	char notify_cmd[512];		/* run on ssl_notify(); %m %l %f subst */
 	int conf_errors;
@@ -83,15 +96,16 @@ static int syslog_pri(enum ssl_level l)
  * ssl_check_conf() reports errors. The file may be absent. */
 static int load_conf(FILE *report)
 {
-	static const char *const protos[] = { "udp", "tcp", NULL };
+	static const char *const protos[] = { "udp", "tcp", "tls", NULL };
 	int max = (int)DEF_MAX;
 	const struct ssc_key keys[] = {
 		{ "log_dir", SSC_PATH, S.dir, sizeof(S.dir), 1, 0, NULL },
 		{ "log_max_bytes", SSC_INT, &max, 0, 65536, 1L << 30, NULL },
 		{ "remote_enabled", SSC_INT, &S.remote_enabled, 0, 0, 1, NULL },
-		{ "remote_proto", SSC_ENUM, &S.remote_tcp, 0, 0, 0, protos },
+		{ "remote_proto", SSC_ENUM, &S.remote_proto, 0, 0, 0, protos },
 		{ "remote_host", SSC_HOST, S.host, sizeof(S.host), 0, 0, NULL },
 		{ "remote_port", SSC_PORT, S.port, sizeof(S.port), 0, 0, NULL },
+		{ "remote_ca_file", SSC_PATH, S.ca_file, sizeof(S.ca_file), 1, 0, NULL },
 		{ "notify_cmd", SSC_STR, S.notify_cmd, sizeof(S.notify_cmd), 0, 0, NULL },
 		{ NULL, 0, NULL, 0, 0, 0, NULL }
 	};
@@ -99,15 +113,28 @@ static int load_conf(FILE *report)
 
 	snprintf(S.dir, sizeof(S.dir), "%s", DEF_DIR);
 	S.remote_enabled = 0;
-	S.remote_tcp = 0;
+	S.remote_proto = PROTO_UDP;
 	S.host[0] = S.notify_cmd[0] = '\0';
 	snprintf(S.port, sizeof(S.port), "514");
+	snprintf(S.ca_file, sizeof(S.ca_file), "%s", DEF_CA);
 	errors = ssc_parse(CONF, keys, NULL, NULL, report);
 	S.max_bytes = (unsigned long)max;
 	if (!errors && S.remote_enabled && !S.host[0]) {
 		if (report)
 			fprintf(report, "%s: remote_enabled = 1 needs remote_host\n", CONF);
 		errors++;
+	}
+	/* SECURITY: with tls, a CA bundle that cannot be loaded would mean no
+	 * log ever leaves the host; say so now, not at the first event. */
+	if (!errors && S.remote_enabled && S.remote_proto == PROTO_TLS) {
+		char why[256];
+
+		if (sst_ca_ok(S.ca_file, why, sizeof(why)) != 0) {
+			if (report)
+				fprintf(report, "%s: remote_ca_file %s: %s\n", CONF,
+					S.ca_file, why);
+			errors++;
+		}
 	}
 	S.conf_errors = errors;
 	return errors;
@@ -123,15 +150,14 @@ int ssl_conf_errors(void)
 	return S.conf_errors;
 }
 
-static void open_remote(void)
+/* Plain udp/tcp socket to the collector; S.sock stays -1 on failure. */
+static void open_plain(void)
 {
 	struct addrinfo hints, *res, *rp;
 
-	if (!S.remote_enabled || !S.host[0] || !S.port[0])
-		return;
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = S.remote_tcp ? SOCK_STREAM : SOCK_DGRAM;
+	hints.ai_socktype = S.remote_proto == PROTO_TCP ? SOCK_STREAM : SOCK_DGRAM;
 	if (getaddrinfo(S.host, S.port, &hints, &res) != 0)
 		return;
 	for (rp = res; rp; rp = rp->ai_next) {
@@ -148,6 +174,61 @@ static void open_remote(void)
 	freeaddrinfo(res);
 }
 
+static void close_remote(void)
+{
+	if (S.sock >= 0) {
+		close(S.sock);
+		S.sock = -1;
+	}
+	sst_close(S.tls);
+	S.tls = NULL;
+}
+
+static void local_line(const char *ts, const char *level, const char *msg);
+
+/* Connect if there is no connection and a retry is due. Returns 1 when a
+ * connection is open. A failure is written to the local log once (not
+ * through ssl_log, which would recurse here); the recovery is noted too. */
+static int open_remote(int force)
+{
+	char why[320] = "";
+	time_t now = time(NULL);
+
+	if (!S.remote_enabled || !S.host[0] || !S.port[0])
+		return 0;
+	if (S.sock >= 0 || S.tls)
+		return 1;
+	if (!force && S.next_try && now < S.next_try)
+		return 0;
+	if (S.remote_proto == PROTO_TLS) {
+		S.tls = sst_open(S.host, S.port, S.ca_file, why, sizeof(why));
+	} else {
+		open_plain();
+		if (S.sock < 0)
+			snprintf(why, sizeof(why), "cannot connect to %s port %s",
+				 S.host, S.port);
+	}
+	if (S.sock >= 0 || S.tls) {
+		S.next_try = 0;
+		if (S.remote_down) {
+			S.remote_down = 0;
+			local_line(NULL, "WARN", "remote log shipping restored");
+		}
+		return 1;
+	}
+	S.next_try = now + SSL_RETRY_SECS;
+	if (!S.remote_down) {
+		char msg[640];
+
+		S.remote_down = 1;
+		snprintf(msg, sizeof(msg), "remote log shipping FAILED (%s); lines are "
+			 "kept only in this local log until it recovers (retry every %d s)",
+			 why, SSL_RETRY_SECS);
+		local_line(NULL, "ERR", msg);
+	}
+	return 0;
+}
+
 void ssl_init(const char *feature)
 {
 	snprintf(S.feature, sizeof(S.feature), "%s", feature ? feature : "addon");
@@ -160,7 +241,8 @@ void ssl_init(const char *feature)
 	mkdir(S.dir, 0700);
 	snprintf(S.logpath, sizeof(S.logpath), "%s/%s.log", S.dir, S.feature);
 
-	open_remote();
+	S.next_try = 0;
+	S.remote_down = 0;
 	S.ready = 1;
 }
 
@@ -177,13 +259,31 @@ static void maybe_rotate(void)
 	rename(S.logpath, old);		/* best-effort */
 }
 
+/* Send one framed line over the open stream connection. 0 on success. */
+static int stream_send(const char *framed, size_t m)
+{
+	if (S.tls)
+		return sst_peer_closed(S.tls) ? -1 : sst_write(S.tls, framed, m);
+	if (sst_fd_closed(S.sock))
+		return -1;
+	while (m) {
+		ssize_t w = send(S.sock, framed, m, MSG_NOSIGNAL);
+
+		if (w <= 0)
+			return -1;
+		framed += w;
+		m -= (size_t)w;
+	}
+	return 0;
+}
+
 static void ship_remote(int pri, const char *ts, const char *msg)
 {
 	char host[64] = "localhost";
-	char buf[1200];
-	int n;
+	char buf[1200], framed[1300];
+	int n, m;
 
-	if (S.sock < 0)
+	if (!open_remote(0))
 		return;
 	gethostname(host, sizeof(host) - 1);
 	/* RFC 5424: <PRI>1 TIMESTAMP HOST APP PROCID MSGID MSG */
@@ -193,23 +293,32 @@ static void ship_remote(int pri, const char *ts, const char *msg)
 		return;
 	if ((size_t)n >= sizeof(buf))	/* snprintf says what it wanted */
 		n = (int)sizeof(buf) - 1;
-	/* best-effort; never block the guard on log shipping, so a failed
-	 * send() is deliberately ignored. */
-	if (S.remote_tcp) {
-		/* octet-count framing so the collector can split the stream. */
-		char framed[1300];
-		int m = snprintf(framed, sizeof(framed), "%d %s", n, buf);
-		ssize_t w;
-
-		if (m > 0 && (size_t)m >= sizeof(framed))
-			m = 0;		/* never send past framed[] */
-		if (m > 0) {
-			w = send(S.sock, framed, (size_t)m, MSG_NOSIGNAL);
-			(void)w;
-		}
-	} else {
+	if (S.remote_proto == PROTO_UDP) {
+		/* fire-and-forget: a lost datagram is not detectable here */
 		ssize_t w = send(S.sock, buf, (size_t)n, 0);
 		(void)w;
+		return;
+	}
+	/* tcp and tls: octet-count framing (RFC 6587 / RFC 5425) so the
+	 * collector can split the stream. */
+	m = snprintf(framed, sizeof(framed), "%d %.*s", n, n, buf);
+	if (m <= 0 || (size_t)m >= sizeof(framed))
+		return;		/* never send past framed[] */
+	if (stream_send(framed, (size_t)m) == 0)
+		return;
+	/* The collector may have restarted: reconnect once now and resend,
+	 * then fall back to the retry period. Never blocks past the TLS/TCP
+	 * timeouts. */
+	close_remote();
+	if (open_remote(1) && stream_send(framed, (size_t)m) == 0)
+		return;
+	close_remote();
+	S.next_try = time(NULL) + SSL_RETRY_SECS;
+	if (!S.remote_down) {
+		S.remote_down = 1;
+		local_line(NULL, "ERR", "remote log shipping FAILED (write to the "
+			   "collector failed); lines are kept only in this local log "
+			   "until it recovers");
 	}
 }
 
@@ -236,13 +345,35 @@ static void sanitize(const char *s, char *out, size_t n)
 	out[o] = '\0';
 }
 
+/* Append one line to the local log (with rotation). @ts NULL = now. */
+static void local_line(const char *ts, const char *level, const char *msg)
+{
+	char now_ts[40];
+	FILE *f;
+
+	if (!ts) {
+		struct tm tm;
+		time_t now = time(NULL);
+
+		localtime_r(&now, &tm);
+		strftime(now_ts, sizeof(now_ts), "%Y-%m-%dT%H:%M:%S%z", &tm);
+		ts = now_ts;
+	}
+	maybe_rotate();
+	f = fopen(S.logpath, "ae");
+	if (f) {
+		fprintf(f, "%s %-5s %s\n", ts, level, msg);
+		fclose(f);
+		chmod(S.logpath, 0600);
+	}
+}
+
 void ssl_log(enum ssl_level level, const char *fmt, ...)
 {
 	char raw[1024], msg[1024], ts[40];
 	struct tm tm;
 	time_t now;
 	va_list ap;
-	FILE *f;
 
 	if (!S.ready)
 		ssl_init("addon");
@@ -256,14 +387,7 @@ void ssl_log(enum ssl_level level, const char *fmt, ...)
 	localtime_r(&now, &tm);
 	strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S%z", &tm);
 
-	/* Local append (with rotation). */
-	maybe_rotate();
-	f = fopen(S.logpath, "ae");
-	if (f) {
-		fprintf(f, "%s %-5s %s\n", ts, level_name(level), msg);
-		fclose(f);
-		chmod(S.logpath, 0600);
-	}
+	local_line(ts, level_name(level), msg);
 
 	/* Remote shipping (RFC 5424 wants a Zulu-ish stamp; reuse local ts). */
 	ship_remote(syslog_pri(level), ts, msg);
@@ -495,9 +619,6 @@ void ssl_notify(enum ssl_level level, const char *fmt, ...)
 
 void ssl_close(void)
 {
-	if (S.sock >= 0) {
-		close(S.sock);
-		S.sock = -1;
-	}
+	close_remote();
 	S.ready = 0;
 }

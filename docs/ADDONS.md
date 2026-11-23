@@ -37,7 +37,7 @@ Three things are shared by all of them:
 * **Logging** (`ssaddon_log`): every add-on writes timestamped, leveled lines to
   a root-only local log under `/var/log/secure_sudo/addons/<feature>.log` (rotated
   at a size cap) and, if you enable it, ships every line to an **external log
-  server** (UDP or TCP syslog, RFC 5424) so a compromised host cannot erase the
+  server** (UDP, TCP or TLS syslog, RFC 5424; TLS verifies the collector) so a compromised host cannot erase the
   record. It can also fire a **notification** on important events (`ssl_notify`)
   by running a configured `notify_cmd`. Configure in
   `/etc/secure_sudo/addons/logging.conf`.
@@ -381,11 +381,13 @@ log_dir = /var/log/secure_sudo/addons
 log_max_bytes = 8388608
 # 1 = ship every line off-box (needs remote_host)
 remote_enabled = 0
-# udp | tcp
+# udp | tcp | tls (tls: encrypted, collector verified)
 remote_proto = udp
 # your collector
 remote_host =
 remote_port = 514
+# tls only: CA that issued the collector's certificate
+remote_ca_file = /etc/ssl/certs/ca-certificates.crt
 # run on important events (%m %l %f)
 # notify_cmd =
 ```

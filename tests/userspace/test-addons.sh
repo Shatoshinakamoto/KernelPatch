@@ -27,8 +27,8 @@ addon_cc() { # out src extra-defines...
 		-DSSL_CONF="\"$T/logging.conf\"" -DSSL_DEF_DIR="\"$T/log\"" \
 		-DLOCUS_CLIENT_CONF="\"$T/locus-client.conf\"" -DSSADDON_EVIDENCE_ROOT="\"$T/evidence\"" \
 		-DSSADDON_SIGNING_KEY="\"$T/sign.pub\"" "$@" \
-		-o "$out" "$src" "$COMMON/ssaddon_log.c" "$COMMON/ssaddon_store.c" "$COMMON/ssaddon_conf.c" "$COMMON/ssaddon_trust.c" \
-		-lcrypto -lz 2> "$T/build.err"
+		-o "$out" "$src" "$COMMON/ssaddon_log.c" "$COMMON/ssaddon_tls.c" "$COMMON/ssaddon_store.c" "$COMMON/ssaddon_conf.c" "$COMMON/ssaddon_trust.c" \
+		-lssl -lcrypto -lz 2> "$T/build.err"
 }
 
 # ------------------------------------------------------------ ProcGuard

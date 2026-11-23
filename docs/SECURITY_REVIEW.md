@@ -1427,6 +1427,30 @@ and refuses a longer list with `E2BIG`, leaving the loaded list in force;
 `t_list_limits` checks one-over (refused, old list kept) and at-limit
 (loads) for every list. CWE-1284.
 
+### 79. Add-on logs could only leave the host unencrypted and unauthenticated, and a TCP collector restart stopped shipping for good (v8–v12, found 2026-11-23 while writing docs/configuration/) — SC-8 / SC-23 / AU-9(2)
+
+The `temporary/` add-ons ship their logs off-box through `ssaddon_log`, but
+only as plain UDP or TCP syslog: anyone on the path could read the records
+(which name quarantined files and host state), change them, or drop them,
+and could pose as the collector. The core daemon has had TLS since P1-2.
+The add-ons also connected once at start and never reconnected, so after a
+TCP collector restart nothing more was shipped until the add-on restarted,
+with no note anywhere. `remote_proto = tls` (new `ssaddon_tls.c`) now uses
+TLS 1.2 or newer, requires the collector's certificate to chain to
+`remote_ca_file` and to name `remote_host` (DNS with SNI, or IP), and times
+out connect, handshake and writes after 3 s. Before each write the
+connection is checked for a peer close, so a restarted collector is
+reconnected without losing the line; a collector that stays down is retried
+every 30 s, and the outage and the recovery are each written once to the
+local log. `check-config` refuses `tls` with a CA file that does not load.
+SIGPIPE is blocked around TLS writes, so a vanished collector cannot kill a
+guard. `tests/userspace/test-addon-log-tls.sh` (20 checks) covers delivery,
+an untrusted certificate, a wrong DNS name, a wrong IP, a dead and a
+returning collector, a collector restart, and plain TCP; mutation runs
+(verification off, host check off, peer-close check off) make it fail.
+Remaining: lines logged during an outage are only in the local log (no
+resend queue). CWE-319, CWE-295, CWE-297.
+
 ## Residual notes / assumptions
 
 * The model trusts root at install time: whoever runs `install.sh` and sets the

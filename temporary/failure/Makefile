@@ -6,9 +6,9 @@ CFLAGS   ?= -O2 -Wall -Wextra -Wformat -Werror=format-security
 CPPFLAGS += -I../common
 PREFIX   ?= /usr
 BINDIR   ?= $(PREFIX)/libexec/secure-sudo
-COMMON    = ../common/ssaddon_log.c ../common/ssaddon_conf.c
-HDRS      = ../common/ssaddon_log.h ../common/ssaddon_conf.h
-LDLIBS   :=
+COMMON    = ../common/ssaddon_log.c ../common/ssaddon_tls.c ../common/ssaddon_conf.c
+HDRS      = ../common/ssaddon_log.h ../common/ssaddon_tls.h ../common/ssaddon_conf.h
+LDLIBS   := -lssl -lcrypto
 BIN       = secure-sudo-addon-failure
 SRC       = failure.c
 
