@@ -965,7 +965,7 @@ stage_userspace() { # DIR
 	# scripts/: standalone TimeVault allowlist tool + admin detector. The CLI
 	# has both built in (secure-sudo vault-allow / detect-admins); these are
 	# the dependency-free bash equivalents.
-	for f in timevault-whitelist.sh detect-admin-gids.sh stig-harden.sh oscap-results.py; do
+	for f in timevault-whitelist.sh detect-admin-gids.sh stig-harden.sh oscap-results.py cis-nftables.sh; do
 		install -D -m0755 "$ROOT/scripts/$f" "$s/usr/libexec/secure-sudo/$f"
 	done
 	install -D -m0644 "$LSM_SRC/INTEGRATION.md" "$s/usr/share/doc/secure-sudo/INTEGRATION.md"
