@@ -27,9 +27,9 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 . "$ROOT/tests/lib/tap.sh"
 
 NET="$ROOT/userspace/daemon/helpers/apply-net.sh"
-if [ "$(id -u)" -ne 0 ] || ! command -v nft >/dev/null 2>&1 ||
+if [ "$(id -u)" -ne 0 ] || ! command -v nft >/dev/null 2>&1 || ! command -v ping >/dev/null 2>&1 ||
    ! ip netns add "ssnp-probe-$$" 2>/dev/null; then
-	skip "net policy tests need root, nft and network namespaces"
+	skip "net policy tests need root, nft, ping and network namespaces"
 	tap_done; exit 0
 fi
 ip netns del "ssnp-probe-$$"

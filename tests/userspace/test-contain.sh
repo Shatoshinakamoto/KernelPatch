@@ -144,7 +144,7 @@ if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null; then
 	check "account --terminate kills the processes and the sessions" sh -c \
 		"[ \"\$(pstate $M)\" = gone ] && grep -q 'loginctl terminate-user mallory' '$T/acct.log'"
 
-	if command -v nft >/dev/null && command -v unshare >/dev/null; then
+	if command -v nft >/dev/null && command -v unshare >/dev/null && command -v ping >/dev/null; then
 		echo "# network (root: real nftables in a throwaway namespace)"
 		unshare -n bash -c "
 			ip link set lo up
@@ -156,7 +156,7 @@ if [ "$(id -u)" -eq 0 ] && command -v setpriv >/dev/null; then
 		" 2> "$T/ns.err"; rc=$?
 		eq "real nft: table loads, loopback works, release removes it" "$rc" 0
 	else
-		skip "real nft in a namespace (needs nft and unshare)"
+		skip "real nft in a namespace (needs nft, unshare and ping)"
 	fi
 else
 	skip "account and real-nft cases (need root and setpriv)"
