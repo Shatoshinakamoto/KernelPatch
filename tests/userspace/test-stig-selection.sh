@@ -7,6 +7,7 @@
 # the script and run against a stub oscap and synthetic results, so no root and
 # no OpenSCAP are needed. The summary must list every rule that is not at pass
 # so a failed, errored or unchecked rule cannot be left out of the report.
+# shellcheck disable=SC2034  # variables are read by the functions taken from stig-harden.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
