@@ -427,6 +427,12 @@ static char *slurp_write(struct file *file, const char __user *ubuf,
 		return ERR_PTR(-EFAULT);
 	}
 	text[count] = '\0';
+	/* SECURITY: refuse a list longer than the kernel keeps (see
+	 * ss_list_entries) instead of silently dropping the rest. */
+	if (ss_list_entries(text) > HM_MAX_ENTRIES) {
+		kfree(text);
+		return ERR_PTR(-E2BIG);
+	}
 	return text;
 }
 

@@ -25,6 +25,8 @@
 #include <linux/lsm_hooks.h>
 #include <linux/kernel_read_file.h>
 #include <linux/version.h>
+#include <linux/ctype.h>
+#include <linux/string.h>
 #include <crypto/sha2.h>
 
 /* 6.17 replaced struct sha256_state with struct sha256_ctx in the
@@ -304,6 +306,33 @@ void ss_events_boot_id(char out[33]);
  * in ss_driver.c, shared with TimeVault. Returns 0 on success. */
 struct file;
 int ss_sha256_file(struct file *file, char *hex_out);
+
+/*
+ * Entries in a policy-list write: lines that are not blank or '#' comments,
+ * counted the way the list parsers skip them (strim, then '\0' or '#').
+ *
+ * SECURITY (CWE-1284): most list parsers stop reading at their limit. A
+ * write handler compares this count with that limit and refuses a longer
+ * list with -E2BIG, so a deny entry past the limit cannot be dropped
+ * silently; the list already loaded stays in force.
+ */
+static inline int ss_list_entries(const char *text)
+{
+	const char *p = text;
+	int n = 0;
+
+	while (*p) {
+		const char *nl = strchr(p, '\n');
+		const char *e = nl ? nl : p + strlen(p);
+
+		while (p < e && isspace((unsigned char)*p))
+			p++;
+		if (p < e && *p != '#')
+			n++;
+		p = nl ? nl + 1 : e;
+	}
+	return n;
+}
 
 /*
  * LSM task blob (#11 NodeJS guard). After LSM init, ss_blob_sizes.lbs_task

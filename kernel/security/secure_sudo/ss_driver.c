@@ -317,7 +317,7 @@ static int parse_policy(char *text, char ***phash, int *pnhash,
 {
 	char **hashes, **names;
 	char *p = text, *line;
-	int nh = 0, nn = 0;
+	int nh = 0, nn = 0, ret;
 
 	hashes = kcalloc(DRV_MAX_ITEMS, sizeof(*hashes), GFP_KERNEL);
 	names  = kcalloc(DRV_MAX_ITEMS, sizeof(*names), GFP_KERNEL);
@@ -331,12 +331,23 @@ static int parse_policy(char *text, char ***phash, int *pnhash,
 		line = strim(line);
 		if (*line == '\0' || *line == '#')
 			continue;
-		if (is_hex64(line) && nh < DRV_MAX_ITEMS) {
+		/* SECURITY: a deny entry past the limit used to be dropped
+		 * without an error (and a 257th hash was kept as a name);
+		 * refuse the whole write instead (CWE-1284). */
+		if (is_hex64(line)) {
+			if (nh >= DRV_MAX_ITEMS) {
+				ret = -E2BIG;
+				goto fail;
+			}
 			hashes[nh] = kstrdup(line, GFP_KERNEL);
 			if (!hashes[nh])
 				goto oom;
 			nh++;
-		} else if (nn < DRV_MAX_ITEMS) {
+		} else {
+			if (nn >= DRV_MAX_ITEMS) {
+				ret = -E2BIG;
+				goto fail;
+			}
 			names[nn] = kstrdup(line, GFP_KERNEL);
 			if (!names[nn])
 				goto oom;
@@ -347,9 +358,11 @@ static int parse_policy(char *text, char ***phash, int *pnhash,
 	*pname = names;  *pnname = nn;
 	return 0;
 oom:
+	ret = -ENOMEM;
+fail:
 	free_items(hashes, nh);
 	free_items(names, nn);
-	return -ENOMEM;
+	return ret;
 }
 
 static ssize_t drv_read(struct file *file, char __user *ubuf, size_t count,
@@ -396,10 +409,14 @@ static ssize_t drv_write(struct file *file, const char __user *ubuf,
 		kfree(text);
 		return -ENOMEM;
 	}
-	if (parse_policy(scratch, &nh_list, &nh, &nn_list, &nn)) {
-		kfree(scratch);
-		kfree(text);
-		return -ENOMEM;
+	{
+		int rc = parse_policy(scratch, &nh_list, &nh, &nn_list, &nn);
+
+		if (rc) {
+			kfree(scratch);
+			kfree(text);
+			return rc;
+		}
 	}
 	kfree(scratch);
 

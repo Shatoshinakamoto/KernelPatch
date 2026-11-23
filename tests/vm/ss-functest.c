@@ -859,6 +859,87 @@ static void t_setid_exec(void)
 	unlink("/bin/suidtest");
 }
 
+/*
+ * CWE-1284: a policy list longer than the kernel keeps is refused whole with
+ * E2BIG and the list already loaded stays in force; a list exactly at the
+ * limit loads. Before this, most parsers stopped at the limit without an
+ * error, so a deny entry past it silently did not apply.
+ */
+static char lim_buf[300 * 1024], lim_old[300 * 1024], lim_now[300 * 1024];
+
+static void lim_fill(int n, const char *fmt)
+{
+	size_t o = 0;
+	int i;
+
+	lim_buf[0] = '\0';
+	for (i = 0; i < n && o < sizeof(lim_buf) - 64; i++)
+		o += (size_t)snprintf(lim_buf + o, sizeof(lim_buf) - o, fmt, i);
+}
+
+static void t_list_limits(void)
+{
+	static const struct {
+		const char *name;
+		int max;
+		const char *fmt;
+	} L[] = {
+		{ "blacklist",             1024, "/nonexistent/bl%d\n" },
+		{ "tmp_exec_allow",        256,  "/tmp/allow%d\n" },
+		{ "node_allowed_children", 256,  "child%d\n" },
+		{ "node_sea_binaries",     256,  "/nonexistent/sea%d\n" },
+		{ "home_map",              4096, "%d /home/u\n" },
+		{ "home_write_allow",      4096, "/srv/w%d\n" },
+		{ "binvault_allow",        1024, "/opt/bv%d\n" },
+		{ "prguard_allow",         1024, "/usr/bin/pg%d\n" },
+		{ "tpm_openers",           64,   "/usr/bin/tpm%d\n" },
+		{ "driver_blacklist",      256,  "mod%d.ko\n" },
+	};
+	char path[128];
+	size_t i;
+	int r;
+
+	for (i = 0; i < sizeof(L) / sizeof(L[0]); i++) {
+		snprintf(path, sizeof(path), SECFS "%s", L[i].name);
+		if (rd(path, lim_old, sizeof(lim_old)) < 0) {
+			tap(0, "%s: read the current list", L[i].name);
+			continue;
+		}
+		lim_fill(L[i].max + 1, L[i].fmt);
+		r = wr(path, lim_buf);
+		tap(r == -E2BIG, "%s: %d entries (one over the limit) refused with E2BIG (got %d)",
+		    L[i].name, L[i].max + 1, r);
+		rd(path, lim_now, sizeof(lim_now));
+		tap(!strcmp(lim_now, lim_old), "%s: the list already loaded stays in force",
+		    L[i].name);
+		lim_fill(L[i].max, L[i].fmt);
+		r = wr(path, lim_buf);
+		tap(r == 0, "%s: exactly %d entries load (got %d)", L[i].name, L[i].max, r);
+		wr(path, lim_old[0] ? lim_old : "\n");
+	}
+
+	/* driver_blacklist keeps 256 hashes AND 256 names: a 257th hash used to
+	 * be kept as a name instead of being refused. */
+	{
+		size_t o = 0;
+		int k;
+
+		snprintf(path, sizeof(path), SECFS "driver_blacklist");
+		rd(path, lim_old, sizeof(lim_old));
+		for (k = 0; k < 257; k++)
+			o += (size_t)snprintf(lim_buf + o, sizeof(lim_buf) - o, "%064x\n", k + 1);
+		r = wr(path, lim_buf);
+		tap(r == -E2BIG, "driver_blacklist: 257 hashes refused with E2BIG (got %d)", r);
+		o = 0;
+		for (k = 0; k < 256; k++)
+			o += (size_t)snprintf(lim_buf + o, sizeof(lim_buf) - o, "%064x\nm%d.ko\n",
+					      k + 1, k);
+		r = wr(path, lim_buf);
+		tap(r == 0, "driver_blacklist: 256 hashes and 256 names load (got %d)", r);
+		wr(path, lim_old[0] ? lim_old : "\n");
+	}
+}
+
 static void t_blacklist(void)
 {
 	int r;
@@ -2357,6 +2438,7 @@ int main(int argc, char **argv)
 	t_cooldown();
 	t_node();
 	t_binvault();
+	t_list_limits();	/* before the lock: lists still writable */
 	t_radio();
 	t_concurrency();
 	t_events();

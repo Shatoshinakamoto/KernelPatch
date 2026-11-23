@@ -325,6 +325,13 @@ static ssize_t to_write(struct file *file, const char __user *ubuf,
 		return -EFAULT;
 	}
 	text[count] = '\0';
+
+	/* SECURITY: refuse a list longer than the kernel keeps (see
+	 * ss_list_entries) instead of silently dropping the rest. */
+	if (ss_list_entries(text) > TO_MAX_ITEMS) {
+		kfree(text);
+		return -E2BIG;
+	}
 	rc = to_set(text, count);
 	if (rc)
 		return rc;
