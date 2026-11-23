@@ -112,6 +112,34 @@ refute "OSB-15: the -config helper is never offered" grep -q "python3.12-config"
 fresh; out="$(PATH="$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
 refute "OSB-15: silent when the AppArmor tools are absent or work" grep -q "OSB-15" <<<"$out"
 
+# OSB-23: /etc/nftables.conf "flush ruleset" deletes secure_sudo's table on
+# every load. Only the file's own tables may be reset.
+nftconf() { printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\ntable inet filter {\n\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tiif "lo" accept\n\t\ttcp dport 22 accept\n\t}\n}\ntable filter {\n\tchain c {\n\t}\n}\n'; }
+fresh; nftconf > "$T/r/etc/nftables.conf"; out="$(run)"
+refute "OSB-23: no 'flush ruleset' is left" grep -qE '^[[:space:]]*flush[[:space:]]+ruleset' "$T/r/etc/nftables.conf"
+check "OSB-23: the file's inet table is reset by name" bash -c "grep -qx 'delete table inet filter' '$T/r/etc/nftables.conf'"
+check "OSB-23: a table without a family is reset as ip" bash -c "grep -qx 'delete table ip filter' '$T/r/etc/nftables.conf'"
+check "OSB-23: the rules themselves are kept" grep -q 'tcp dport 22 accept' "$T/r/etc/nftables.conf"
+check "OSB-23: backup kept and reported" bash -c "test -f '$T/r/etc/nftables.conf.pre-patch' && grep -q 'OSB-23 fixed' <<<\"\$1\"" _ "$out"
+cp "$T/r/etc/nftables.conf" "$T/nft1"; run >/dev/null
+check "OSB-23: a second run changes nothing" cmp -s "$T/nft1" "$T/r/etc/nftables.conf"
+if command -v nft >/dev/null && [ "$(id -u)" -eq 0 ] && unshare -n true 2>/dev/null; then
+	check "OSB-23: the rewritten file passes nft -c" unshare -n nft -c -f "$T/r/etc/nftables.conf"
+	keep() { unshare -n sh -c 'nft add table inet secure_sudo && nft -f "$1" && nft -f "$1" && nft list table inet secure_sudo' _ "$1" >/dev/null 2>&1; }
+	refute "OSB-23: the original file deletes the secure_sudo table (the bug)" keep "$T/r/etc/nftables.conf.pre-patch"
+	check "OSB-23: loading the rewritten file twice keeps the secure_sudo table" keep "$T/r/etc/nftables.conf"
+else
+	skip "OSB-23: real nft load (needs root, nft and unshare)"
+fi
+fresh; nftconf > "$T/r/etc/nftables.conf"; cp "$T/r/etc/nftables.conf" "$T/nft0"; mkdir -p "$T/badnft"
+printf '#!/bin/sh\nexit 1\n' > "$T/badnft/nft"; chmod +x "$T/badnft/nft"
+out="$(PATH="$T/badnft:$T/bin:$PATH" STIG_ROOT="$T/r" bash "$T/pp.sh" 2>&1)"
+check "OSB-23: a rewrite that fails nft -c restores the original" cmp -s "$T/nft0" "$T/r/etc/nftables.conf"
+check "OSB-23: ... and says so, not fixed" grep -q "failed nft -c; original restored" <<<"$out"
+fresh; printf 'flush ruleset\ninclude "/etc/nftables.d/*.nft"\n' > "$T/r/etc/nftables.conf"; cp "$T/r/etc/nftables.conf" "$T/nft0"; out="$(run)"
+check "OSB-23: a file that defines no table is left alone for review" cmp -s "$T/nft0" "$T/r/etc/nftables.conf"
+check "OSB-23: ... and that is reported" grep -q "defines no table; left as is" <<<"$out"
+
 # Package-install drift (OSB-07 with OSB-06): the rsyslog install that
 # post_patch itself performs creates a world-readable log. The OSB-07 step
 # runs after it, so the new file is tightened in the same run.

@@ -388,6 +388,38 @@ post_patch() {
 		fi
 	fi
 
+	# OSB-23: /etc/nftables.conf as Ubuntu ships it (and as CIS enables it
+	# through nftables.service) starts with "flush ruleset". Every load of it
+	# (boot, "systemctl restart nftables", a CIS fix) deletes EVERY table,
+	# including secure_sudo's "inet secure_sudo" network-mode table, which is
+	# then missing until the daemon's next refresh. Replace it with a reset of
+	# only the tables the file defines ("table F N" + "delete table F N" works
+	# whether or not the table exists). Checked with nft -c when nft is there;
+	# on failure the original is restored. Backup kept as .pre-patch.
+	f="$R/etc/nftables.conf"
+	if [ -f "$f" ] && grep -qE '^[[:space:]]*flush[[:space:]]+ruleset[[:space:]]*(;|#|$)' "$f"; then
+		local tabs reset
+		tabs="$(sed -n -E 's/^[[:space:]]*table[[:space:]]+([a-z0-9]+[[:space:]]+)?([A-Za-z0-9_.-]+)[[:space:]]*\{.*/\1\2/p' "$f" |
+			awk 'NF==1{print "ip " $1; next} {print $1 " " $2}' | awk '!seen[$0]++')"
+		if [ -z "$tabs" ]; then
+			info "  OSB-23: $f flushes the whole ruleset but defines no table; left as is, review by hand"
+		else
+			reset="$(printf '%s\n' "$tabs" | awk '{printf "table %s %s\\ndelete table %s %s\\n", $1, $2, $1, $2}')"
+			cp -p "$f" "$f.pre-patch"
+			python3 -I -c 'import re,sys
+p,r=sys.argv[1],sys.argv[2].replace("\\n","\n")
+s=open(p).read()
+s=re.sub(r"(?m)^[ \t]*flush[ \t]+ruleset[ \t]*;?[ \t]*(#.*)?$","# OSB-23: was \"flush ruleset\"; only this file'"'"'s tables are reset\n"+r.rstrip("\n"),s)
+open(p,"w").write(s)' "$f" "$reset"
+			if ! command -v nft >/dev/null || nft -c -f "$f" >/dev/null 2>&1; then
+				info "  OSB-23 fixed: $f no longer flushes other tables (backup $f.pre-patch)"
+			else
+				cp -p "$f.pre-patch" "$f"
+				info "  OSB-23: rewritten $f failed nft -c; original restored"
+			fi
+		fi
+	fi
+
 	# OSB-07: log-file permission drift. Package installs (including the ones
 	# remediation itself performs) create new logs with wider modes, so this
 	# runs LAST, after every install, right before the final scan.

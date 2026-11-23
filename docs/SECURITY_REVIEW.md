@@ -1476,3 +1476,17 @@ the collector and in health). Documented in [EVENTS.md](EVENTS.md).
 6. **Tests.** `tests/userspace/test-gui.sh` (40 checks over real HTTP) and the
    admin-mode paths in `test-addons.sh`.
 
+
+### 76. Loading the stock nftables.conf deleted secure_sudo's network-mode table (v8–v12, found 2026-11-23 by P3-2) — SC-7 / CM-7
+
+Ubuntu's `/etc/nftables.conf` starts with `flush ruleset`. Every load of it
+(boot, `systemctl restart nftables`, CIS's nftables fixes, which enable the
+service) deleted every table, `inet secure_sudo` included, so `lan-only` or
+`public-only` was off until the daemon's next refresh. Shown with the stock
+file in a network namespace. `scripts/stig-harden.sh` now rewrites the line to
+reset only the tables the file defines, checks the result with `nft -c`, and
+restores the original on failure (OSB-23). CONFIGURATION.md tells operators to
+do the same in their own firewall files. Tested by `test-stig-patches.sh`,
+which loads both files with real nft. Still open: a host that loads such a file
+without running `stig-harden.sh`. The daemon's refresh is the only defence
+there, and it leaves a window of up to one refresh interval.
