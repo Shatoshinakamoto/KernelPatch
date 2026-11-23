@@ -15,7 +15,7 @@ findings without CVE IDs, so none are given; no scores are invented.
 - **Affected:** `userspace/config/secure-sudo.conf` (template only).
 - **What changed:** every example comment is on its own line, and the template says that a `#` after a value is part of the value. `pheonixbox.conf` now shows `trust = local|signed` and its fail-secure handling.
 - **Why it is secure now:** uncommenting an example line gives the value it shows, so log forwarding over TLS and alerting work as configured (NIST CM-6, AU-4(1)).
-- **Verification:** `tests/userspace/test-cli.sh` (the shipped config passes lint with 0 errors and 0 warnings) and `tests/userspace/test-config-docs.sh`. HistoryTest runs listed in the PR.
+- **Verification:** `tests/userspace/test-cli.sh` (the shipped config passes lint with 0 errors and 0 warnings) and `tests/userspace/test-config-docs.sh`. HistoryTest: `runs/2026-11-23_211054Z_unit-config-docs_6544e45` (14/0), `runs/2026-11-23_211056Z_unit-cli_6544e45` (169/0), `runs/2026-11-23_211103Z_unit-pheonixbox_6544e45` (61 ok, 2 skipped), `runs/2026-11-23_211112Z_gate-lint_6544e45` (pass).
 
 ## 2026-11-23 — nftables.service stop deleted secure_sudo's network-mode table
 - **Type:** patch

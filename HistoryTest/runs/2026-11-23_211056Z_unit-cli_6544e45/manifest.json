@@ -1,0 +1,26 @@
+{
+  "area": "unit-cli",
+  "commit": "6544e45",
+  "date": "2026-11-23T21:10:56+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "7dbf9a8aa34b8ea3a97f6452b3091ecdaeaece1fc2cde5f9089d4613675f62a2",
+    "command.txt": "8b9df6d4dc6a2e3af28b28346749d892ae2131adf756744711d6e46d0c92ce1c",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "0fceca76dcd342682749fee78113647a80cb6454e382bab14c5e98b7180b00d6",
+    "results/tap-summary.txt": "035f4f770dc9da3901adde9598390952dce0b353ca4fceb8a85f50ee8349b0a1"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "703a478592cf9a1a56011178b1561415897c3ab2d8b00cdbee94ef601d6ddf3b",
+  "previous_run": "2026-11-23_211054Z_unit-config-docs_6544e45",
+  "run_id": "2026-11-23_211056Z_unit-cli_6544e45",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 169,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu), no root kernel"
+}
