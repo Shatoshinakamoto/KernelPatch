@@ -1,0 +1,23 @@
+{
+  "area": "vm-osb24",
+  "commit": "8d432e8",
+  "date": "2026-11-23T13:45:51+00:00",
+  "files": {
+    "RUN.md": "32c057938a5d4566dd5468665392bcdb520cfd2b526166aa76d4fe0e7f8aa906",
+    "command.txt": "f54455b80016baa5ab153854469bc82d5d6cd9b183231db61460f95fd211dad9",
+    "environment.md": "272347beb73bc2bfaaa83cdb49daf956f66c188d0d9f708f1263fd679f15cc7d",
+    "results/osb24.tap": "c887cbd6c8837f983a803bcb2bd0b6299c54a1f1a4dcfdb7208cb2679448761c"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "5e025bbe269e2bcf83c997b05807b44713b88ed43c1a77e2f8ef5036c47a9272",
+  "previous_run": "2026-11-23_133808Z_gate-lint_24d1c85",
+  "run_id": "2026-11-23_134551Z_vm-osb24_8d432e8",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "PC Docker container (QEMU TCG, no KVM), Ubuntu 24.04 guest"
+}

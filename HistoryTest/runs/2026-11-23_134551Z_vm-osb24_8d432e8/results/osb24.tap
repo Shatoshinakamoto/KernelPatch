@@ -1,0 +1,32 @@
+ok 1 - fresh guest boots
+ok 2 - install-kernel + userspace succeed
+ok 3 - trial boot verified and committed
+ok 4 - running 6.12.114-secure-sudo
+ok 5 - nftables installed
+ok 6 - net_mode lan-only: table=loaded, inet secure_sudo present
+ok 7 - cis-nftables.sh --apply exits 0
+ok 8 - after --apply both inet filter and inet secure_sudo are present
+ok 9 - the drop-in /etc/systemd/system/nftables.service.d/secure-sudo-keep-tables.conf exists
+ok 10 - systemctl cat nftables shows the drop-in
+ok 11 - the effective ExecStop no longer flushes the ruleset
+ok 12 - before-reboot: right after systemctl restart nftables both tables are present
+ok 13 - before-reboot: right after systemctl stop + start nftables both tables are present
+ok 14 - before-reboot: while nftables is stopped inet secure_sudo stays
+ok 15 - before-reboot: SSH still works
+ok 16 - guest reboots
+ok 17 - after the reboot: 6.12.114-secure-sudo running, both tables present
+ok 18 - after-reboot: right after systemctl restart nftables both tables are present
+ok 19 - after-reboot: right after systemctl stop + start nftables both tables are present
+ok 20 - after-reboot: while nftables is stopped inet secure_sudo stays
+ok 21 - after-reboot: SSH still works
+1..21
+
+# Guest evidence
+# drop-in (-rw-r--r-- root root 285):
+#   [Service]
+#   ExecStop=
+#   ExecStop=-/usr/sbin/nft delete table inet filter
+# systemctl show -p ExecStop nftables:
+#   argv[]=/usr/sbin/nft delete table inet filter ; ignore_errors=yes
+# Table checks ran immediately after each systemctl call (no wait for the
+# daemon's 15 s refresh), so the table was kept, not re-applied.

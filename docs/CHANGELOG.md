@@ -14,7 +14,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 - 2026-11-22: `ci/publish-release.sh`: GitHub Releases are built locally and uploaded with `gh`, as drafts unless `--publish` is given (#49).
 
 ### Fixed
-- 2026-11-23: `systemctl restart nftables` deleted secure_sudo's network-mode table (vendor `ExecStop=nft flush ruleset`). Fixed with a drop-in, OSB-24 (#59).
+- 2026-11-23: `systemctl restart nftables` deleted secure_sudo's network-mode table (vendor `ExecStop=nft flush ruleset`). Fixed with a drop-in, OSB-24 (#59). VM-verified 21/21 (`HistoryTest/runs/2026-11-23_134551Z_vm-osb24_8d432e8/`).
 - 2026-11-23: the stock `/etc/nftables.conf` `flush ruleset` deleted secure_sudo's table on every load. It now resets only its own tables, OSB-23 (#57).
 - 2026-11-23: the build-gate record's `source_tree_sha256` and package came from the gate's build directory. They now come from a pristine copy. Header trees older than 6.11 are reported as unsupported instead of failing the gate (#54).
 - 2026-11-23: network-namespace tests skip instead of falsely failing without `ping`, and the builder prerequisites are documented (#53).
