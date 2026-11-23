@@ -87,6 +87,8 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_213450Z_gate-lint_4b76813`](runs/2026-11-23_213450Z_gate-lint_4b76813/RUN.md) | 2026-11-23T21:34:50+00:00 | gate-lint | `4b76813` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
+| [`2026-11-23_213440Z_unit-config-docs_4b76813`](runs/2026-11-23_213440Z_unit-config-docs_4b76813/RUN.md) | 2026-11-23T21:34:40+00:00 | unit-config-docs | `4b76813` | **pass** | cloud container (Ubuntu) | 25 / 0 / 0 |
 | [`2026-11-23_213003Z_gate-lint_cc21580`](runs/2026-11-23_213003Z_gate-lint_cc21580/RUN.md) | 2026-11-23T21:30:03+00:00 | gate-lint | `cc21580` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
 | [`2026-11-23_212221Z_suite_cc21580`](runs/2026-11-23_212221Z_suite_cc21580/RUN.md) | 2026-11-23T21:22:21+00:00 | suite | `cc21580` | **fail** | cloud container (Ubuntu); this sandbox puts a refusing rm wrapper first in PATH | 1349 / 2 / 6 |
 | [`2026-11-23_212216Z_unit-config-docs_cc21580`](runs/2026-11-23_212216Z_unit-config-docs_cc21580/RUN.md) | 2026-11-23T21:22:16+00:00 | unit-config-docs | `cc21580` | **pass** | cloud container (Ubuntu) | 20 / 0 / 0 |
