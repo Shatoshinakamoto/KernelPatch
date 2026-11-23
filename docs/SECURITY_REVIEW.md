@@ -1490,3 +1490,16 @@ do the same in their own firewall files. Tested by `test-stig-patches.sh`,
 which loads both files with real nft. Still open: a host that loads such a file
 without running `stig-harden.sh`. The daemon's refresh is the only defence
 there, and it leaves a window of up to one refresh interval.
+
+### 77. `systemctl restart nftables` deleted secure_sudo's network-mode table (v8–v12, found 2026-11-23 by the P3-2 CIS VM run) — SC-7 / CM-7
+
+#76 fixed the `flush ruleset` in `/etc/nftables.conf`, but Ubuntu 24.04's
+`nftables.service` also stops with `ExecStop=/usr/sbin/nft flush ruleset`, and
+a restart runs stop first. In the CIS Level 2 VM run (main e6aacc7) both
+tables were present under `lan-only` and after a reboot, but every
+`systemctl restart nftables` left only `inet filter`. A drop-in
+(`nftables.service.d/secure-sudo-keep-tables.conf`) now clears that ExecStop
+and deletes only the tables the CIS file defines. `cis-nftables.sh --apply`
+installs it, and `stig-harden.sh` installs it when the vendor unit flushes
+(OSB-24). Tested with real nft: the vendor stop deletes the table and the
+drop-in stop keeps it. The fix has not yet been re-checked in the VM.

@@ -442,8 +442,12 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     firewall ownership model. The model (owner's choice 2026-11-23:
     coexist, separate tables) is built: `scripts/cis-nftables.sh` and
     `stig-harden.sh --cis-firewall`, tested with real nft and TCP in
-    `test-cis-firewall.sh`. Still to do: a CIS Level 2 VM run with
-    `--cis-firewall` and no firewall `--skip-rules`. Still open: OSB-17 (needs a real host), the CIS gate and target-host scans beyond Ubuntu 24.04.
+    `test-cis-firewall.sh`. CIS Level 2 VM run with `--cis-firewall` and no
+    `--skip-rules` (2026-11-23, docs/vm/results/13-pc-cis-l2-2026-11-23):
+    441 pass / 9 fail / 0 error / 0 unknown, the 9 being site decisions
+    (GRUB password, separate partitions, sshd allow list); no firewall rule
+    fails under lan-only. It found OSB-24 (nftables.service ExecStop flushes
+    every table), fixed by a drop-in; a VM re-check of that fix is still to do. Still open: OSB-17 (needs a real host), the CIS gate and target-host scans beyond Ubuntu 24.04.
   - Keep OSB-03..07 and OSB-15..18 regression tests: deliberately recreate
     each reproducible bug, run the relevant patch/remediation, and assert the
     exact expected rule result. Add tests for package-install permission

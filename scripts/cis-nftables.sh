@@ -18,6 +18,11 @@
 #     loosen the other.
 #   * The file never says "flush ruleset" (OSB-23): it resets only its own
 #     table, so loading it never removes secure_sudo's.
+#   * Ubuntu's nftables.service also runs "nft flush ruleset" as ExecStop,
+#     so "systemctl restart nftables" deleted secure_sudo's table even with a
+#     clean file (OSB-24, found by the CIS VM run on 2026-11-23). --apply
+#     installs a drop-in that replaces that ExecStop with a delete of only
+#     "inet filter".
 #
 # Usage:
 #   cis-nftables.sh [--allow-tcp PORT]... [--forward drop|established]
@@ -29,13 +34,19 @@
 #   --print         write the ruleset to stdout (default)
 #   --out FILE      write it to FILE
 #   --apply         write /etc/nftables.conf (backup .pre-cis), check with
-#                   nft -c, load it, enable nftables.service. Root only.
+#                   nft -c, load it, install the nftables.service drop-in
+#                   (OSB-24), enable nftables.service. Root only.
+#   --print-dropin  write that drop-in to stdout
 # Environment (tests): SS_CIS_NFT_CONF overrides /etc/nftables.conf,
-# SS_CIS_SSH_PORTS overrides the sshd port lookup.
+# SS_CIS_SSH_PORTS overrides the sshd port lookup, SS_CIS_UNIT_DIR overrides
+# /etc/systemd/system (where the nftables.service drop-in goes), and
+# SS_CIS_NO_SYSTEMCTL=1 skips daemon-reload and enable (tests only).
 set -euo pipefail
 
 PORTS=(); FWD=established; ACTION=print; OUT=""
 CONF="${SS_CIS_NFT_CONF:-/etc/nftables.conf}"
+UNITDIR="${SS_CIS_UNIT_DIR:-/etc/systemd/system}"
+DROPIN="$UNITDIR/nftables.service.d/secure-sudo-keep-tables.conf"
 die() { echo "cis-nftables: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -45,7 +56,8 @@ while [ $# -gt 0 ]; do
 	--print)     ACTION=print; shift ;;
 	--out)       ACTION=out; OUT="${2:?}"; shift 2 ;;
 	--apply)     ACTION=apply; shift ;;
-	-h|--help)   sed -n '3,36p' "$0"; exit 0 ;;
+	--print-dropin) ACTION=dropin; shift ;;
+	-h|--help)   sed -n '3,42p' "$0"; exit 0 ;;
 	*) die "unknown argument $1" ;;
 	esac
 done
@@ -96,8 +108,25 @@ RULES
 RULES
 }
 
+# dropin: the nftables.service override (OSB-24). Output only; no side effects.
+# SECURITY (NIST SC-7, CM-7): an empty "ExecStop=" removes the vendor's
+# "nft flush ruleset", which deleted every table on stop or restart, including
+# secure_sudo's network-mode table. The replacement deletes only the table this
+# file owns; "-" ignores "no such table" so a stop never fails because of it.
+dropin() {
+	cat <<'UNIT'
+# Installed by secure_sudo scripts/cis-nftables.sh (OSB-24). Ubuntu's unit
+# stops with "nft flush ruleset", which also deletes secure_sudo's
+# "inet secure_sudo" network-mode table. Stop removes only the CIS table.
+[Service]
+ExecStop=
+ExecStop=-/usr/sbin/nft delete table inet filter
+UNIT
+}
+
 case "$ACTION" in
 print) ruleset ;;
+dropin) dropin ;;
 out)   ruleset > "$OUT" ;;
 apply)
 	[ "$(id -u)" -eq 0 ] || die "--apply needs root"
@@ -108,7 +137,14 @@ apply)
 	[ -f "$CONF" ] && cp -p "$CONF" "$CONF.pre-cis"
 	install -m 0644 "$tmp" "$CONF"
 	nft -f "$CONF" || { [ -f "$CONF.pre-cis" ] && cp -p "$CONF.pre-cis" "$CONF"; echo "cis-nftables: load failed; previous file restored" >&2; exit 1; }
-	if command -v systemctl >/dev/null 2>&1; then systemctl enable nftables.service >/dev/null 2>&1 || echo "cis-nftables: could not enable nftables.service" >&2; fi
+	# SECURITY: the drop-in keeps "systemctl stop|restart nftables" from
+	# deleting secure_sudo's table (OSB-24). Written atomically, mode 0644.
+	install -d -m 0755 "$(dirname "$DROPIN")"
+	dropin > "$DROPIN.tmp" && chmod 0644 "$DROPIN.tmp" && mv -f "$DROPIN.tmp" "$DROPIN"
+	if [ "${SS_CIS_NO_SYSTEMCTL:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1; then
+		systemctl daemon-reload >/dev/null 2>&1 || echo "cis-nftables: systemctl daemon-reload failed; the drop-in applies after the next reload" >&2
+		systemctl enable nftables.service >/dev/null 2>&1 || echo "cis-nftables: could not enable nftables.service" >&2
+	fi
 	echo "cis-nftables: inet filter loaded from $CONF (inbound tcp: $tcp, forward: $FWD)"
 	;;
 esac
