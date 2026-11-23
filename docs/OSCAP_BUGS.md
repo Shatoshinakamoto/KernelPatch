@@ -113,8 +113,12 @@ lists every rule not at pass. Since 2026-11-23 they also cover OSB-15 (the AppAr
 reported with the exact command and nothing is enforced) and OSB-18 (the
 profile message). OSB-16's `--skip-rules` stripping is covered by
 `tests/oscap/test-oscap-results.sh`. OSB-17 is environment-only (stacked
-container tmpfs) and needs a real host. Package-install drift is not covered
-yet.
+container tmpfs) and needs a real host. Package-install drift is covered too: the rsyslog install
+that `post_patch` performs creates a 0644 log, and the test asserts the OSB-07
+step tightens it in the same run, and that the remediation flow runs every pass,
+then `post_patch`, then the final scan, with no package install after
+`post_patch`. Checked by mutation: moving OSB-07 before the install, or the
+final scan before `post_patch`, fails the test.
 
 Full scan after the patch run: **61 pass / 1 fail / 1 error / 164 not
 applicable / 3 not checked**, matching the best result.
