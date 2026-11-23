@@ -1,0 +1,23 @@
+{
+  "area": "vm-cis",
+  "commit": "e6aacc7",
+  "date": "2026-11-23T11:17:00+00:00",
+  "files": {
+    "RUN.md": "d0a05422f2a10443b53963c053f2331a0bebf87bd1912a8886d888bdd85ecc62",
+    "command.txt": "5cc0621cc2e385706112c6b4142165cd37706d9c0aacea7fb36953256bbae6a9",
+    "environment.md": "d32889a5c7a3d98d769ebee5d42574b1b42250163a9c07699ef3c0f253e13179",
+    "results/cis-summary.txt": "eda35db7afdc3bbdfac9c42de736a452424c9f4bcf3c66e76e4f50411d32e90a"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "8cfda3326277a70092cd3f4c0322a94f97848eebfbc5ec4ca14a47d9ff50771b",
+  "previous_run": "2026-11-23_133726Z_vm-regression_4885cdc",
+  "run_id": "2026-11-23_133727Z_vm-cis_e6aacc7",
+  "schema": 1,
+  "tap": {
+    "not_ok": 2,
+    "ok": 15,
+    "skipped": 0
+  },
+  "verdict": "partial",
+  "where": "owner PC (Docker, QEMU TCG)"
+}

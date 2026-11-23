@@ -1,0 +1,23 @@
+{
+  "area": "vm-regression",
+  "commit": "4885cdc",
+  "date": "2026-11-23T07:55:00+00:00",
+  "files": {
+    "RUN.md": "5b03e86dae71e1b6762e51a8f6bb8d15932ff7cf4efa935667a2236f9f469df7",
+    "command.txt": "2dcdc3aff8d1e3601257876de37a42c1337b8cf49147aa4aa1589ce38d413167",
+    "environment.md": "d32889a5c7a3d98d769ebee5d42574b1b42250163a9c07699ef3c0f253e13179",
+    "results/reg-results.txt": "eb2559264bc0192280fc41984d290d7b2fb1dbfb0af175e85c94982f41a640aa"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "163117084639ac94839f846c379dcc5b51f1782c2f759b66492d71212e52603d",
+  "previous_run": "2026-11-23_133652Z_gate_4885cdc",
+  "run_id": "2026-11-23_133726Z_vm-regression_4885cdc",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "owner PC (Docker, QEMU TCG)"
+}

@@ -1,0 +1,24 @@
+ok 1 - datastream: the exact release is chosen
+ok 2 - datastream: an unknown release falls back to the newest of the family
+ok 3 - datastream: debian uses the major version
+ok 4 - datastream: no content for the distro gives nothing
+ok 5 - profile: the DISA STIG wins
+ok 6 - profile: without a STIG, CIS level 2 wins
+ok 7 - profile: only the standard baseline is used when nothing else exists
+ok 8 - profile: stig is preferred over stig_gui
+ok 9 - profile: an unknown profile is never picked silently
+ok 10 - profile: a name that merely starts with stig does not match
+ok 11 - OSB-18: a STIG profile is reported as the DISA STIG
+ok 12 - OSB-18: a forced CIS profile says it was chosen
+ok 13 - OSB-18: ... and does not claim there is no STIG
+ok 14 - OSB-18: a fallback picked by the script says there is no STIG
+ok 15 - summary: written
+ok 16 - summary: mode 0600
+ok 17 - summary: before and after tallies are both present
+ok 18 - summary: lists 'fail | b'
+ok 19 - summary: lists 'error | d'
+ok 20 - summary: lists 'notchecked | e'
+ok 21 - summary: lists 'unknown | f'
+ok 22 - summary: a rule at pass is not listed as a problem
+ok 23 - summary: a fixed rule is not listed
+1..23

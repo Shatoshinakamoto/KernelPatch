@@ -1,0 +1,23 @@
+{
+  "area": "gate",
+  "commit": "4885cdc",
+  "date": "2026-11-23T03:44:30+00:00",
+  "files": {
+    "RUN.md": "3a504c3a357618c4e1321dff2b4a96ae8ebc13201d56dda8f25748ac7ead1d5c",
+    "command.txt": "a3ceab31d1e747fb2e05cba8256b3c1472234a34864a3ea84841c8186353f798",
+    "environment.md": "d32889a5c7a3d98d769ebee5d42574b1b42250163a9c07699ef3c0f253e13179",
+    "results/gate-results.txt": "222396bd44a7f6ee34e6b1bf5134f19d919da50047e620e66e711ca927bc02ae"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "ecefd7b02493c1fb412d8f87d3169d1c042601b4cb9a93b8046f6aedb2acd6cb",
+  "previous_run": "2026-11-23_133555Z_unit-stig-selection_3ff68f6",
+  "run_id": "2026-11-23_133652Z_gate_4885cdc",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "owner PC (Docker, kp-vm)"
+}

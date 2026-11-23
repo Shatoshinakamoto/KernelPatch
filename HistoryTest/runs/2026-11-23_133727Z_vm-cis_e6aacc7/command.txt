@@ -1,0 +1,9 @@
+On the owner's PC (kp-vm), main e6aacc7, fresh Ubuntu 24.04 guest set up like run-stig-test.sh,
+kernel 6.12.114-secure-sudo reused from the 4885cdc build (kernel/ unchanged):
+  install + trial boot + commit; apt install openscap-scanner nftables; SSG 0.1.78 datastream (pinned)
+  secure-sudo net monitor
+  bash scripts/stig-harden.sh --remediate --yes --profile xccdf_org.ssgproject.content_profile_cis_level2_server --cis-firewall
+  secure-sudo net lan-only   (wait for table=loaded)
+  bash scripts/stig-harden.sh --scan --profile xccdf_org.ssgproject.content_profile_cis_level2_server
+  systemctl restart nftables; nft list tables
+  reboot; SSH; nft list tables; systemctl restart nftables; nft list tables

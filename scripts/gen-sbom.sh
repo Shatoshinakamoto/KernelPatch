@@ -39,7 +39,7 @@ done
 # inputs. Sorted with LC_ALL=C so the hash is stable across machines.
 list_sources() {
 	(cd "$ROOT" && find . -type f \
-		! -path './.git/*' ! -path './docs/stig/results/*' ! -name 'build-gate-record.txt' \
+		! -path './.git/*' ! -path './HistoryTest/*' ! -path './docs/stig/results/*' ! -name 'build-gate-record.txt' \
 		! -name '*.o' ! -name '*.so' ! -name '*.ko' ! -name '*.html' \
 		! -path './userspace/cli/secure-sudo' ! -path './userspace/daemon/secure-sudod' \
 		! -path './userspace/otp/secure-sudo-otp' \

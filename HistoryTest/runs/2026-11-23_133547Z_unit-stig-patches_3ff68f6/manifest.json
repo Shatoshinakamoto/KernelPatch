@@ -1,0 +1,26 @@
+{
+  "area": "unit-stig-patches",
+  "commit": "3ff68f6",
+  "date": "2026-11-23T13:35:47+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "f4941185a352a6162fe56e74669243415da24ad0c25cefcf3e8483c0c98f2a1a",
+    "command.txt": "3b47dc1a5e519027b949630cb8ecb30f856a909715ec03fb2f0a72a46502bb49",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "69d801ff3d99c6497734481e63b36792d2234a869e8d1a0a7e168a78d5652995",
+    "results/tap-summary.txt": "aca5c16f758502c2b3219a0db9a4863fba150468159701e6999187c9a08d5a39"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "0238374e59324192680d7223ba824b9569ce586ea972e0f6961a9ef422d99d00",
+  "previous_run": "2026-11-23_133545Z_unit-history-test_3ff68f6",
+  "run_id": "2026-11-23_133547Z_unit-stig-patches_3ff68f6",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 63,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu 24.04, root, no KVM)"
+}

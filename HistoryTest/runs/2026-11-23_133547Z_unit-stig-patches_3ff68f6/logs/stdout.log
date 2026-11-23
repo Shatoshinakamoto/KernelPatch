@@ -1,0 +1,64 @@
+ok 1 - OSB-03: the token in ssh_confirm.sh becomes newlines
+ok 2 - OSB-03: no token is left in issue.net
+ok 3 - OSB-03: issue.net now has two lines
+ok 4 - OSB-03: backups are kept
+ok 5 - OSB-03: the repaired script passes bash -n
+ok 6 - OSB-03: reported as fixed
+ok 7 - second run changes nothing (idempotent)
+ok 8 - second run reports no fix
+ok 9 - OSB-03: a repair that fails bash -n restores the original
+ok 10 - OSB-03: the failure is reported, not counted as fixed
+ok 11 - OSB-04: retry = 3 is set once
+ok 12 - OSB-04: other settings are kept
+ok 13 - OSB-04: a missing retry line is added
+ok 14 - OSB-04: an existing retry value is not overridden
+ok 15 - OSB-05: the mapping is added to the domain section
+ok 16 - OSB-05: sssd.conf is 0600
+ok 17 - OSB-05: backup kept
+ok 18 - OSB-05: second run does not add it again
+ok 19 - OSB-05: no domain section means no change
+ok 20 - OSB-06: chgrp syslog runs on /var/log when the group exists
+ok 21 - OSB-06: nothing is installed when the group exists
+ok 22 - OSB-06: rsyslog is installed when the group is missing
+ok 23 - OSB-20: the audit directory is tightened to 0700
+ok 24 - OSB-20: with another log_group it is left alone
+ok 25 - OSB-07: a 0666 log becomes 0640 (u-x,g-wx,o-rwx)
+ok 26 - OSB-07: a 0644 log in a subdirectory becomes 0640 or stricter
+ok 27 - OSB-07: a 0640 log is untouched
+ok 28 - OSB-07: the number of files tightened is reported
+ok 29 - OSB-15: the import failure under the default python3 is reported
+ok 30 - OSB-15: the working interpreter and the exact command are printed
+ok 31 - OSB-15: nothing is enforced (advise only)
+ok 32 - OSB-15: the -config helper is never offered
+ok 33 - OSB-15: silent when the AppArmor tools are absent or work
+ok 34 - OSB-23: no 'flush ruleset' is left
+ok 35 - OSB-23: the file's inet table is reset by name
+ok 36 - OSB-23: a table without a family is reset as ip
+ok 37 - OSB-23: the rules themselves are kept
+ok 38 - OSB-23: backup kept and reported
+ok 39 - OSB-23: a second run changes nothing
+ok 40 - OSB-23: the rewritten file passes nft -c
+ok 41 - OSB-23: the original file deletes the secure_sudo table (the bug)
+ok 42 - OSB-23: loading the rewritten file twice keeps the secure_sudo table
+ok 43 - OSB-23: a rewrite that fails nft -c restores the original
+ok 44 - OSB-23: ... and says so, not fixed
+ok 45 - OSB-23: a file that defines no table is left alone for review
+ok 46 - OSB-23: ... and that is reported
+ok 47 - OSB-24: a drop-in is written for the flushing unit
+ok 48 - OSB-24: it clears the vendor ExecStop
+ok 49 - OSB-24: it deletes only the conf's tables
+ok 50 - OSB-24: it never flushes the ruleset
+ok 51 - OSB-24: reported as fixed
+ok 52 - OSB-24: a second run leaves the drop-in alone
+ok 53 - OSB-24: no flushing unit, no drop-in
+ok 54 - OSB-24: a conf with no table gets no drop-in, and that is reported
+ok 55 - OSB-24: the vendor unit's stop deletes the secure_sudo table (the bug)
+ok 56 - OSB-24: with the drop-in a restart keeps the secure_sudo table
+ok 57 - drift: the rsyslog install ran and created a log
+ok 58 - drift: the log the install created is tightened in the same run
+ok 59 - drift: the OSB-07 step is reported after the install
+ok 60 - flow: passes, then post_patch, then the final scan and summary
+ok 61 - flow: no package install after post_patch in the remediation flow
+ok 62 - stig-harden.sh passes bash -n
+ok 63 - STIG_ROOT defaults to the real system (empty)
+1..63

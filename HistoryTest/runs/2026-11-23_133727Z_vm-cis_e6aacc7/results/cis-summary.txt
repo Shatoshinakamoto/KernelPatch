@@ -1,0 +1,57 @@
+CIS Level 2 VM run on main e6aacc7 (merge of PR #58), 2026-11-23 11:17 to
+13:26Z, on the owner's PC: Docker Desktop (container kp-vm), QEMU without KVM
+(TCG), Ubuntu 24.04 cloud image, kernel 6.12.114-secure-sudo (built from the
+signature-verified kernel.org tarball for main 4885cdc; kernel/ unchanged since).
+SSG 0.1.78, datastream pinned by sha256. Not a CI run: the project builds and
+tests locally. Text below is copied from the run's report; the VM disk and key
+were deleted after the run and are not kept.
+
+Command (in the guest, as root through sudo, net_mode=monitor so the
+remediation could install packages):
+  bash scripts/stig-harden.sh --remediate --yes \
+    --profile xccdf_org.ssgproject.content_profile_cis_level2_server \
+    --cis-firewall
+No --skip-rules. Then `secure-sudo net lan-only`, a scan only, the firewall
+coexistence checks, a reboot, and the checks again.
+
+ok 1 - fresh guest boots
+ok 2 - install-kernel + userspace succeed
+ok 3 - trial boot verified and committed
+ok 4 - running the secure_sudo kernel (6.12.114-secure-sudo)
+ok 5 - openscap-scanner, nftables and the SSG datastream installed
+ok 6 - tester reaches root through sudo
+ok 7 - CIS L2 remediation with --cis-firewall ran to the end (rc=0)
+ok 8 - SSH (tester + sudo) still works after remediation
+ok 9 - net_mode lan-only: table=loaded
+ok 10 - under lan-only nft list tables shows inet filter and inet secure_sudo
+ok 11 - SSH still works under lan-only
+ok 12 - CIS L2 scan under lan-only ran
+not ok 13 - systemctl restart nftables keeps inet secure_sudo (before reboot)
+ok 14 - the hardened guest reboots and SSH (tester) answers again
+ok 15 - after the reboot it still runs the secure_sudo kernel
+ok 16 - after the reboot nft list tables shows inet filter and inet secure_sudo
+not ok 17 - systemctl restart nftables keeps inet secure_sudo (and reloads inet filter)
+1..17
+
+Tallies (notselected=132 in all three):
+  baseline                          pass=242 fail=128 error=0 unknown=0 notapplicable=137 notchecked=0
+  remediation final scan (monitor)  pass=441 fail=9   error=0 unknown=0 notapplicable=57  notchecked=0
+  scan under lan-only               pass=441 fail=9   error=0 unknown=0 notapplicable=57  notchecked=0
+
+Every rule not at pass (final scan and lan-only scan are identical):
+  fail grub2_password, grub2_uefi_password      site secret (the STIG VM job sets one as a site step)
+  fail partition_for_home, _tmp, _var, _var_log, _var_log_audit, _var_tmp
+                                                the cloud image is one disk; needs a partitioned install
+  fail sshd_limit_user_access                   site list (AllowUsers/AllowGroups)
+No firewall or nftables rule fails, with or without lan-only.
+
+Not ok 13 and 17 (OSB-24): Ubuntu 24.04's nftables.service (nftables
+1.0.9-1ubuntu0.1) has ExecStop=/usr/sbin/nft flush ruleset, so a restart
+deleted inet secure_sudo even though /etc/nftables.conf no longer flushes
+(OSB-23). Fixed after this run by a drop-in (cis-nftables.sh --apply and
+stig-harden.sh post_patch); the fix is tested with real nft in network
+namespaces but not yet in this VM.
+
+Note: root SSH answered right after remediation and was refused after the
+reboot (publickey). That is CIS's sshd settings taking effect on restart,
+as intended; tester + sudo kept working.

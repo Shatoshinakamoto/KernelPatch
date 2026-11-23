@@ -1,0 +1,26 @@
+{
+  "area": "unit-stig-selection",
+  "commit": "3ff68f6",
+  "date": "2026-11-23T13:35:55+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "c78f558db28882ac97d286bb6366ec4f09c95ee00d43c936ec87337ca2d231ff",
+    "command.txt": "c3449fa5dc7cd34abc4cc4f738a81e1963453fc1e238ed45a0a57dfdf02121da",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "d889f0f9e8eb008f0ffe45904528874d9011f5e11394876969ea348ff69b0a29",
+    "results/tap-summary.txt": "bf828a3cb3878dd1eb72abcc0abb8bf0255b131ccfe2a88b34188094b18b3c99"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "577da51bbbbf8c354829c2725fc01fd1eb9f848e066bc1249fb5910dafbf91f7",
+  "previous_run": "2026-11-23_133548Z_unit-cis-firewall_3ff68f6",
+  "run_id": "2026-11-23_133555Z_unit-stig-selection_3ff68f6",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 23,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu 24.04, root, no KVM)"
+}
