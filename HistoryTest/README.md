@@ -87,6 +87,8 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_215528Z_gate_aaffc26`](runs/2026-11-23_215528Z_gate_aaffc26/RUN.md) | 2026-11-23T21:55:27+00:00 | gate | `aaffc26` | **pass** | Pheonix's PC, Docker container on WSL2, QEMU TCG (no KVM) | 0 / 0 / 0 |
+| [`2026-11-23_215527Z_vm-functest_aaffc26`](runs/2026-11-23_215527Z_vm-functest_aaffc26/RUN.md) | 2026-11-23T21:55:27+00:00 | vm-functest | `aaffc26` | **pass** | Pheonix's PC, Docker container on WSL2, QEMU TCG (no KVM) | 0 / 0 / 0 |
 | [`2026-11-23_214119Z_gate-lint_e82717f`](runs/2026-11-23_214119Z_gate-lint_e82717f/RUN.md) | 2026-11-23T21:41:19+00:00 | gate-lint | `e82717f` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
 | [`2026-11-23_214105Z_lsm-compile_e82717f`](runs/2026-11-23_214105Z_lsm-compile_e82717f/RUN.md) | 2026-11-23T21:41:05+00:00 | lsm-compile | `e82717f` | **pass** | cloud container (Ubuntu), linux-headers-6.17.0-42-generic from the Ubuntu archive | 0 / 0 / 0 |
 | [`2026-11-23_214051Z_lsm-compile_e82717f`](runs/2026-11-23_214051Z_lsm-compile_e82717f/RUN.md) | 2026-11-23T21:40:51+00:00 | lsm-compile | `e82717f` | **pass** | cloud container (Ubuntu), linux-headers-6.14.0-37-generic from the Ubuntu archive | 0 / 0 / 0 |

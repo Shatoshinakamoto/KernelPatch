@@ -1,0 +1,13 @@
+ci/build-gate.sh once, as root, SS_REQUIRE_SWTPM=1, all stages,
+--kernel-tree = fresh extract of the verified 6.12.114 tarball, on aaffc26.
+
+source_tree_sha256=6f2937457761ad89e52f5fa50f172c801d9f34fa1a403e7dbb7043acfc2eab48
+stage_lint=pass (67 shell scripts)
+stage_userspace=pass (6 components, -Werror)
+stage_addons=pass (7 components, -Werror)
+stage_lsm-headers=skip (no supported kernel headers installed; unsupported, not compiled: 6.8.0)
+stage_lsm-tree=pass (6.12.114, 6 variants)
+stage_tests=pass (1403 checks)
+stage_package=pass (reproducible, sha256 038dde50804e65ce)
+overall=pass
+No not ok lines.

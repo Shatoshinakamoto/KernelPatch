@@ -143,7 +143,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
   - 2026-11-23: lint now checks every policy list against the kernel's
     entry and byte limits and the TimeVault line grammar (SECURITY-LOG).
     The kernel now refuses an over-long list with `E2BIG` too (SECURITY_REVIEW
-    #78); its VM check (`ss-functest` `t_list_limits`) is pending.
+    #78), VM-verified: `t_list_limits` 32/32, ss-functest 305/0.
 
 ## P1 — make security events dependable incident evidence
 

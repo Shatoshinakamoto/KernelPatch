@@ -15,7 +15,7 @@ findings without CVE IDs, so none are given; no scores are invented.
 - **Affected:** `kernel/security/secure_sudo/` `ss_exec.c`, `ss_tmpexec.c`, `ss_node.c`, `ss_driver.c`, `ss_home.c`, `ss_binvault.c`, `ss_prguard.c`, `ss_tpm.c`, `secure_sudo.h`.
 - **What changed:** every policy-list write counts its entries and returns `E2BIG` when there are more than the kernel keeps; the list already loaded stays. `driver_blacklist` refuses a 257th hash or name instead of keeping a hash as a name.
 - **Why it is secure now:** a policy list is applied in full or not at all, whoever writes it (NIST CM-6, SI-10).
-- **Verification:** compiles with `-Werror` against 6.14 and 6.17 header trees (`ci/lsm-compile-check.sh`, 21/21 files each). `tests/vm/ss-functest.c` `t_list_limits` (one-over refused with the old list kept, at-limit loads, for all ten lists, plus the driver hash case) runs in the next PC kernel build and VM run. SECURITY_REVIEW #78.
+- **Verification:** compiles with `-Werror` against 6.14 and 6.17 header trees (`ci/lsm-compile-check.sh`, 21/21 files each). `tests/vm/ss-functest.c` `t_list_limits` on a 6.12.114 VM: 32/32, whole suite 305/0, no kernel problems (`HistoryTest/runs/2026-11-23_215527Z_vm-functest_aaffc26/`). PC build gate overall pass, 1403 checks (`HistoryTest/runs/2026-11-23_215528Z_gate_aaffc26/`). SECURITY_REVIEW #78.
 
 ## 2026-11-23 — policy lists could silently lose entries, or fail to load, after a clean lint
 - **Type:** patch

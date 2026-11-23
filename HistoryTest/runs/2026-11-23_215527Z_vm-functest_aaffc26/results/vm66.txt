@@ -1,0 +1,45 @@
+tests/vm/build-test-kernel.sh on a fresh extract of the signature-verified
+linux-6.12.114 tarball (sha256 7a858991...4af3) with branch
+kernel/policy-list-e2big (aaffc26) grafted in, then tests/vm/boot-test.sh (TCG).
+
+SS_BOOT_OK 6.12.114
+SS_LSM lockdown,capability,landlock,yama,secure_sudo
+SS_LOCKDOWN [none] integrity confidentiality
+SS_FUNCTEST_DONE pass=305 fail=0
+SS_EXIT=0
+No not ok lines; no SS_KERNEL_PROBLEM lines (no BUG, Oops, WARN, KASAN, UBSAN).
+
+t_list_limits:
+ok 172 - blacklist: 1025 entries (one over the limit) refused with E2BIG (got -7)
+ok 173 - blacklist: the list already loaded stays in force
+ok 174 - blacklist: exactly 1024 entries load (got 0)
+ok 175 - tmp_exec_allow: 257 entries (one over the limit) refused with E2BIG (got -7)
+ok 176 - tmp_exec_allow: the list already loaded stays in force
+ok 177 - tmp_exec_allow: exactly 256 entries load (got 0)
+ok 178 - node_allowed_children: 257 entries (one over the limit) refused with E2BIG (got -7)
+ok 179 - node_allowed_children: the list already loaded stays in force
+ok 180 - node_allowed_children: exactly 256 entries load (got 0)
+ok 181 - node_sea_binaries: 257 entries (one over the limit) refused with E2BIG (got -7)
+ok 182 - node_sea_binaries: the list already loaded stays in force
+ok 183 - node_sea_binaries: exactly 256 entries load (got 0)
+ok 184 - home_map: 4097 entries (one over the limit) refused with E2BIG (got -7)
+ok 185 - home_map: the list already loaded stays in force
+ok 186 - home_map: exactly 4096 entries load (got 0)
+ok 187 - home_write_allow: 4097 entries (one over the limit) refused with E2BIG (got -7)
+ok 188 - home_write_allow: the list already loaded stays in force
+ok 189 - home_write_allow: exactly 4096 entries load (got 0)
+ok 190 - binvault_allow: 1025 entries (one over the limit) refused with E2BIG (got -7)
+ok 191 - binvault_allow: the list already loaded stays in force
+ok 192 - binvault_allow: exactly 1024 entries load (got 0)
+ok 193 - prguard_allow: 1025 entries (one over the limit) refused with E2BIG (got -7)
+ok 194 - prguard_allow: the list already loaded stays in force
+ok 195 - prguard_allow: exactly 1024 entries load (got 0)
+ok 196 - tpm_openers: 65 entries (one over the limit) refused with E2BIG (got -7)
+ok 197 - tpm_openers: the list already loaded stays in force
+ok 198 - tpm_openers: exactly 64 entries load (got 0)
+ok 199 - driver_blacklist: 257 entries (one over the limit) refused with E2BIG (got -7)
+ok 200 - driver_blacklist: the list already loaded stays in force
+ok 201 - driver_blacklist: exactly 256 entries load (got 0)
+ok 202 - driver_blacklist: 257 hashes refused with E2BIG (got -7)
+ok 203 - driver_blacklist: 256 hashes and 256 names load (got 0)
+Logs kept on the PC (kp-work volume). No VM key or disk left.
