@@ -66,6 +66,12 @@ result() { # stage status note
 SRC="$WORK/src"
 mkdir -p "$SRC"
 (cd "$ROOT" && tar --exclude=./build-gate-record.txt --exclude=./.git -cf - .) | (cd "$SRC" && tar -xf -)
+# A second copy that no stage ever touches. The stages build inside $SRC, so
+# hashing or packaging $SRC would fold build output into the recorded tree hash
+# and the package (TODO P0-1, P0-4): the record's source_tree_sha256 and the
+# release package come from $PRISTINE, which is exactly the checked-out sources.
+PRISTINE="$WORK/pristine"
+cp -a "$SRC" "$PRISTINE"
 
 shell_scripts() {
 	(cd "$SRC" && { find . -name '*.sh' -type f; \
@@ -131,8 +137,18 @@ fi
 # ------------------------------------------------------------ lsm-headers
 if stage_on lsm-headers; then
 	say "lsm-headers"
+	unsupported=()
 	if [ "${#HEADERS[@]}" -eq 0 ]; then
-		mapfile -t HEADERS < <(find /usr/src -maxdepth 1 -name 'linux-headers-*-generic' -type d 2>/dev/null | sort)
+		# Auto-discovered header trees older than the documented minimum
+		# (docs/SUPPORT.md: older than 6.11 is unsupported; 6.8 has no BPF-token
+		# LSM hooks) are recorded as unsupported, not compiled. A tree named
+		# with --headers is always compiled.
+		MIN_KERNEL_MAJMIN=611
+		while IFS= read -r h; do
+			v="${h##*/linux-headers-}"; mm=$(( ${v%%.*} * 100 + $(echo "$v" | cut -d. -f2 | tr -dc 0-9) ))
+			if [ "$mm" -ge "$MIN_KERNEL_MAJMIN" ]; then HEADERS+=("$h"); else unsupported+=("${v%%-*}"); fi
+		done < <(find /usr/src -maxdepth 1 -name 'linux-headers-*-generic' -type d 2>/dev/null | sort)
+		[ "${#unsupported[@]}" -eq 0 ] || echo "lsm-headers: not compiled, older than 6.11 (unsupported): ${unsupported[*]}"
 	fi
 	bad=0; : > "$WORK/lsm-headers.json"
 	if [ "${#HEADERS[@]}" -gt 0 ]; then
@@ -145,7 +161,7 @@ if stage_on lsm-headers; then
 	fi
 	nh=$(( ${#HEADERS[@]} + ${#DHEADERS[@]} ))
 	if [ "$nh" -eq 0 ]; then
-		result lsm-headers skip "no kernel headers installed"
+		result lsm-headers skip "no supported kernel headers installed${unsupported[*]:+; unsupported, not compiled: ${unsupported[*]}}"
 	elif [ "$bad" -eq 0 ]; then
 		result lsm-headers pass "$nh trees (${#HEADERS[@]} kbuild, ${#DHEADERS[@]} direct)"
 	else
@@ -211,7 +227,7 @@ fi
 if stage_on package; then
 	say "package"
 	a="$WORK/pkg-a"; b="$WORK/pkg-b"; mkdir -p "$a" "$b"
-	if bash "$SRC/ci/make-release.sh" --out "$a" >/dev/null && bash "$SRC/ci/make-release.sh" --out "$b" >/dev/null; then
+	if bash "$PRISTINE/ci/make-release.sh" --out "$a" >/dev/null && bash "$PRISTINE/ci/make-release.sh" --out "$b" >/dev/null; then
 		ha="$(cd "$a" && sha256sum ./*.tar.gz | cut -d' ' -f1)"; hb="$(cd "$b" && sha256sum ./*.tar.gz | cut -d' ' -f1)"
 		if [ "$ha" = "$hb" ]; then
 			result package pass "reproducible, sha256 ${ha:0:16}"
@@ -228,7 +244,7 @@ fi
 	echo "secure_sudo build gate record"
 	echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "version=$(cat "$ROOT/VERSION" 2>/dev/null)"
-	echo "source_tree_sha256=$(bash "$SRC/scripts/gen-sbom.sh" --tree-hash)"
+	echo "source_tree_sha256=$(bash "$PRISTINE/scripts/gen-sbom.sh" --tree-hash)"
 	# shellcheck disable=SC1091
 	echo "host=$(. /etc/os-release; echo "$ID $VERSION_ID") $(uname -m)"
 	echo "cc=$(gcc --version | head -1)"
