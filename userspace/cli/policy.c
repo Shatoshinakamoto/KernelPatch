@@ -72,19 +72,21 @@ const struct knob ss_knobs[] = {
 };
 const size_t ss_nknobs = sizeof(ss_knobs) / sizeof(ss_knobs[0]);
 
+/* Limits: SS_BL_MAX_*, SX_MAX_*, SS_TMP_MAX_*, SL_MAX_*, DRV_MAX_*, TV_MAX_TEXT,
+ * HM_MAX_*, BV_MAX_*, PG_MAX_*, TO_MAX_* in the kernel sources. */
 const struct listmap ss_lists[] = {
-	{ "blacklist.conf",             "blacklist",             L_PATH },
-	{ "setid_exec_allow.conf",      "setid_exec_allow",      L_PATH },
-	{ "tmp_exec_allow.conf",        "tmp_exec_allow",        L_PREFIX },
-	{ "node_allowed_children.conf", "node_allowed_children", L_NAME },
-	{ "node_sea_binaries.conf",     "node_sea_binaries",     L_PATH },
-	{ "driver_blacklist.conf",      "driver_blacklist",      L_NAME },
-	{ "timevault_allow.conf",       "timevault_allow",       L_PATH },
-	{ "home_map.conf",              "home_map",              L_HOMEMAP },
-	{ "home_write_allow.conf",      "home_write_allow",      L_PREFIX },
-	{ "binvault_allow.conf",        "binvault_allow",        L_PREFIX },
-	{ "prguard_allow.conf",         "prguard_allow",         L_PATH },
-	{ "tpm_openers.conf",           "tpm_openers",           L_PATH },
+	{ "blacklist.conf",             "blacklist",             L_PATH,    1024, 256 * 1024 },
+	{ "setid_exec_allow.conf",      "setid_exec_allow",      L_PATH,    512,  64 * 1024 },
+	{ "tmp_exec_allow.conf",        "tmp_exec_allow",        L_PREFIX,  256,  64 * 1024 },
+	{ "node_allowed_children.conf", "node_allowed_children", L_CHILD,   256,  64 * 1024 },
+	{ "node_sea_binaries.conf",     "node_sea_binaries",     L_PATH,    256,  64 * 1024 },
+	{ "driver_blacklist.conf",      "driver_blacklist",      L_DRIVER,  256,  64 * 1024 },
+	{ "timevault_allow.conf",       "timevault_allow",       L_TVALLOW, 0,    16 * 1024 * 1024 },
+	{ "home_map.conf",              "home_map",              L_HOMEMAP, 4096, 256 * 1024 },
+	{ "home_write_allow.conf",      "home_write_allow",      L_PREFIX,  4096, 256 * 1024 },
+	{ "binvault_allow.conf",        "binvault_allow",        L_PREFIX,  1024, 128 * 1024 },
+	{ "prguard_allow.conf",         "prguard_allow",         L_PATH,    1024, 128 * 1024 },
+	{ "tpm_openers.conf",           "tpm_openers",           L_PATH,    64,   16 * 1024 },
 };
 const size_t ss_nlists = sizeof(ss_lists) / sizeof(ss_lists[0]);
 
@@ -454,6 +456,7 @@ const char *check_daemon_value(const char *key, const char *v,
 
 struct lint {
 	int errors, warnings, notes, quiet, pam_errors_are_warnings, source_tree;
+	int tv_max;		/* timevault_max_entries in effect */
 	const char *cfgdir, *pamdir, *otpdir, *sysfs, *secfs;
 };
 
@@ -496,11 +499,28 @@ static void check_owner(struct lint *l, const char *path, const char *what)
 }
 
 /* Count entries in a list file and check their shape. -1 if missing. */
+static int is_hex64(const char *s)
+{
+	int i;
+
+	for (i = 0; i < 64; i++)
+		if (!isxdigit((unsigned char)s[i]))
+			return 0;
+	return s[64] == '\0';
+}
+
+static int cmp_str(const void *a, const void *b)
+{
+	return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
 static int lint_list(struct lint *l, const struct listmap *m)
 {
 	char path[512], line[1024], where[96];
 	FILE *f;
-	int n = 0, no = 0;
+	int n = 0, no = 0, hashes = 0, autodirs = 0, ntv = 0, cap = 0, i;
+	char **tv = NULL;	/* timevault_allow paths, for the duplicate check */
+	struct stat fst;
 
 	snprintf(path, sizeof(path), "%s/%s", l->cfgdir, m->cfg_file);
 	f = fopen(path, "re");
@@ -510,6 +530,11 @@ static int lint_list(struct lint *l, const struct listmap *m)
 		return -1;
 	}
 	check_owner(l, path, m->cfg_file);
+	/* load sends the file as it is, comments included */
+	if (m->max_text && fstat(fileno(f), &fst) == 0 &&
+	    (size_t)fst.st_size > m->max_text)
+		say(l, ERR, m->cfg_file, "%lld bytes: the kernel takes at most %zu "
+		    "(comments count too)", (long long)fst.st_size, m->max_text);
 	while (fgets(line, sizeof(line), f)) {
 		char *p = trim(line), *sp;
 		struct stat st;
@@ -545,9 +570,93 @@ static int lint_list(struct lint *l, const struct listmap *m)
 			if (strchr(p, '/'))
 				say(l, ERR, where, "'%s': a name, not a path, is expected", p);
 			break;
+		case L_CHILD:
+			/* '/'-prefixed: exact resolved path; else a basename */
+			if (*p != '/' && strchr(p, '/'))
+				say(l, ERR, where, "'%s': give an absolute path or a bare "
+				    "name, not a relative path", p);
+			else if (*p != '/')
+				say(l, NOTE, where, "'%s' allows any file of that name; an "
+				    "absolute path is stricter", p);
+			break;
+		case L_DRIVER:
+			if (strchr(p, '/'))
+				say(l, ERR, where, "'%s': a name (module basename or "
+				    "SHA-256), not a path, is expected", p);
+			else if (is_hex64(p))
+				hashes++;
+			break;
+		case L_TVALLOW:
+			/* SECURITY: the kernel refuses the WHOLE write on one bad
+			 * line (ss_timevault.c tv_parse), so catch it here. */
+			sp = strpbrk(p, " \t");
+			if (sp)
+				*sp++ = '\0';
+			if (*p != '/') {
+				say(l, ERR, where, "'%s' is not an absolute path", p);
+				break;
+			}
+			sp = sp ? trim(sp) : NULL;
+			if (!sp || !*sp) {
+				say(l, ERR, where, "%s has no SHA-256: every entry needs "
+				    "\"<path> <sha256>\", \"<path> auto\" or \"<dir> "
+				    "autodir\" (`secure-sudo vault-allow add` pins the hash)", p);
+				break;
+			}
+			if (!strcmp(sp, "autodir")) {
+				autodirs++;
+				break;
+			}
+			if (strcmp(sp, "auto") && !is_hex64(sp)) {
+				say(l, ERR, where, "%s: '%s' is not a 64-hex SHA-256, "
+				    "auto or autodir", p, sp);
+				break;
+			}
+			if (!(ntv & 63)) {
+				char **g = realloc(tv, (ntv + 64) * sizeof(*tv));
+
+				if (!g)
+					break;
+				tv = g;
+			}
+			tv[ntv] = strdup(p);
+			if (tv[ntv])
+				ntv++;
+			if (!l->source_tree && stat(p, &st) != 0)
+				say(l, WARN, where, "%s does not exist on this machine", p);
+			break;
 		}
 	}
 	fclose(f);
+
+	snprintf(where, sizeof(where), "%s", m->cfg_file);
+	if (m->kind == L_DRIVER) {
+		if (hashes > m->max_items || n - hashes > m->max_items)
+			say(l, ERR, where, "%d hashes and %d names: the kernel keeps "
+			    "at most %d of each and ignores the rest", hashes,
+			    n - hashes, m->max_items);
+	} else if (m->kind == L_TVALLOW) {
+		cap = l->tv_max > 0 ? l->tv_max : 16384;
+		if (ntv > cap)
+			say(l, ERR, where, "%d entries: over timevault_max_entries "
+			    "(%d), the kernel refuses the list", ntv, cap);
+		if (autodirs > 4096)
+			say(l, ERR, where, "%d autodir entries: the kernel takes at "
+			    "most 4096", autodirs);
+		qsort(tv, ntv, sizeof(*tv), cmp_str);
+		for (i = 1; i < ntv; i++)
+			if (!strcmp(tv[i - 1], tv[i]))
+				say(l, ERR, where, "%s is listed twice: the kernel "
+				    "refuses the list", tv[i]);
+	} else if (m->max_items && n > m->max_items) {
+		/* SECURITY: the kernel stops reading at its limit without an
+		 * error, so the extra entries would silently not apply. */
+		say(l, ERR, where, "%d entries: the kernel keeps only the first %d "
+		    "and silently ignores the rest", n, m->max_items);
+	}
+	for (i = 0; i < ntv; i++)
+		free(tv[i]);
+	free(tv);
 	return n;
 }
 
@@ -956,6 +1065,11 @@ int policy_lint(const struct lint_opts *o)
 			say(&l, ERR, where, "unknown setting '%s' (typo?); "
 			    "`secure-sudo settings` lists them", e->key);
 		}
+	}
+	{
+		const char *tvm = cfg_get(&c, "timevault_max_entries");
+
+		l.tv_max = tvm ? atoi(tvm) : 0;	/* 0: the kernel default */
 	}
 	for (k = 0; k < ss_nlists; k++)
 		lint_list(&l, &ss_lists[k]);

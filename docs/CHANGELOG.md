@@ -8,6 +8,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 ## [Unreleased]
 
 ### Added
+- 2026-11-23: `docs/files/` pages for all 12 policy lists: format, matching, kernel limits, how to change safely, security impact, NIST reference and every shipped entry with why, who and when (with the two TPM openers removed on 2026-11-01). `ci/check-config-docs.py` now holds them to the templates and kernel limits.
 - 2026-11-23: `docs/configuration/` pages for `secure-sudo.conf`, `net.conf` and `pheonixbox.conf`: every key's type, allowed values, built-in and shipped value, security impact and NIST reference. `ci/check-config-docs.py` keeps them in step with the code in the gate's lint stage.
 - 2026-11-23: `HistoryTest/` test-run archive with the recorder `scripts/history_test.py` (run, add, note, invalidate, index, verify). Its integrity is checked in the build gate's lint stage. Also added: `docs/README.md`, this changelog and `docs/SECURITY-LOG.md` (CLAUDE.MD).
 - 2026-11-23: `scripts/cis-nftables.sh` and `stig-harden.sh --cis-firewall [--allow-tcp P]`: CIS's own nftables table next to secure_sudo's (owner's choice: coexist) (#58).
@@ -15,6 +16,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 - 2026-11-22: `ci/publish-release.sh`: GitHub Releases are built locally and uploaded with `gh`, as drafts unless `--publish` is given (#49).
 
 ### Fixed
+- 2026-11-23: `secure-sudo lint` accepted `timevault_allow.conf` lines the kernel refuses (a bare path, a bad hash, a duplicate path, more entries than `timevault_max_entries`), so `load` passed lint and then the whole allowlist write failed. It also rejected the absolute paths `node_allowed_children.conf` supports, and did not notice lists longer than the kernel reads: the kernel stops reading most lists at its limit without an error, so a long `blacklist.conf` silently lost entries. Lint now checks all of these, and the `timevault_allow.conf` and `node_allowed_children.conf` templates describe the real format.
 - 2026-11-23: the `secure-sudo.conf` template put comments after example values (`# vault_action = quarantine  # quarantine | wipe`). Neither parser strips a trailing comment, so uncommenting such a line gave an invalid value. The comments are now on their own lines. `pheonixbox.conf` now documents its `trust` key.
 - 2026-11-23: `systemctl restart nftables` deleted secure_sudo's network-mode table (vendor `ExecStop=nft flush ruleset`). Fixed with a drop-in, OSB-24 (#59). VM-verified 21/21 (`HistoryTest/runs/2026-11-23_134551Z_vm-osb24_8d432e8/`).
 - 2026-11-23: the stock `/etc/nftables.conf` `flush ruleset` deleted secure_sudo's table on every load. It now resets only its own tables, OSB-23 (#57).

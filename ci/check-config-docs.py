@@ -12,7 +12,11 @@
 #   - each row's "Shipped" column matches the template in userspace/config/
 #     (the value, "(commented)" or "(absent)");
 #   - net.conf rows match the template and apply-net.sh's defaults;
-#   - every page in docs/configuration/ is linked from docs/README.md.
+#   - every policy list (ss_lists) has docs/files/<list>.md whose limit marker
+#     matches the kernel limit in ss_lists and whose entries table lists
+#     exactly the template's active entries;
+#   - every page in docs/configuration/ and docs/files/ is linked from
+#     docs/README.md.
 # Usage: check-config-docs.py ROOT. Prints "FAIL ..." lines to stderr and
 # exits 1 on any problem.
 import os, re, sys
@@ -156,12 +160,43 @@ else:
     shipped_ok(page, "trust", rows["trust"][4],
                template("userspace/config/pheonixbox.conf"))
 
+# ---- policy lists (docs/files/) ---------------------------------------------
+lists = re.findall(r'^\s*\{\s*"([a-z_]+)\.conf",\s*"[a-z_]+",\s*L_[A-Z]+,\s*(\d+),',
+                   policy, re.M)
+if policy and not lists:
+    bad("could not read ss_lists from userspace/cli/policy.c")
+for stem, limit in lists:
+    page = f"docs/files/{stem}.md"
+    text = read(page)
+    if not text:
+        continue
+    m = re.search(r"<!-- list-limit:(\d+) -->", text)
+    if not m:
+        bad(f"{page}: no <!-- list-limit:N --> marker")
+    elif m.group(1) != limit:
+        bad(f"{page}: limit marker {m.group(1)}, policy.c has {limit}")
+    m = re.search(r"<!-- list-entries:begin -->(.*?)<!-- list-entries:end -->", text, re.S)
+    if not m:
+        bad(f"{page}: no <!-- list-entries:begin/end --> table")
+        continue
+    doc = set(re.findall(r"^\|\s*`([^`]+)`\s*\|", m.group(1), re.M))
+    tmpl_entries = set()
+    for line in read(f"userspace/config/{stem}.conf").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            tmpl_entries.add(line)
+    for e in sorted(tmpl_entries - doc):
+        bad(f"{page}: shipped entry {e} has no row (why, who, when)")
+    for e in sorted(doc - tmpl_entries):
+        bad(f"{page}: row {e} is not in userspace/config/{stem}.conf")
+
 # ---- index -----------------------------------------------------------------
 index = read("docs/README.md")
-cdir = os.path.join(root, "docs/configuration")
-for name in sorted(os.listdir(cdir)) if os.path.isdir(cdir) else []:
-    if name.endswith(".md") and f"(configuration/{name})" not in index:
-        bad(f"docs/README.md does not link configuration/{name}")
+for sub in ("configuration", "files"):
+    cdir = os.path.join(root, "docs", sub)
+    for name in sorted(os.listdir(cdir)) if os.path.isdir(cdir) else []:
+        if name.endswith(".md") and f"({sub}/{name})" not in index:
+            bad(f"docs/README.md does not link {sub}/{name}")
 
 if problems:
     print(f"check-config-docs: {len(problems)} problem(s)", file=sys.stderr)

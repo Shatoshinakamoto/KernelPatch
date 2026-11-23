@@ -40,11 +40,26 @@ struct knob {
 	enum knob_type type;
 	unsigned long lo, hi;	/* K_U32 range, as the kernel checks it */
 };
-enum list_kind { L_PATH, L_PREFIX, L_NAME, L_HOMEMAP };
+/*
+ * L_TVALLOW: timevault_allow, "<path> <sha256|auto|autodir>".
+ * L_CHILD:   node_allowed_children, a '/'-prefixed exact path or a basename.
+ * L_DRIVER:  driver_blacklist, a 64-hex SHA-256 or a module basename.
+ */
+enum list_kind { L_PATH, L_PREFIX, L_NAME, L_HOMEMAP, L_TVALLOW, L_CHILD,
+		 L_DRIVER };
 struct listmap {
 	const char *cfg_file;	/* file in CONFIG_DIR */
 	const char *secfs;	/* file under SECFS */
 	enum list_kind kind;
+	/*
+	 * The kernel's limits for this list (kernel/security/secure_sudo/).
+	 * Most lists silently stop reading at max_items, so lint must refuse
+	 * a longer file: a dropped denylist entry is not enforced. A write
+	 * longer than max_text is refused by the kernel. 0 = no fixed limit
+	 * (timevault_allow uses timevault_max_entries).
+	 */
+	int max_items;
+	size_t max_text;
 };
 extern const struct knob ss_knobs[];
 extern const size_t ss_nknobs;

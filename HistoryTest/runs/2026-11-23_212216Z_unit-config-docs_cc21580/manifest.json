@@ -1,0 +1,26 @@
+{
+  "area": "unit-config-docs",
+  "commit": "cc21580",
+  "date": "2026-11-23T21:22:16+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "3a7518f8610276cdcc6e75e343133d72dc3b67f2e4ed3ec4477cdb2f7b00ce81",
+    "command.txt": "3bc1ba802fe3402389e194753eee7edf416bf36f06f04f62b2d74d93a6811ddd",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "9dcb49e606318dfb04ffc79db221ecc5726cb1072bed082f6e1466de01a9f2dd",
+    "results/tap-summary.txt": "6a792810dfc5cf4e731ecd4258ca04e9de5b541b662a2bb4e536d19df093df27"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "f0910cc9d8f42bac6a6009eac8aa321c8c38a14ac24ac824549b4614c66ba11e",
+  "previous_run": "2026-11-23_212209Z_unit-cli_cc21580",
+  "run_id": "2026-11-23_212216Z_unit-config-docs_cc21580",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 20,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu)"
+}

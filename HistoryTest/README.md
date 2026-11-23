@@ -87,6 +87,10 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_213003Z_gate-lint_cc21580`](runs/2026-11-23_213003Z_gate-lint_cc21580/RUN.md) | 2026-11-23T21:30:03+00:00 | gate-lint | `cc21580` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
+| [`2026-11-23_212221Z_suite_cc21580`](runs/2026-11-23_212221Z_suite_cc21580/RUN.md) | 2026-11-23T21:22:21+00:00 | suite | `cc21580` | **fail** | cloud container (Ubuntu); this sandbox puts a refusing rm wrapper first in PATH | 1349 / 2 / 6 |
+| [`2026-11-23_212216Z_unit-config-docs_cc21580`](runs/2026-11-23_212216Z_unit-config-docs_cc21580/RUN.md) | 2026-11-23T21:22:16+00:00 | unit-config-docs | `cc21580` | **pass** | cloud container (Ubuntu) | 20 / 0 / 0 |
+| [`2026-11-23_212209Z_unit-cli_cc21580`](runs/2026-11-23_212209Z_unit-cli_cc21580/RUN.md) | 2026-11-23T21:22:09+00:00 | unit-cli | `cc21580` | **pass** | cloud container (Ubuntu) | 180 / 0 / 0 |
 | [`2026-11-23_211112Z_gate-lint_6544e45`](runs/2026-11-23_211112Z_gate-lint_6544e45/RUN.md) | 2026-11-23T21:11:12+00:00 | gate-lint | `6544e45` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
 | [`2026-11-23_211103Z_unit-pheonixbox_6544e45`](runs/2026-11-23_211103Z_unit-pheonixbox_6544e45/RUN.md) | 2026-11-23T21:11:03+00:00 | unit-pheonixbox | `6544e45` | **pass** | cloud container (Ubuntu), no root kernel | 61 / 0 / 2 |
 | [`2026-11-23_211056Z_unit-cli_6544e45`](runs/2026-11-23_211056Z_unit-cli_6544e45/RUN.md) | 2026-11-23T21:10:56+00:00 | unit-cli | `6544e45` | **pass** | cloud container (Ubuntu), no root kernel | 169 / 0 / 0 |
