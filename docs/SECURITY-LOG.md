@@ -15,7 +15,7 @@ findings without CVE IDs, so none are given; no scores are invented.
 - **Affected:** hosts running Ubuntu 24.04's `nftables.service` (nftables 1.0.9-1ubuntu0.1) alongside secure_sudo network modes. Code: `scripts/cis-nftables.sh`, `scripts/stig-harden.sh`.
 - **What changed:** a drop-in `nftables.service.d/secure-sudo-keep-tables.conf` replaces the vendor `ExecStop=nft flush ruleset` with a delete of only the CIS/conf tables (OSB-24).
 - **Why it is secure now:** stopping or restarting the firewall service can no longer remove another component's boundary rules (NIST SC-7, CM-7).
-- **Verification:** `tests/userspace/test-stig-patches.sh` (63 ok) and `tests/userspace/test-cis-firewall.sh` (29 ok). Both use real nft in network namespaces: the vendor stop deletes the table, the drop-in stop keeps it. Found by the CIS L2 VM run (`docs/vm/results/13-pc-cis-l2-2026-11-23/`). The VM re-check is pending. SECURITY_REVIEW #77, PR #59.
+- **Verification:** `tests/userspace/test-stig-patches.sh` (63 ok) and `tests/userspace/test-cis-firewall.sh` (29 ok). Both use real nft in network namespaces: the vendor stop deletes the table, the drop-in stop keeps it. Found by the CIS L2 VM run (`docs/vm/results/13-pc-cis-l2-2026-11-23/`). VM-verified 21/21 on main 8d432e8 (restart, stop+start and stopped states keep `inet secure_sudo`, before and after a reboot): `HistoryTest/runs/2026-11-23_134551Z_vm-osb24_8d432e8/`. SECURITY_REVIEW #77, PR #59.
 
 ## 2026-11-23 — CIS firewall coexists with secure_sudo's table
 - **Type:** hardening

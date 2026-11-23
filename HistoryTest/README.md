@@ -87,6 +87,7 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_134551Z_vm-osb24_8d432e8`](runs/2026-11-23_134551Z_vm-osb24_8d432e8/RUN.md) | 2026-11-23T13:45:51+00:00 | vm-osb24 | `8d432e8` | **pass** | PC Docker container (QEMU TCG, no KVM), Ubuntu 24.04 guest | 0 / 0 / 0 |
 | [`2026-11-23_133808Z_gate-lint_24d1c85`](runs/2026-11-23_133808Z_gate-lint_24d1c85/RUN.md) | 2026-11-23T13:38:08+00:00 | gate-lint | `24d1c85` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 1 / 0 / 0 |
 | [`2026-11-23_133728Z_unit-history-test_3ff68f6`](runs/2026-11-23_133728Z_unit-history-test_3ff68f6/RUN.md) | 2026-11-23T13:37:27+00:00 | unit-history-test | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 45 / 0 / 0 |
 | [`2026-11-23_133727Z_vm-cis_e6aacc7`](runs/2026-11-23_133727Z_vm-cis_e6aacc7/RUN.md) | 2026-11-23T11:17:00+00:00 | vm-cis | `e6aacc7` | **partial** | owner PC (Docker, QEMU TCG) | 15 / 2 / 0 |

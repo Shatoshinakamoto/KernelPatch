@@ -447,7 +447,7 @@ review snapshot; the roadmap treats repeatable validation as a release blocker.
     441 pass / 9 fail / 0 error / 0 unknown, the 9 being site decisions
     (GRUB password, separate partitions, sshd allow list); no firewall rule
     fails under lan-only. It found OSB-24 (nftables.service ExecStop flushes
-    every table), fixed by a drop-in; a VM re-check of that fix is still to do. Still open: OSB-17 (needs a real host), the CIS gate and target-host scans beyond Ubuntu 24.04.
+    every table), fixed by a drop-in, VM-verified 21/21 on 8d432e8 (HistoryTest/runs/2026-11-23_134551Z_vm-osb24_8d432e8). Still open: OSB-17 (needs a real host), the CIS gate and target-host scans beyond Ubuntu 24.04.
   - Keep OSB-03..07 and OSB-15..18 regression tests: deliberately recreate
     each reproducible bug, run the relevant patch/remediation, and assert the
     exact expected rule result. Add tests for package-install permission

@@ -55,3 +55,9 @@ namespaces but not yet in this VM.
 Note: root SSH answered right after remediation and was refused after the
 reboot (publickey). That is CIS's sshd settings taking effect on restart,
 as intended; tester + sudo kept working.
+
+Follow-up 2026-11-23 (main 8d432e8, PR #59): OSB-24 VM re-check 21/21 ok.
+restart, stop + start, and the stopped state all keep inet secure_sudo,
+before and after a reboot; table checks ran immediately after each
+systemctl call. Effective ExecStop: nft delete table inet filter.
+Archive: HistoryTest/runs/2026-11-23_134551Z_vm-osb24_8d432e8/

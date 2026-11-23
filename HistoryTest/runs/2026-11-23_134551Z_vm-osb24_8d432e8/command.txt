@@ -1,0 +1,1 @@
+PC VM harness, nft drop-in check script (logs kept in the kp-work volume)
