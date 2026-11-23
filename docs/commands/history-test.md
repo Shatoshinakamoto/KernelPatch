@@ -28,7 +28,7 @@ history_test.py verify
 | `add` | `--area`, `--commit`, `--title` | as above, all required | | |
 | | `--verdict` | `pass`, `fail`, `partial`, `invalid` | Verdict of the received run. | |
 | | `--where` | text, required | For example `owner PC (Docker, QEMU TCG)`. | |
-| | `--date` | ISO 8601 UTC | When the run started (default: now). | |
+| | `--date` | ISO 8601 UTC | When the run started (default: now). The run id uses the time it was archived, so the manifest chain only grows at the end. | |
 | | `--command-text` | text or file, required | The commands the other machine ran. | Redacted. |
 | | `--what`, `--how`, `--results`, `--failures`, `--reproduce`, `--environment` | text or file | Sections of `RUN.md` and `environment.md`. TAP lines in `--results` are counted. | Redacted. |
 | | `--file` | path, repeatable | Text result file copied to `results/`. | Max 5 MB; binary files refused; redacted. |

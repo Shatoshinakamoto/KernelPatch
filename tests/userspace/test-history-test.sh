@@ -63,9 +63,12 @@ sys.exit(not (m['previous_run']==sys.argv[3] and m['previous_manifest_sha256']==
 check "index: INDEX.csv lists both runs" bash -c "grep -q '^$r1,' '$SS_HISTORYTEST_DIR/INDEX.csv' && grep -q '^$r2,' '$SS_HISTORYTEST_DIR/INDEX.csv'"
 check "index: the README table is generated between the markers" grep -q "runs/$r2/RUN.md" "$SS_HISTORYTEST_DIR/README.md"
 check "verify: a clean archive verifies" H verify
+r3="$(H add --area zz-late --commit 1234567 --title a --verdict pass --where x --command-text x 2>/dev/null)"
+r4="$(H add --area aa-early --commit 1234567 --title b --verdict pass --where x --command-text x 2>/dev/null)"
+check "ids sort in archive order even within one second (chain stays valid)" bash -c "[[ '$r3' < '$r4' ]]"
 printf '\377\376\0' > "$T/bin.dat"
 refute_with "add: a binary file is refused" "binary file refused" H add --area vm-demo --commit 1234567 --title x --verdict pass --where x --command-text x --file "$T/bin.dat"
-eq "add: a refused file leaves no half-written run" "$(find "$SS_HISTORYTEST_DIR/runs" -mindepth 1 -maxdepth 1 -type d | wc -l)" 2
+eq "add: a refused file leaves no half-written run" "$(find "$SS_HISTORYTEST_DIR/runs" -mindepth 1 -maxdepth 1 -type d | wc -l)" 4
 
 H note "$r1" --text "corrected: test 3 failed because of the fake suite (admin@example.org)" >/dev/null
 check "note: appends a dated entry" grep -q '^## .* - note' "$D1/NOTES.md"

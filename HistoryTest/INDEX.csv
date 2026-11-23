@@ -1,1 +1,9 @@
 run_id,date,area,commit,verdict,where,ok,not_ok,skipped
+2026-11-23_133545Z_unit-history-test_3ff68f6,2026-11-23T13:35:45+00:00,unit-history-test,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",44,0,0
+2026-11-23_133547Z_unit-stig-patches_3ff68f6,2026-11-23T13:35:47+00:00,unit-stig-patches,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",63,0,0
+2026-11-23_133548Z_unit-cis-firewall_3ff68f6,2026-11-23T13:35:48+00:00,unit-cis-firewall,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",29,0,0
+2026-11-23_133555Z_unit-stig-selection_3ff68f6,2026-11-23T13:35:55+00:00,unit-stig-selection,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",23,0,0
+2026-11-23_133652Z_gate_4885cdc,2026-11-23T03:44:30+00:00,gate,4885cdc,pass,"owner PC (Docker, kp-vm)",0,0,0
+2026-11-23_133726Z_vm-regression_4885cdc,2026-11-23T07:55:00+00:00,vm-regression,4885cdc,pass,"owner PC (Docker, QEMU TCG)",0,0,0
+2026-11-23_133727Z_vm-cis_e6aacc7,2026-11-23T11:17:00+00:00,vm-cis,e6aacc7,partial,"owner PC (Docker, QEMU TCG)",15,2,0
+2026-11-23_133728Z_unit-history-test_3ff68f6,2026-11-23T13:37:27+00:00,unit-history-test,3ff68f6,pass,"cloud container (Ubuntu 24.04, root, no KVM)",45,0,0

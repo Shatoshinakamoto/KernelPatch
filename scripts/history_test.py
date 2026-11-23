@@ -51,6 +51,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HT = os.environ.get("SS_HISTORYTEST_DIR", os.path.join(ROOT, "HistoryTest"))
@@ -191,7 +192,18 @@ def environment_md():
 
 
 def new_run(area, commit, when):
+    """Create an empty run folder; returns (run_id, path).
+
+    Run ids must sort in the order runs are sealed, because the manifest chain
+    follows that order. Two runs archived in the same second could sort the
+    other way round (by area name), so wait for the next second when the new
+    id would not sort after every existing run.
+    """
     slug(area, "area")
+    existing = all_runs()
+    while existing and "%s_%sZ" % (when.strftime("%Y-%m-%d"), when.strftime("%H%M%S")) <= existing[-1][:18]:
+        time.sleep(0.2)
+        when = now()
     if not re.fullmatch(r"[0-9a-f]{7,12}", commit):
         die("bad commit %r: 7 to 12 hex digits" % commit)
     base = "%s_%sZ_%s_%s" % (when.strftime("%Y-%m-%d"), when.strftime("%H%M%S"), area, commit[:7])
@@ -328,7 +340,11 @@ def cmd_add(a):
             texts.append((os.path.basename(src), raw.decode("utf-8")))
         except UnicodeDecodeError:
             die("binary file refused (record its name and digest in RUN.md): " + src)
-    rid, d = new_run(a.area, a.commit, when)
+    # The run id carries the time it was archived, so ids sort in archive order
+    # and the manifest chain only ever grows at the end (an earlier --date never
+    # inserts a run before one that is already sealed). --date is the time the
+    # run itself started; it goes in RUN.md, the manifest and the index.
+    rid, d = new_run(a.area, a.commit, now())
     for name, text in texts:
         write_text(os.path.join(d, "results", name), text)
     summary = read_opt(a.results)

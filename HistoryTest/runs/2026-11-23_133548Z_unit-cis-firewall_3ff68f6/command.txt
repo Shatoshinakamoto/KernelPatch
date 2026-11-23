@@ -1,0 +1,1 @@
+timeout 300 bash tests/userspace/test-cis-firewall.sh

@@ -16,7 +16,9 @@ release archives, packages and the installer never contain it.
    ([docs/commands/history-test.md](../docs/commands/history-test.md)). Never
    create or edit run folders by hand.
 2. **Every run gets a folder:**
-   `runs/<YYYY-MM-DD>_<HHMMSS>Z_<area>_<short-commit>/`.
+   `runs/<YYYY-MM-DD>_<HHMMSS>Z_<area>_<short-commit>/`, named by the time it
+   was archived. For a run received from elsewhere, the time it actually ran
+   is in `RUN.md` and the index.
 3. **`RUN.md` is required.** It says what was tested and why, how, the
    results, the failures, the verdict (`pass | fail | partial | invalid`) and
    how to reproduce.
@@ -85,4 +87,12 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_133728Z_unit-history-test_3ff68f6`](runs/2026-11-23_133728Z_unit-history-test_3ff68f6/RUN.md) | 2026-11-23T13:37:27+00:00 | unit-history-test | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 45 / 0 / 0 |
+| [`2026-11-23_133727Z_vm-cis_e6aacc7`](runs/2026-11-23_133727Z_vm-cis_e6aacc7/RUN.md) | 2026-11-23T11:17:00+00:00 | vm-cis | `e6aacc7` | **partial** | owner PC (Docker, QEMU TCG) | 15 / 2 / 0 |
+| [`2026-11-23_133726Z_vm-regression_4885cdc`](runs/2026-11-23_133726Z_vm-regression_4885cdc/RUN.md) | 2026-11-23T07:55:00+00:00 | vm-regression | `4885cdc` | **pass** | owner PC (Docker, QEMU TCG) | 0 / 0 / 0 |
+| [`2026-11-23_133652Z_gate_4885cdc`](runs/2026-11-23_133652Z_gate_4885cdc/RUN.md) | 2026-11-23T03:44:30+00:00 | gate | `4885cdc` | **pass** | owner PC (Docker, kp-vm) | 0 / 0 / 0 |
+| [`2026-11-23_133555Z_unit-stig-selection_3ff68f6`](runs/2026-11-23_133555Z_unit-stig-selection_3ff68f6/RUN.md) | 2026-11-23T13:35:55+00:00 | unit-stig-selection | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 23 / 0 / 0 |
+| [`2026-11-23_133548Z_unit-cis-firewall_3ff68f6`](runs/2026-11-23_133548Z_unit-cis-firewall_3ff68f6/RUN.md) | 2026-11-23T13:35:48+00:00 | unit-cis-firewall | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 29 / 0 / 0 |
+| [`2026-11-23_133547Z_unit-stig-patches_3ff68f6`](runs/2026-11-23_133547Z_unit-stig-patches_3ff68f6/RUN.md) | 2026-11-23T13:35:47+00:00 | unit-stig-patches | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 63 / 0 / 0 |
+| [`2026-11-23_133545Z_unit-history-test_3ff68f6`](runs/2026-11-23_133545Z_unit-history-test_3ff68f6/RUN.md) | 2026-11-23T13:35:45+00:00 | unit-history-test | `3ff68f6` | **pass** | cloud container (Ubuntu 24.04, root, no KVM) | 44 / 0 / 0 |
 <!-- history-test:index:end -->

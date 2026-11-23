@@ -1,0 +1,6 @@
+On the owner's PC, Docker container kp-vm, as root, clean checkout of main 4885cdc,
+all gate-job packages installed, kernel tree = fresh extract of the
+signature-verified linux-6.12.114 tarball (sha256 7a858991...4af3):
+  SS_REQUIRE_SWTPM=1 bash ci/build-gate.sh --kernel-tree <extract>/linux-6.12.114   (run 1)
+  the same again                                                                  (run 2)
+  bash scripts/gen-sbom.sh --tree-hash   (before and after both runs)

@@ -1,0 +1,26 @@
+{
+  "area": "unit-history-test",
+  "commit": "3ff68f6",
+  "date": "2026-11-23T13:35:45+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "a77f46b02a48b75843d8b9df34dcea86451c2066f149c2701240a9bfb416c621",
+    "command.txt": "61d03cda435be9911123dcdeba4b5d7dd3ddffe94258ec5b616d287170f4d8d7",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "c1f6d223e0661130221dcea607146966f6404db5b793152e79389631c7427096",
+    "results/tap-summary.txt": "deffa345a05616eda733cf01eaa41535c9b33433c7c436f9e6e3310d4bd25075"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": null,
+  "previous_run": null,
+  "run_id": "2026-11-23_133545Z_unit-history-test_3ff68f6",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 44,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu 24.04, root, no KVM)"
+}
