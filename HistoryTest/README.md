@@ -87,6 +87,7 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_224258Z_gate_20f89d5`](runs/2026-11-23_224258Z_gate_20f89d5/RUN.md) | 2026-11-23T22:42:58+00:00 | gate | `20f89d5` | **pass** | Pheonix's PC, Docker container on WSL2 | 0 / 0 / 0 |
 | [`2026-11-23_220703Z_suite_2894faf`](runs/2026-11-23_220703Z_suite_2894faf/RUN.md) | 2026-11-23T22:07:03+00:00 | suite | `2894faf` | **fail** | cloud container (Ubuntu) | 1374 / 2 / 6 |
 | [`2026-11-23_220640Z_gate-lint_2894faf`](runs/2026-11-23_220640Z_gate-lint_2894faf/RUN.md) | 2026-11-23T22:06:40+00:00 | gate-lint | `2894faf` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
 | [`2026-11-23_220600Z_unit-addons_2894faf`](runs/2026-11-23_220600Z_unit-addons_2894faf/RUN.md) | 2026-11-23T22:06:00+00:00 | unit-addons | `2894faf` | **pass** | cloud container (Ubuntu) | 163 / 0 / 0 |
