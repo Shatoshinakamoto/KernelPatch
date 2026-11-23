@@ -1,0 +1,30 @@
+ok 1 - generator: the sshd port and --allow-tcp are allowed inbound
+ok 2 - generator: never flushes the whole ruleset (OSB-23)
+ok 3 - generator: resets only its own table
+ok 4 - generator: three default-deny base chains
+ok 5 - generator: loopback accepted and spoofed loopback dropped
+ok 6 - generator: --forward drop routes nothing
+ok 7 - generator: a bad port is refused
+ok 8 - generator: --apply needs root or refuses cleanly
+ok 9 - stig-harden: --cis-firewall is wired to cis-nftables.sh --apply
+ok 10 - stig-harden: the CIS table is loaded before the baseline scan
+ok 11 - stig-harden: only on --remediate (a scan changes nothing)
+ok 12 - install.sh ships cis-nftables.sh next to stig-harden.sh
+ok 13 - drop-in: clears the vendor ExecStop
+ok 14 - drop-in: deletes only inet filter on stop
+ok 15 - drop-in: never flushes the ruleset
+ok 16 - --apply in a namespace: loads, installs the drop-in, keeps secure_sudo's table
+ok 17 - --apply: the drop-in is mode 0644
+ok 18 - before: inbound 8080 reachable with no firewall
+ok 19 - CIS: inbound SSH port reachable
+ok 20 - CIS: other inbound port dropped
+ok 21 - CIS: outbound new connection allowed (and its replies)
+ok 22 - coexist: secure_sudo's drop wins over CIS's outbound accept
+ok 23 - coexist: other outbound destinations still work
+ok 24 - coexist: CIS's SSH allowance is unaffected
+ok 25 - coexist: reloading the CIS file keeps the secure_sudo table
+ok 26 - coexist: ... and its drop still applies
+ok 27 - coexist: a secure_sudo accept does not open CIS's inbound drop
+ok 28 - coexist: removing the CIS table leaves the secure_sudo table
+ok 29 - after: inbound 8080 reachable again without the CIS table
+1..29

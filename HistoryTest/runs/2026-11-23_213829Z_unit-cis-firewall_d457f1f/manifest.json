@@ -1,0 +1,26 @@
+{
+  "area": "unit-cis-firewall",
+  "commit": "d457f1f",
+  "date": "2026-11-23T21:38:29+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "51bc0228cff04259b7cbf7817d6c66534277b4a14e302e38be49075a9985ca27",
+    "command.txt": "3ef5b5251ca965fbe2a30acb83dbc1637c30404a185020991d5e67e9593b2fc1",
+    "environment.md": "ace68a1305888b5b1b75aedaed090852b6058944ac5334c83576be7332fad3fc",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "f65af020b65d3fffde33d3bfd2eb4a1108389225aee9867bd10ff8e4eb84eb17",
+    "results/tap-summary.txt": "6d1e47b8a208ec16ecaad2b169e0a0c48f0c22280db845e6a0ab9d928e9d4b94"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "88cee752e1f82bc566c0e348b38fbb369c5a4a4f67779b4959700e10f3bb9a58",
+  "previous_run": "2026-11-23_213828Z_gate_4b5474f",
+  "run_id": "2026-11-23_213829Z_unit-cis-firewall_d457f1f",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 29,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "cloud container (Ubuntu), as root"
+}

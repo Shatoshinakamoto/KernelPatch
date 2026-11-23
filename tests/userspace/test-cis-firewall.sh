@@ -30,7 +30,12 @@ check "generator: loopback accepted and spoofed loopback dropped" bash -c "grep 
 SS_CIS_SSH_PORTS=22 bash "$CIS" --forward drop > "$T/cis-fd.nft"
 refute "generator: --forward drop routes nothing" bash -c "sed -n '/chain forward/,/}/p' '$T/cis-fd.nft' | grep -q accept"
 refute_with "generator: a bad port is refused" "bad port" bash "$CIS" --allow-tcp 70000
-refute_with "generator: --apply needs root or refuses cleanly" "needs root" env SS_CIS_NFT_CONF="$T/none.conf" setpriv --reuid=65534 --regid=65534 --clear-groups bash "$CIS" --apply
+# The unprivileged user must be able to read the script: the build gate runs
+# the suite as root from a 0700 mktemp copy of the tree, where uid 65534
+# cannot reach it and bash fails before the script can refuse.
+PUB="$(mktemp -d)"; chmod 0755 "$PUB"; cp "$CIS" "$PUB/cis-nftables.sh"; chmod 0644 "$PUB/cis-nftables.sh"
+refute_with "generator: --apply needs root or refuses cleanly" "needs root" env SS_CIS_NFT_CONF="$PUB/none.conf" setpriv --reuid=65534 --regid=65534 --clear-groups bash "$PUB/cis-nftables.sh" --apply
+rm -rf "$PUB"
 
 S="$ROOT/scripts/stig-harden.sh"
 check "stig-harden: --cis-firewall is wired to cis-nftables.sh --apply" grep -q 'cis-nftables.sh" --apply' "$S"

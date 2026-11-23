@@ -1,0 +1,23 @@
+{
+  "area": "gate",
+  "commit": "4b5474f",
+  "date": "2026-11-23T21:38:28+00:00",
+  "files": {
+    "RUN.md": "16be46abd1bf06c181b082a6780583563cbdcb08b553519a9adcb6fabf56a4aa",
+    "command.txt": "92ea940ada52b298e53a57aba992160381bc2c283cdfc07e6f54482efc153fa2",
+    "environment.md": "209d5be958b38b5080166814070cb07b99b1fa3b0c62dbe8a838ca8cfabad569",
+    "results/pcgate.txt": "d8d7605baa5fa868f04ff6606ce77ed88fde9b7ebff6147eacf1bb0cc78a9e58"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "7b51577743b32694f9ac552e7aa6b27dcec882eac9642b6464eaeef1e4df3cd1",
+  "previous_run": "2026-11-23_213450Z_gate-lint_4b76813",
+  "run_id": "2026-11-23_213828Z_gate_4b5474f",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "fail",
+  "where": "Pheonix's PC, Docker container on WSL2 (QEMU TCG for VM stages)"
+}
