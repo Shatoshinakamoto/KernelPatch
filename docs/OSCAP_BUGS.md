@@ -107,8 +107,10 @@ result: newlines restored and backups kept, a repair that fails `bash -n`
 rolled back, `retry` handling, the SSSD mapping and mode, the `syslog` group and
 the rsyslog install, the audit directory mode, log-file modes. A second run
 changes nothing. It does not need oscap, so it covers what the VM run cannot
-re-create cheaply; OSB-15 (AppArmor python), 16-18 and the scan/summary parsing
-are not covered yet.
+re-create cheaply; `test-stig-selection.sh` (19 checks) covers datastream and profile selection
+(preference order, no silent pick of an unknown profile) and that the summary
+lists every rule not at pass. OSB-15 (AppArmor python), 16-18 and package-install
+drift are not covered yet.
 
 Full scan after the patch run: **61 pass / 1 fail / 1 error / 164 not
 applicable / 3 not checked**, matching the best result.
