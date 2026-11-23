@@ -259,7 +259,7 @@ never pass in release mode; a listed rule missing from the results fails
 | `ci/lsm-compile-check.sh` | Compile every LSM file against a header tree (`--mode kbuild\|direct`) |
 | `ci/check-lsm-hooks.sh` | Fails if any LSM hook is registered twice (the v11 boot panic) |
 
-Tools the gate's tests expect on a bare Ubuntu builder (the runner image had them preinstalled): `zip unzip nftables iptables iproute2 iputils-ping netcat-openbsd swtpm swtpm-tools tpm2-tools libtss2-tcti-swtpm0t64`, plus the build packages in `.github/workflows/build-gate.yml`. Run the `tests` stage as root. The network-namespace suites skip, rather than fail, when `ping` is missing.
+Tools the gate's tests expect on a bare Ubuntu builder (the runner image had them preinstalled): `zip unzip nftables iptables iproute2 iputils-ping netcat-openbsd swtpm swtpm-tools tpm2-tools libtss2-tcti-swtpm0t64`, plus the build packages in `.github/workflows/build-gate.yml`. Run the `tests` stage as root. The network-namespace suites skip, rather than fail, when `ping` is missing. The record's `source_tree_sha256` and the release package come from a pristine copy of the checkout that no stage builds in, so they are the same for the same commit (the gate's own copy used to leak build output into both, found on 2026-11-23). Auto-discovered `/usr/src/linux-headers-*-generic` trees older than 6.11 (unsupported, see SUPPORT.md; 6.8 has no BPF-token hooks) are reported and not compiled; headers named with `--headers` are always compiled.
 
 The GitHub workflow `.github/workflows/build-gate.yml` runs the gate on every
 push and pull request and nightly. Weekly (Sunday) and on demand it also
