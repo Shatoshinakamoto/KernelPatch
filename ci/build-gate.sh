@@ -76,7 +76,7 @@ cp -a "$SRC" "$PRISTINE"
 shell_scripts() {
 	(cd "$SRC" && { find . -name '*.sh' -type f; \
 		grep -rlE '^#!/(usr/)?bin/(env )?(ba)?sh' --exclude-dir=docs --exclude='*.sh' . 2>/dev/null; } |
-		grep -v '/docs/stig/results/' | sed 's|^\./||' | LC_ALL=C sort -u)
+		grep -v -e '/docs/stig/results/' -e '^\./HistoryTest/' | sed 's|^\./||' | LC_ALL=C sort -u)
 }
 
 # ------------------------------------------------------------------ lint
@@ -106,6 +106,13 @@ if stage_on lint; then
 	python3 -B "$SRC/ci/check-process-docs.py" "$SRC" > "$WORK/process-docs.log" 2>&1 ||
 		{ grep -v '^ok' "$WORK/process-docs.log"; bad=$((bad + 1)); }
 	tail -1 "$WORK/process-docs.log"
+	# HistoryTest/ archive integrity (CLAUDE.MD section 9, NIST AU-10): every
+	# sealed run's hashes, the manifest chain, redaction and the index.
+	if [ -d "$SRC/HistoryTest" ]; then
+		SS_HISTORYTEST_DIR="$SRC/HistoryTest" python3 -B "$SRC/scripts/history_test.py" verify > "$WORK/history-test.log" 2>&1 ||
+			{ cat "$WORK/history-test.log"; bad=$((bad + 1)); }
+		tail -1 "$WORK/history-test.log"
+	fi
 	if [ "$bad" -eq 0 ]; then result lint pass "$n shell scripts"; else result lint FAIL "$bad problems"; fi
 fi
 
