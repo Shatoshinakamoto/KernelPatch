@@ -87,6 +87,9 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-23_214119Z_gate-lint_e82717f`](runs/2026-11-23_214119Z_gate-lint_e82717f/RUN.md) | 2026-11-23T21:41:19+00:00 | gate-lint | `e82717f` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
+| [`2026-11-23_214105Z_lsm-compile_e82717f`](runs/2026-11-23_214105Z_lsm-compile_e82717f/RUN.md) | 2026-11-23T21:41:05+00:00 | lsm-compile | `e82717f` | **pass** | cloud container (Ubuntu), linux-headers-6.17.0-42-generic from the Ubuntu archive | 0 / 0 / 0 |
+| [`2026-11-23_214051Z_lsm-compile_e82717f`](runs/2026-11-23_214051Z_lsm-compile_e82717f/RUN.md) | 2026-11-23T21:40:51+00:00 | lsm-compile | `e82717f` | **pass** | cloud container (Ubuntu), linux-headers-6.14.0-37-generic from the Ubuntu archive | 0 / 0 / 0 |
 | [`2026-11-23_213829Z_unit-cis-firewall_d457f1f`](runs/2026-11-23_213829Z_unit-cis-firewall_d457f1f/RUN.md) | 2026-11-23T21:38:29+00:00 | unit-cis-firewall | `d457f1f` | **pass** | cloud container (Ubuntu), as root | 29 / 0 / 0 |
 | [`2026-11-23_213828Z_gate_4b5474f`](runs/2026-11-23_213828Z_gate_4b5474f/RUN.md) | 2026-11-23T21:38:28+00:00 | gate | `4b5474f` | **fail** | Pheonix's PC, Docker container on WSL2 (QEMU TCG for VM stages) | 0 / 0 / 0 |
 | [`2026-11-23_213450Z_gate-lint_4b76813`](runs/2026-11-23_213450Z_gate-lint_4b76813/RUN.md) | 2026-11-23T21:34:50+00:00 | gate-lint | `4b76813` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
