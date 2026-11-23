@@ -126,6 +126,11 @@ networking, or apply the policy inside that namespace.
   touched: only `inet secure_sudo` is replaced or deleted. A drop in any
   table is final, so this policy cannot loosen theirs, and an `accept` in
   theirs cannot bypass this one.
+* The reverse needs care: a firewall file that starts with `flush ruleset`
+  (Ubuntu's stock `/etc/nftables.conf`, loaded by `nftables.service`)
+  deletes `inet secure_sudo` too, and the mode is off until the daemon's next
+  refresh. `scripts/stig-harden.sh` rewrites that line to reset only the
+  file's own tables (OSB-23); do the same in any firewall file you load.
 
 Tested against real traffic in network namespaces by
 `tests/userspace/test-netpolicy.sh`.
