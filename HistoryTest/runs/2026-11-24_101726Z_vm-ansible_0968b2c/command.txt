@@ -1,0 +1,9 @@
+# kp-vm container (ubuntu:24.04, privileged, QEMU TCG, no KVM), tree = git archive of the commit
+bash run-ansible-vm.sh <tree> <results> noble-server-cloudimg-amd64.img   # VM_DISK=40G
+# A. env BUILD_ROOT=... SS_BASE_CONFIG=<guest config> SS_LOCALMOD=<guest lsmod> bash install/install.sh build-kernel
+#    bash install/install.sh stage-userspace <stage>
+# B. ansible-playbook -i inventory.ini secure_sudo.yml   (twice; group_vars: secure_sudo_kernel=prebuilt,
+#    secure_sudo_kernel_dir=<out/release>, secure_sudo_userspace_dir=<stage>, secure_sudo_net_mode=monitor,
+#    secure_sudo_reboot_timeout=2400; inventory: the guest over SSH as root)
+# C. bash quick-install.sh --archive <secure_sudo-0.12.0.tar.gz> --dest /opt/qi --dry-run   (on the guest)
+#    the same with a tampered copy of the archive and --yes

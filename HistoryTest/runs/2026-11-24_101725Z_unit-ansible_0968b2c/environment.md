@@ -1,0 +1,1 @@
+Host: Windows 11 PC, Docker Desktop (WSL2 kernel 6.18), container ubuntu:24.04 privileged, 20 CPUs, 47 GB RAM; QEMU TCG (no KVM). Guest: Ubuntu 24.04 cloud image (verified with gpgv + sha256), 8 vCPUs, 8 GB, 40 GB disk, BIOS/GRUB. ansible-core 2.16.3 on the controller (container).

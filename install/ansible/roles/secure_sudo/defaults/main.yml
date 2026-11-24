@@ -1,0 +1,57 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Defaults for the secure_sudo role. Every variable is documented in
+# docs/configuration/ansible-vars.md (type, allowed values, security impact).
+# Override them in group_vars/host_vars (see ../../group_vars/secure_sudo.yml.example)
+# or with --extra-vars. The defaults are the safe choice for a first rollout.
+
+# --- where the code comes from -----------------------------------------------
+# "controller": build a reproducible release archive on the Ansible controller
+#   from the checkout this role sits in (ci/make-release.sh), copy it, check its
+#   SHA-256 on the target, unpack it.
+# "archive": use a release archive you downloaded and verified yourself
+#   (secure_sudo_archive + secure_sudo_archive_sha256 on the controller).
+secure_sudo_source: controller
+secure_sudo_archive: ""          # controller path to secure_sudo-X.Y.Z.tar.gz
+secure_sudo_archive_sha256: ""   # 64 hex digits; required with "archive"
+secure_sudo_remote_dir: /opt/secure_sudo   # unpack location on the target (root:root 0755)
+
+# --- kernel ------------------------------------------------------------------
+# "build": every target builds the kernel from the signature-verified kernel.org
+#   source (install.sh build-kernel). Slow (tens of minutes per host), needs ~20 GB.
+# "prebuilt": install packages built once on a build host
+#   (install.sh build-kernel there; copy its out/<release>/ directory to the
+#   controller and point secure_sudo_kernel_dir at it). Same distro release as
+#   the targets.
+secure_sudo_kernel: build
+secure_sudo_kernel_dir: ""       # controller directory with linux-image-*.deb (or rpm) + SHA256SUMS
+secure_sudo_kver: ""             # empty: install.sh's pinned LTS point release
+
+# --- userspace ---------------------------------------------------------------
+# empty: build the CLI, daemon, PAM modules, OTP helper and PheonixBox on the
+# target. A controller directory made by `install.sh stage-userspace DIR`:
+# install those prebuilt files instead (the targets then need no compiler).
+secure_sudo_userspace_dir: ""
+
+# --- trial boot and commit ---------------------------------------------------
+# true: reboot into the new kernel (it boots ONCE; the previous kernel stays the
+# default), check it, then `install.sh verify --commit`. false: stop after the
+# install; reboot and commit yourself.
+secure_sudo_trial_boot: true
+secure_sudo_reboot_timeout: 1800   # seconds to wait for the host to come back
+# Fail the host when it came back on another kernel (the trial did not stay up
+# and the bootloader fell back). Leave true: a silent fallback is not a success.
+secure_sudo_require_new_kernel: true
+
+# --- policy and service ------------------------------------------------------
+secure_sudo_net_mode: monitor      # monitor | host | lan-only | public-only
+secure_sudo_load_policy: true      # secure-sudo lint, then load, after the commit
+
+# --- optional parts (all off) ------------------------------------------------
+secure_sudo_addons: false          # temporary/install-temporary.sh (enables nothing)
+secure_sudo_addons_initramfs: false  # ... --initramfs (BootGuard initramfs stage)
+secure_sudo_stig: ""               # "" | scan  (remediation is a separate, reviewed step)
+secure_sudo_enable_pam_cooldown: false
+secure_sudo_enable_pam_otp: false  # run `secure-sudo otp setup` for each user first

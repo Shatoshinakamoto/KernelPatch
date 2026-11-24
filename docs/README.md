@@ -28,10 +28,12 @@ here (CLAUDE.MD section 5).
 |---|---|
 | [COMMANDS.md](COMMANDS.md) | The `secure-sudo` CLI and the other installed commands |
 | [SCRIPTS.md](SCRIPTS.md) | Every script in `scripts/`, `ci/`, `install/` and `tests/`, with its flags |
+| [commands/quick-install.md](commands/quick-install.md) | `install/quick-install.sh`: the guided one-machine install, every option |
 | [commands/history-test.md](commands/history-test.md) | `scripts/history_test.py`, the HistoryTest recorder |
 | [CONFIGURATION.md](CONFIGURATION.md) | Every configuration file and key |
 | [configuration/secure-sudo-conf.md](configuration/secure-sudo-conf.md) | `secure-sudo.conf`: every key's type, range, defaults, security impact and NIST reference |
 | [configuration/net-conf.md](configuration/net-conf.md) | `net.conf`: what the network modes treat as the LAN, and the stop behaviour |
+| [configuration/ansible-vars.md](configuration/ansible-vars.md) | The Ansible role's variables: allowed values, defaults, security impact |
 | [configuration/pheonixbox-conf.md](configuration/pheonixbox-conf.md) | `pheonixbox.conf`: the protected paths and the snapshot trust mode |
 | [files/blacklist.md](files/blacklist.md) | `blacklist.conf`: commands non-sudo users may not run (#2) |
 | [files/setid_exec_allow.md](files/setid_exec_allow.md) | `setid_exec_allow.conf`: setuid/setgid programs non-sudo users may still run (#1b) |
@@ -71,6 +73,7 @@ here (CLAUDE.MD section 5).
 
 | Page | What it is |
 |---|---|
+| [INSTALL.md](INSTALL.md) | Every way to install: quick install, step by step, build once, Ansible, Secure Boot, offline; verify a release |
 | [RECOVERY.md](RECOVERY.md) | Recovery from a bad install, lockout or failed boot |
 | [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) | Incident response runbook and `secure-sudo contain` |
 | [HARDWARE_SMOKE_TEST.md](HARDWARE_SMOKE_TEST.md) | The hardware smoke test a VM cannot cover |

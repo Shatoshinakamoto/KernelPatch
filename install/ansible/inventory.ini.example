@@ -1,15 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
 # Example inventory for secure_sudo.yml. Copy to inventory.ini and edit.
+# Nothing here is active on purpose: the play only runs on hosts you list in
+# [secure_sudo] yourself. Never list the controller itself unless you mean to
+# install a new kernel on it.
 #
-# [secure_hosts]
-# server1 ansible_host=10.0.0.11
-# server2 ansible_host=10.0.0.12
-#
-# [secure_hosts:vars]
-# ansible_user=admin
-# secure_sudo_kver=6.12.48
-# secure_sudo_net_mode=host
-# secure_sudo_enable_pam_cooldown=true
-# secure_sudo_enable_pam_otp=false
+# Settings: group_vars/secure_sudo.yml.example and
+# docs/configuration/ansible-vars.md. Do not put passwords here; use SSH keys
+# and, for sudo, ansible-vault or --ask-become-pass.
 
-[local]
-localhost ansible_connection=local
+[secure_sudo]
+# web1 ansible_host=192.0.2.11
+# web2 ansible_host=192.0.2.12
+
+[secure_sudo:vars]
+# ansible_user=admin
+# secure_sudo_net_mode=host

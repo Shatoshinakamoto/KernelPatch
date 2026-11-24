@@ -1,0 +1,42 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# The trial boot: reboot once into the new kernel (the previous one stays the
+# default), check it came up and passes verify, and only then commit it.
+# A host that falls back to its previous kernel fails here and is left on the
+# previous kernel: nothing is committed (NIST CM-3, CP-10).
+- name: Reboot into the new kernel (once)
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ secure_sudo_reboot_timeout | int }}"
+    msg: "secure_sudo trial boot"
+    test_command: uname -r
+
+- name: Read the running kernel
+  ansible.builtin.command:
+    argv: [uname, -r]
+  register: ss_uname
+  changed_when: false
+
+- name: Fail when the host came back on another kernel
+  ansible.builtin.fail:
+    msg: >-
+      {{ inventory_hostname }} came back on {{ ss_uname.stdout }}, not the
+      secure_sudo kernel: the trial boot did not stay up and the previous
+      kernel is still the default. Read the console log and docs/RECOVERY.md.
+  when:
+    - secure_sudo_require_new_kernel | bool
+    - ss_uname.stdout is not search('-secure-sudo$')
+
+- name: Verify on the new kernel and commit it
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_install }}", verify, --commit]
+  register: ss_commit
+  changed_when: "' is now the default boot entry' in ss_commit.stdout"
+  failed_when: "ss_commit.rc != 0 or 'verify: OK' not in ss_commit.stdout"
+  when: ss_uname.stdout is search('-secure-sudo$')
+
+- name: Show the commit result
+  ansible.builtin.debug:
+    var: ss_commit.stdout_lines
+  when: ss_commit is not skipped

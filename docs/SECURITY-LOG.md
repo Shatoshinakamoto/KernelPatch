@@ -8,6 +8,16 @@ stays the detailed record. Each entry here points to it.
 CVSS and EPSS scores are given only where a CVE exists. These are project
 findings without CVE IDs, so none are given; no scores are invented.
 
+## 2026-11-24 — disclosure policy confirmed for a public repository
+- **Type:** hardening (process)
+- **CVE / CWE / advisory:** none
+- **Severity:** no CVSS (no CVE). Not a code change.
+- **Affected:** `SECURITY.md`, `docs/MAINTENANCE.md`, `docs/SUPPORT.md`.
+- **What changed:** the owner confirmed the response targets (acknowledge in 3 days, triage in 7, critical fixes in 14, high in 30, medium and low in 90, disclosure at release or 90 days) and the end-of-support policy. GitHub private vulnerability reporting is named as the only reporting channel, to be enabled when the repository is made public; no personal contact is published.
+- **Why it is secure now:** reporters have one private channel with committed response times, so a vulnerability does not have to be disclosed in a public issue (NIST SI-5, IR-6, SA-11; CISA Secure by Design: vulnerability disclosure).
+- **Accepted by the owner:** the repository's git history keeps the commit author emails and two removed early folders (`node-pkg-plugin/`, `pheonix-cli/`) with contact emails; making it public publishes them. History is not rewritten.
+- **Verification:** `ci/check-process-docs.py` and `ci/check-support-matrix.py` pass in the build gate's lint stage (run recorded on the pull request).
+
 ## 2026-11-23 — add-on logs can be shipped over verified TLS, and reconnect
 - **Type:** patch (hardening)
 - **CVE / CWE / advisory:** none; CWE-319, CWE-295, CWE-297
