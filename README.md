@@ -52,8 +52,10 @@ docs/
   vm/results/                     recorded boot and VM test runs
 install/
   install.sh                      preflight, build, trial-boot install, verify, rollback, uninstall
+  quick-install.sh                guided one-machine install: verify a release, preflight, ask, install
   keys/                           kernel.org signing key and pinned fingerprints
-  ansible/secure_sudo.yml         YAML scaffold wrapping the installer
+  ansible/secure_sudo.yml         fleet rollout (role ansible/roles/secure_sudo): one host at a time,
+                                  trial boot, commit, policy; see docs/INSTALL.md
   encrypted/install-encrypted.sh  encrypted-source + Secure Boot (MOK) variant
   encrypted/deploy-encrypted.yml  Ansible wrapper for the encrypted variant
 ci/
@@ -129,6 +131,12 @@ cross-process memory read/write (source → target) for the GUI's memory feed.
 Full write-up, honesty notes, commands, and settings: [docs/ADDONS.md](docs/ADDONS.md).
 
 ## Install (quick)
+
+Six ways to install (guided quick install, step by step, build once for many
+machines, Ansible for fleets, Secure Boot with an encrypted source bundle,
+offline), how to verify a release, and what to check afterwards:
+**[docs/INSTALL.md](docs/INSTALL.md)**. The shortest path, from a checkout you
+reviewed, is `sudo bash install/quick-install.sh`. Step by step:
 
 Keep a second root session open the whole time (`docs/RECOVERY.md`).
 

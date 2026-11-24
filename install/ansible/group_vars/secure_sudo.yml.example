@@ -1,0 +1,37 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Example settings for the [secure_sudo] group. Copy to
+# group_vars/secure_sudo.yml and keep only what you change. Every variable,
+# its allowed values and its security impact: docs/configuration/ansible-vars.md.
+# No secrets belong in this file.
+
+# Hosts at a time. 1 is the safe default: the rollout stops at the first
+# failure. Raise it only after the first hosts of a model have passed.
+secure_sudo_serial: 1
+
+# Build once on a build host, install everywhere (no compiler or kernel
+# source needed on the targets):
+#   on the build host:  sudo bash install/install.sh build-kernel
+#                       sudo bash install/install.sh stage-userspace /tmp/ss-stage
+#   copy /usr/src/secure_sudo-build/out/<release>/ and /tmp/ss-stage to the controller
+# secure_sudo_kernel: prebuilt
+# secure_sudo_kernel_dir: /srv/secure_sudo/6.12.114-secure-sudo
+# secure_sudo_userspace_dir: /srv/secure_sudo/stage
+
+# Install a release archive you downloaded and verified yourself
+# (docs/INSTALL.md, "Verify a release"):
+# secure_sudo_source: archive
+# secure_sudo_archive: /srv/secure_sudo/secure_sudo-0.12.0.tar.gz
+# secure_sudo_archive_sha256: "<64 hex digits from secure_sudo-0.12.0.tar.gz.sha256>"
+
+secure_sudo_net_mode: monitor
+secure_sudo_trial_boot: true
+secure_sudo_reboot_timeout: 1800
+
+# Off unless you want them:
+# secure_sudo_addons: true
+# secure_sudo_addons_initramfs: true
+# secure_sudo_stig: scan
+# secure_sudo_enable_pam_cooldown: true

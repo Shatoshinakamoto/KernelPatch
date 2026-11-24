@@ -1,0 +1,26 @@
+{
+  "area": "unit-history-test",
+  "commit": "db69a49",
+  "date": "2026-11-24T10:32:37+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "515e99d8d6ffd401c8929855706eee2c4af3f2fcfb48fbac73e6baf6cd7c21e4",
+    "command.txt": "05fa4ba1c8d8ae6a982ab04494fda18d0adc57cfde1f3acad234cb22b9054392",
+    "environment.md": "084e6933727cf5c8808935be11339b756bc5af111ab64273da9dfb6c31ff9c36",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "3d3504a9441be8ed3df84e0b7e3d8072bc88d4dd74313d3ab997dd800c3dbdfe",
+    "results/tap-summary.txt": "afaa3b18eda8b4fe97b83186ba85b9db2a99e48139fe5a8e311e9183ce178faa"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "70c7e4f30e51533a9407da1b0ac83eccdf30f63280e9619e12d613f725c50a9b",
+  "previous_run": "2026-11-24_103222Z_gate-lint_db69a49",
+  "run_id": "2026-11-24_103237Z_unit-history-test_db69a49",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 49,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "local"
+}

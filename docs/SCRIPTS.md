@@ -23,6 +23,8 @@ and example.
 | [`scripts/cis-nftables.sh`](commands/cis-nftables.md) | Install or check CIS's own firewall table, `inet filter`, next to secure_sudo's `inet secure_sudo` (they coexist). |
 | [`scripts/stig-harden.sh`](commands/stig-harden.md) | Run a DISA STIG (or the closest hardening baseline the distro actually ships) OpenSCAP evaluation on the host, and optionally apply the generated remediation. |
 | [`install/install.sh`](commands/install-sh.md) | Build, install, verify, roll back and remove the secure_sudo kernel and userspace on Debian/Ubuntu, Fedora/RHEL, Arch and openSUSE (family from `/etc/os-release` `ID`/`ID_LIKE`). |
+| [`install/quick-install.sh`](commands/quick-install.md) | Guided one-machine install: verify a release archive, run preflight, ask, then install. |
+| [`install/ansible/secure_sudo.yml`](configuration/ansible-vars.md) | Ansible fleet rollout through the `install/ansible/roles/secure_sudo/` role; guide: [INSTALL.md](INSTALL.md#method-4-ansible-fleets). |
 | [`install/encrypted/install-encrypted.sh`](commands/install-encrypted.md) | Encrypted-source + Secure Boot variant. |
 | [`scripts/oscap-results.py`](commands/oscap-results.md) | Reads OpenSCAP results (XCCDF/ARF XML, or saved `oscap xccdf eval` console output with its `\r` rewrites) and is what `stig-harden.sh` and the STIG gate use to count and compare results. |
 | [`userspace/daemon/helpers/apply-net.sh`](commands/apply-net.md) | Called by `secure-sudod` when `net_mode` changes and every 15 seconds after (not run by hand, except `status`). |

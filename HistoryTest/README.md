@@ -31,7 +31,9 @@ release archives, packages and the installer never contain it.
    notes (`note`) or a new run. Unreliable results are marked `invalid`
    (`invalidate`) with the reason.
 6. **Integrity (NIST AU-10).** `manifest.json` holds the SHA-256 of every file
-   in the run and the SHA-256 of the previous run's manifest. `NOTES.md`,
+   in the run and the SHA-256 of the manifest of an earlier run it follows
+   (normally the newest one; after two branches are merged, two runs may
+   follow the same earlier run). `NOTES.md`,
    `notes.json` and `INVALID` are the only files that may be added later, and
    `notes.json` chains them. The build gate's lint stage runs `verify`.
 7. **Generated index.** `INDEX.csv` and the table below are written by
@@ -87,6 +89,11 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-24_103237Z_unit-history-test_db69a49`](runs/2026-11-24_103237Z_unit-history-test_db69a49/RUN.md) | 2026-11-24T10:32:37+00:00 | unit-history-test | `db69a49` | **pass** | local | 49 / 0 / 0 |
+| [`2026-11-24_103222Z_gate-lint_db69a49`](runs/2026-11-24_103222Z_gate-lint_db69a49/RUN.md) | 2026-11-24T10:32:22+00:00 | gate-lint | `db69a49` | **pass** | local | 1 / 0 / 0 |
+| [`2026-11-24_101726Z_vm-ansible_0968b2c`](runs/2026-11-24_101726Z_vm-ansible_0968b2c/RUN.md) | 2026-11-24T10:05:00+00:00 | vm-ansible | `0968b2c` | **partial** | owner PC (Docker, QEMU TCG) | 13 / 1 / 0 |
+| [`2026-11-24_101725Z_unit-ansible_0968b2c`](runs/2026-11-24_101725Z_unit-ansible_0968b2c/RUN.md) | 2026-11-24T10:48:00+00:00 | unit-ansible | `0968b2c` | **pass** | owner PC (Docker container) | 25 / 0 / 0 |
+| [`2026-11-24_101724Z_unit-quick-install_0968b2c`](runs/2026-11-24_101724Z_unit-quick-install_0968b2c/RUN.md) | 2026-11-24T10:47:00+00:00 | unit-quick-install | `0968b2c` | **pass** | owner PC (Docker container, root) | 37 / 0 / 0 |
 | [`2026-11-24_093100Z_suite_3c5c375`](runs/2026-11-24_093100Z_suite_3c5c375/RUN.md) | 2026-11-24T09:31:00+00:00 | suite | `3c5c375` | **fail** | cloud container (Ubuntu) | 1382 / 2 / 6 |
 | [`2026-11-24_093037Z_gate-lint_3c5c375`](runs/2026-11-24_093037Z_gate-lint_3c5c375/RUN.md) | 2026-11-24T09:30:36+00:00 | gate-lint | `3c5c375` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
 | [`2026-11-24_093036Z_unit-command-docs_3c5c375`](runs/2026-11-24_093036Z_unit-command-docs_3c5c375/RUN.md) | 2026-11-24T09:30:36+00:00 | unit-command-docs | `3c5c375` | **pass** | cloud container (Ubuntu) | 8 / 0 / 0 |

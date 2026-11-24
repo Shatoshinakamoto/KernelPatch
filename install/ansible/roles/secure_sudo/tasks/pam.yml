@@ -1,0 +1,41 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Optional PAM wiring, OFF by default. Keep a root session open on every host
+# while this runs (docs/RECOVERY.md): a bad PAM line can lock out sudo.
+# The cooldown line only observes (userspace/pam/pam_secure_sudo.c); the OTP
+# line is a second factor after the password and needs `secure-sudo otp setup`
+# done for each sudo user first.
+- name: Remove the old cooldown lines from sudo/su PAM
+  ansible.builtin.lineinfile:
+    path: "/etc/pam.d/{{ item }}"
+    regexp: '^auth\s+required\s+pam_secure_sudo\.so\s+auth(fail|succ)'
+    state: absent
+    backup: true
+  loop: [sudo, su]
+  when: secure_sudo_enable_pam_cooldown | bool
+
+- name: Wire cooldown reporting into sudo/su PAM
+  ansible.builtin.lineinfile:
+    path: "/etc/pam.d/{{ item }}"
+    line: "auth  optional  pam_secure_sudo.so"
+    insertbefore: '^(auth|@include)\s'
+    firstmatch: true
+    backup: true
+  loop: [sudo, su]
+  when: secure_sudo_enable_pam_cooldown | bool
+
+- name: Wire OTP into sudo PAM (after the password)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/sudo
+    line: "auth  required  pam_secure_otp.so"
+    insertafter: '^(@include\s+common-auth|auth\s+(include|substack)\s+(system-auth|common-auth))'
+    firstmatch: true
+    backup: true
+  when: secure_sudo_enable_pam_otp | bool
+
+- name: Check the PAM wiring (secure-sudo lint)
+  ansible.builtin.command:
+    argv: [secure-sudo, lint]
+  changed_when: false

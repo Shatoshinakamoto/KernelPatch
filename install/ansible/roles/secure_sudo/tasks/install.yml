@@ -1,0 +1,125 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Preflight, kernel, userspace. Each step is install.sh's own subcommand, so
+# its safety rules apply unchanged: verified kernel source, the new kernel
+# next to the running one, a recorded file manifest, a trial boot.
+- name: Set the environment install.sh runs with
+  ansible.builtin.set_fact:
+    ss_env: "{{ {'SS_TPM_LOCKOUT': '0'} | combine({'KVER': secure_sudo_kver} if secure_sudo_kver | length > 0 else {}) }}"
+    ss_stage: "{{ secure_sudo_remote_dir }}/userspace-stage"
+
+# ------------------------------------------- prebuilt inputs, checked first
+# Copied and checked before the preflight, so the preflight looks at exactly
+# what will be installed.
+- name: Copy the prebuilt kernel packages
+  ansible.builtin.copy:
+    src: "{{ secure_sudo_kernel_dir }}/"
+    dest: "{{ secure_sudo_remote_dir }}/kernel/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  when: secure_sudo_kernel == 'prebuilt'
+
+# SECURITY: the packages must match the SHA256SUMS their build wrote (SI-7);
+# install-kernel checks it again before it installs anything.
+- name: Check the prebuilt packages against their SHA256SUMS
+  ansible.builtin.command:
+    argv: [sha256sum, -c, --ignore-missing, --strict, SHA256SUMS]
+    chdir: "{{ secure_sudo_remote_dir }}/kernel"
+  changed_when: false
+  when: secure_sudo_kernel == 'prebuilt'
+
+- name: Copy the prebuilt userspace
+  ansible.builtin.copy:
+    src: "{{ secure_sudo_userspace_dir }}/"
+    dest: "{{ ss_stage }}/"
+    owner: root
+    group: root
+    mode: preserve
+  when: secure_sudo_userspace_dir | length > 0
+
+# ---------------------------------------------------------------- preflight
+# Only the parts that will run: a prebuilt kernel needs no build space, no
+# compiler and no kernel source, so its preflight does not ask for them.
+- name: Choose the preflight checks for this kind of install
+  ansible.builtin.set_fact:
+    ss_preflights: >-
+      {{ ((secure_sudo_kernel == 'build') | ternary([['build-kernel']], []))
+         + [['install-kernel']]
+         + [['userspace'] + ((secure_sudo_userspace_dir | length > 0) | ternary(['--prebuilt', ss_stage], []))] }}
+
+# A blocker fails the host here, before anything is changed; Ansible prints
+# the preflight's output (stdout_lines) with the failure.
+- name: Preflight (changes nothing)
+  ansible.builtin.command:
+    argv: "{{ ['bash', ss_install, 'preflight'] + item }}"
+  environment: "{{ ss_env }}"
+  loop: "{{ ss_preflights }}"
+  loop_control:
+    label: "preflight {{ item | join(' ') }}"
+  register: ss_preflight
+  changed_when: false
+
+- name: Show the preflight
+  ansible.builtin.debug:
+    msg: "{{ ss_preflight.results | map(attribute='stdout_lines') | flatten }}"
+
+# ------------------------------------------------------------------ kernel
+- name: Build the kernel from the signature-verified kernel.org source
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_install }}", build-kernel]
+  environment: "{{ ss_env }}"
+  register: ss_build
+  changed_when: true
+  async: 14400   # a kernel build can take hours on a small host
+  poll: 30
+  when: secure_sudo_kernel == 'build'
+
+- name: Locate the package the build produced
+  ansible.builtin.find:
+    paths: /usr/src/secure_sudo-build/out
+    file_type: directory
+  register: ss_built
+  when: secure_sudo_kernel == 'build'
+
+- name: Choose the kernel package directory
+  ansible.builtin.set_fact:
+    ss_kernel_pkgs: >-
+      {{ (secure_sudo_kernel == 'prebuilt')
+         | ternary(secure_sudo_remote_dir ~ '/kernel',
+                   (ss_built.files | default([]) | sort(attribute='mtime') | last | default({})).path | default('')) }}
+
+- name: Check a kernel package directory was found
+  ansible.builtin.assert:
+    quiet: true
+    that: [ss_kernel_pkgs | length > 0]
+    fail_msg: no built kernel packages found on {{ inventory_hostname }}
+
+- name: Install the kernel next to the running one and arm the trial boot
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_install }}", install-kernel, "{{ ss_kernel_pkgs }}"]
+  environment: "{{ ss_env }}"
+  register: ss_kinst
+  changed_when: true
+
+# --------------------------------------------------------------- userspace
+- name: Install userspace (CLI, daemon, PAM modules, OTP helper, PheonixBox)
+  ansible.builtin.command:
+    argv: "{{ ['bash', ss_install, 'userspace'] + ((secure_sudo_userspace_dir | length > 0) | ternary(['--prebuilt', ss_stage], [])) }}"
+  environment: "{{ ss_env }}"
+  register: ss_uinst
+  changed_when: true
+
+- name: Verify before the reboot
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_install }}", verify]
+  register: ss_verify_pre
+  changed_when: false
+  failed_when: "ss_verify_pre.rc != 0 or 'verify: OK' not in ss_verify_pre.stdout"
+
+- name: Show the verify result
+  ansible.builtin.debug:
+    var: ss_verify_pre.stdout_lines

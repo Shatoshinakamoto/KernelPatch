@@ -1,0 +1,26 @@
+{
+  "area": "gate-lint",
+  "commit": "db69a49",
+  "date": "2026-11-24T10:32:22+00:00",
+  "exit_code": 0,
+  "files": {
+    "RUN.md": "fdcc448a1eb3419ba90d18be241117fbad596aabac409cb75e018920dfd6395f",
+    "command.txt": "71bbf817ed5bbf72b82faa23756bf8cf6369d8a62067dd309eeb213681eee5a2",
+    "environment.md": "084e6933727cf5c8808935be11339b756bc5af111ab64273da9dfb6c31ff9c36",
+    "logs/stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "logs/stdout.log": "c0bb9a364145ab30e0236534502570c3ee072f03edd3fe2c9a6a96cfee295198",
+    "results/tap-summary.txt": "6b7b58c9f5c2bd0fe64d7bf1050c23abdd3d9bdefe9188c58cd85f48741a83d5"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "cdaea88effb47e5235f82da88293b3b494b853544f1d01f81274595521aef104",
+  "previous_run": "2026-11-24_101726Z_vm-ansible_0968b2c",
+  "run_id": "2026-11-24_103222Z_gate-lint_db69a49",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 1,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "local"
+}

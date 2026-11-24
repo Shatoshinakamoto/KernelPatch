@@ -1,7 +1,7 @@
 # Compatibility and release-support matrix (TODO P3-1)
 
 Release: 0.12.0
-Matrix reviewed: 2026-11-22
+Matrix reviewed: 2026-11-24
 
 What the project builds and tests, and what it only expects to work. Every row
 says one of:
@@ -23,7 +23,7 @@ not use GitHub Actions, so the dates below are from local and PC runs. See
 
 | Kernel | Status | Evidence |
 |---|---|---|
-| 6.12.114 (LTS, the target) | tested | built in-tree from the signature-verified kernel.org tarball in six configs (`ci/kconfig`); booted: in-kernel checks 273/0 (CI, 2026-11-02), install test 71/71 and add-on units 22/22 (PC, 2026-11-07), BootGuard initramfs 18/18 BIOS and UEFI (PC, 2026-11-22) |
+| 6.12.114 (LTS, the target) | tested | built in-tree from the signature-verified kernel.org tarball in six configs (`ci/kconfig`); booted: in-kernel checks 305/0 (PC, 2026-11-23, `HistoryTest/runs/2026-11-23_215527Z_vm-functest_aaffc26/`), install test 71/71, STIG release gate 16/16 and add-on units 22/22 (PC, 2026-11-23, main 4885cdc), BootGuard initramfs 18/18 BIOS and UEFI (PC, 2026-11-22) |
 | 6.14 (Ubuntu 6.14 source) | tested | install/trial/fallback run and in-kernel checks 246/246 (2026-11-01) |
 | 6.11, 6.17 | compile-checked | `ci/lsm-compile-check.sh` against distro header trees, 21/21 files (2026-11-15) |
 | 7.0 (a GitHub runner kernel) | compile-checked | build gate against the runner's headers (CI, 2026-10-31) |
@@ -42,7 +42,7 @@ first. `CONFIG_TCG_TPM` is needed for the TPM guard and policy measurement
 
 | Target | Status | Evidence |
 |---|---|---|
-| Ubuntu 24.04 LTS, x86_64 | tested | transactional install with trial boot, fallback, commit, rollback and removal; software TPM; STIG gate; add-ons under real systemd (PC, 2026-11-07 and 2026-11-22) |
+| Ubuntu 24.04 LTS, x86_64 | tested | transactional install with trial boot, fallback, commit, rollback and removal; software TPM; STIG gate; add-ons under real systemd (PC, 2026-11-07, 2026-11-22 and 2026-11-23); CIS Level 2 remediation with the CIS firewall next to secure_sudo's table (PC, 2026-11-23) |
 | Debian | expected | `install.sh` has the branch; simulated only |
 | Fedora / RHEL family | expected | `install.sh` branch (`binrpm-pkg`); simulated only; no initramfs hook (dracut not supported, see section 3) |
 | Arch | expected | `install.sh` branch; simulated only |
@@ -59,7 +59,7 @@ first. `CONFIG_TCG_TPM` is needed for the TPM guard and policy measurement
 | encrypted (LUKS) root | expected | not run; see [BOOT_ASSURANCE.md](BOOT_ASSURANCE.md) |
 | systemd-boot, other bootloaders | expected | not run |
 | dracut initramfs (Fedora/RHEL) | unsupported | no hook shipped; the systemd restore unit is the path |
-| real hardware (TPM, firmware tables) | expected | readers are unit-tested against fake trees; `HARDWARE_SMOKE_TEST.md` is the procedure |
+| real hardware (TPM, firmware tables) | expected | readers are unit-tested against fake trees; `HARDWARE_SMOKE_TEST.md` is the procedure; no hardware run recorded yet (2026-11-24) |
 
 ## 4. Toolchain
 
@@ -71,8 +71,8 @@ first. `CONFIG_TCG_TPM` is needed for the TPM guard and policy measurement
 
 ## 5. End-of-support policy
 
-Proposed by the maintainers' tooling and **to be confirmed by the owner**; it
-is what `ci/check-support-matrix.py` and the release checklist assume.
+**Confirmed by the owner on 2026-11-24.** It is what
+`ci/check-support-matrix.py` and the release checklist assume.
 
 * **Kernels.** A kernel series is supported while kernel.org lists it as
   maintained and the release gate (in-tree build and boot test) passes on it.

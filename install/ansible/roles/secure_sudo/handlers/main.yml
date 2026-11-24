@@ -1,0 +1,7 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+- name: Restart secure-sudod
+  ansible.builtin.systemd:
+    name: secure-sudod
+    state: restarted

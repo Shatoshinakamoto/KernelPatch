@@ -1,0 +1,23 @@
+{
+  "area": "unit-ansible",
+  "commit": "0968b2c",
+  "date": "2026-11-24T10:48:00+00:00",
+  "files": {
+    "RUN.md": "c91e3d15d2dee652e385fe1b18cf7e8158be0df0fda565b2e26da7b772fbabae",
+    "command.txt": "0365379a7423c7b31cf1566e3e8ca2d338f8de4899e6f607a2836d07316c3254",
+    "environment.md": "20ad9ebb8ba1f7d718385765498edad6e81ee1ca8c73ade09a1c72eeb91e4532",
+    "results/ans.tap": "5e5ec1ac5bea5d62bf58442c8a2c75eb65bfdd84941d3ce0b7f4c81c46308f36"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "b473f89acde7f5c18523f5057b839ff11996971cd27e0d00aaddccc7caf080ee",
+  "previous_run": "2026-11-24_101724Z_unit-quick-install_0968b2c",
+  "run_id": "2026-11-24_101725Z_unit-ansible_0968b2c",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 25,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "owner PC (Docker container)"
+}

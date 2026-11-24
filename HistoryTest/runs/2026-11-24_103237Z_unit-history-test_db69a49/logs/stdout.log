@@ -1,0 +1,50 @@
+ok 1 - run: a failing suite exits 1
+ok 2 - run: the run id has the documented form
+ok 3 - run: has RUN.md
+ok 4 - run: has manifest.json
+ok 5 - run: has command.txt
+ok 6 - run: has environment.md
+ok 7 - run: has logs/stdout.log
+ok 8 - run: has logs/stderr.log
+ok 9 - run: has results/tap-summary.txt
+ok 10 - run: has results/
+ok 11 - run: has logs/
+ok 12 - run: has artifacts/
+ok 13 - run: has projects/input/
+ok 14 - run: has projects/output/
+ok 15 - run: verdict fail and the failing test are in RUN.md
+ok 16 - run: TAP counts are recorded
+ok 17 - redaction: no e-mail address is stored
+ok 18 - redaction: no home-directory user name is stored
+ok 19 - redaction: no private IPv4 address is stored
+ok 20 - redaction: no token value is stored
+ok 21 - redaction: loopback and documentation addresses stay readable
+ok 22 - environment.md names no host
+ok 23 - manifest: the first run has no predecessor
+ok 24 - add: archives received results
+ok 25 - manifest: the second run links the first run's manifest
+ok 26 - index: INDEX.csv lists both runs
+ok 27 - index: the README table is generated between the markers
+ok 28 - verify: a clean archive verifies
+ok 29 - ids sort in archive order even within one second (chain stays valid)
+ok 30 - add: a binary file is refused
+ok 31 - add: a refused file leaves no half-written run
+ok 32 - note: appends a dated entry
+ok 33 - note: is redacted too
+ok 34 - verify: notes do not break the seal
+ok 35 - invalidate: the index shows invalid
+ok 36 - verify: still verifies after invalidate
+ok 37 - verify: a changed file is caught
+ok 38 - verify: a file outside the manifest is caught
+ok 39 - verify: an edited earlier manifest breaks the chain
+ok 40 - verify: unredacted data is caught
+ok 41 - verify: a hand-edited index is caught
+ok 42 - verify: clean again after the index is regenerated
+ok 43 - verify: a merged branch fork (run linked to an earlier run, not the newest) verifies
+ok 44 - verify: a link to a missing run breaks the chain
+ok 45 - verify: a link with the wrong manifest hash breaks the chain
+ok 46 - verify: clean after restoring the manifest
+ok 47 - run: a hostile area is refused
+ok 48 - note: a hostile run id is refused
+ok 49 - release: HistoryTest/ is not in the release file list
+1..49
