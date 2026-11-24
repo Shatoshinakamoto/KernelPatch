@@ -37,6 +37,8 @@ done
 
 # Source files only: generated reports, build output and VCS data are not
 # inputs. Sorted with LC_ALL=C so the hash is stable across machines.
+# SECURITY: an operator's Ansible inventory and group/host vars name their own
+# hosts; they are never part of a release or its hash (CWE-200).
 list_sources() {
 	(cd "$ROOT" && find . -type f \
 		! -path './.git/*' ! -path './HistoryTest/*' ! -path './docs/stig/results/*' ! -name 'build-gate-record.txt' \
@@ -44,6 +46,8 @@ list_sources() {
 		! -path './userspace/cli/secure-sudo' ! -path './userspace/daemon/secure-sudod' \
 		! -path './userspace/otp/secure-sudo-otp' \
 		! -path './userspace/pheonixbox/secure-sudo-pheonixbox' \
+		! -path './install/ansible/inventory.ini' ! -path './install/ansible/group_vars/secure_sudo.yml' \
+		! -path './install/ansible/host_vars/*' \
 		-printf '%P\n' | LC_ALL=C sort)
 }
 

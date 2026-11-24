@@ -1,0 +1,28 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Idempotence: a host already running a committed secure_sudo kernel is not
+# reinstalled. "Committed" is what `install.sh verify` reports; it is read,
+# never guessed from the kernel name alone.
+- name: Read the install state (verify changes nothing without --commit)
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_install }}", verify]
+  register: ss_verify_before
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether this host is done already
+  ansible.builtin.set_fact:
+    ss_committed: >-
+      {{ ansible_facts['kernel'] is search('-secure-sudo$')
+         and ss_verify_before.rc == 0
+         and (ss_verify_before.stdout is search(ansible_facts['kernel'] ~ ' is committed')
+              or ss_verify_before.stdout is search(ansible_facts['kernel'] ~ ' is now the default')) }}
+
+- name: Report the state
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: running {{ ansible_facts['kernel'] }};
+      {{ ss_committed | ternary('secure_sudo is committed, the install steps are skipped',
+                                'secure_sudo will be installed') }}

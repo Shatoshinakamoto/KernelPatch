@@ -226,6 +226,21 @@ failures stop the run instead of being ignored; RPM installs no longer use
 `--force` or install `kernel-headers` over the distro's; an upgrade no longer
 rewrites a hand-set `admin_gid`.
 
+## `install/quick-install.sh`
+
+Guided one-machine install: verifies a release archive (SHA-256, optional
+signature by a pinned fingerprint, safe members), runs `install.sh preflight`,
+asks, then runs `install.sh`. Full reference: [commands/quick-install.md](commands/quick-install.md);
+guide: [INSTALL.md](INSTALL.md#method-1-quick-install).
+
+## `install/ansible/secure_sudo.yml` (role `install/ansible/roles/secure_sudo/`)
+
+Fleet rollout: one host at a time, stops at the first failure; preflight,
+kernel and userspace through `install.sh`, trial reboot, `verify --commit`,
+`net_mode`, `secure-sudod`, `lint` and `load`; idempotent on committed hosts.
+Variables: [configuration/ansible-vars.md](configuration/ansible-vars.md);
+guide: [INSTALL.md](INSTALL.md#method-4-ansible-fleets).
+
 ## `install/encrypted/install-encrypted.sh`
 
 Encrypted-source + Secure Boot variant. Decrypts an age-encrypted source

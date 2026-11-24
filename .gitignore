@@ -7,3 +7,9 @@ userspace/otp/secure-sudo-otp
 userspace/pam/*.so
 userspace/pheonixbox/secure-sudo-pheonixbox
 *.o
+
+# Ansible: the operator's own inventory and settings (they name real hosts).
+# scripts/gen-sbom.sh also leaves them out of the tree hash and the release.
+install/ansible/inventory.ini
+install/ansible/group_vars/secure_sudo.yml
+install/ansible/host_vars/

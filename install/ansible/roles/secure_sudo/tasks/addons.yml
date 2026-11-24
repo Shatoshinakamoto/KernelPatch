@@ -1,0 +1,23 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# The opt-in add-ons (temporary/). install-temporary.sh enables nothing and
+# kills nothing; every enforcing mode stays off until you turn it on
+# (docs/ADDONS.md). The marker file keeps a rerun from rebuilding them.
+- name: Install the add-ons
+  ansible.builtin.command:
+    argv: "{{ ['bash', ss_tree ~ '/temporary/install-temporary.sh'] + ((secure_sudo_addons_initramfs | bool) | ternary(['--initramfs'], [])) }}"
+    creates: /var/lib/secure_sudo/addons/.installed-by-ansible
+  register: ss_addons
+
+- name: Mark the add-ons installed
+  ansible.builtin.file:
+    path: /var/lib/secure_sudo/addons/.installed-by-ansible
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+  when: ss_addons is changed

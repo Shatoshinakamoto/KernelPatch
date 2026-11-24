@@ -1,0 +1,51 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Fail before touching a host when a variable is wrong (CWE-20, NIST SI-10).
+- name: Check variable values
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - secure_sudo_source in ['controller', 'archive']
+      - secure_sudo_kernel in ['build', 'prebuilt']
+      - secure_sudo_net_mode in ['monitor', 'host', 'lan-only', 'public-only']
+      - secure_sudo_stig in ['', 'scan']
+      - secure_sudo_remote_dir is match('^/[A-Za-z0-9._/-]+$')
+      - "'..' not in secure_sudo_remote_dir"
+      - secure_sudo_kver == '' or secure_sudo_kver is match('^[0-9]+\.[0-9]+(\.[0-9]+)?$')
+      - secure_sudo_reboot_timeout | int >= 60
+      - not (secure_sudo_addons_initramfs | bool) or (secure_sudo_addons | bool)
+    fail_msg: >-
+      A secure_sudo variable has a value outside its allowed set; see
+      docs/configuration/ansible-vars.md.
+
+- name: Check the archive variables
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - secure_sudo_archive | length > 0
+      - secure_sudo_archive_sha256 is match('^[0-9a-fA-F]{64}$')
+    fail_msg: secure_sudo_source=archive needs secure_sudo_archive and a 64-hex secure_sudo_archive_sha256.
+  when: secure_sudo_source == 'archive'
+
+- name: Check the prebuilt kernel directory is set
+  ansible.builtin.assert:
+    quiet: true
+    that: [secure_sudo_kernel_dir | length > 0]
+    fail_msg: secure_sudo_kernel=prebuilt needs secure_sudo_kernel_dir (the out/<release>/ directory of a build host).
+  when: secure_sudo_kernel == 'prebuilt'
+
+# Read-only; also makes the check work when fact gathering was skipped
+# (--skip-tags always).
+- name: Read the target's architecture and OS
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Check this is a supported target
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ansible_facts['architecture'] == 'x86_64'
+      - ansible_facts['system'] == 'Linux'
+    fail_msg: secure_sudo supports x86_64 Linux only (docs/SUPPORT.md).

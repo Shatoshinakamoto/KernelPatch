@@ -1,0 +1,19 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# A STIG scan only (reports in /var/log/secure_sudo/stig/). Remediation
+# changes PAM, SSH, audit and the firewall; it is a reviewed step of its own
+# (docs/STIG.md), never part of an unattended rollout.
+- name: Run the STIG scan
+  ansible.builtin.command:
+    argv: [bash, "{{ ss_tree }}/scripts/stig-harden.sh", --scan]
+  register: ss_stig
+  changed_when: false
+  failed_when: false
+  async: 7200
+  poll: 30
+
+- name: Show where the reports are
+  ansible.builtin.debug:
+    msg: "{{ ss_stig.stdout_lines | select('search', 'report|tally|pass=') | list }}"

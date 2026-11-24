@@ -1,0 +1,104 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Get a verified copy of the release onto the target.
+# SECURITY: the target checks the SHA-256 itself before unpacking (NIST SI-7);
+# the archive comes either from ci/make-release.sh on the controller (built
+# from the checkout the operator reviewed) or from an archive the operator
+# verified (signature) and pinned by hash.
+
+# SECURITY: the archive is built in a fresh temporary directory OUTSIDE the
+# source tree, so it can never end up inside a later release archive or the
+# tree hash, and no stale archive from an earlier run can be picked up.
+- name: Make a fresh build directory on the controller
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: secure_sudo-release.
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: ss_tmp
+  when: secure_sudo_source == 'controller'
+
+- name: Build the release archive on the controller
+  ansible.builtin.command:
+    argv: [bash, "{{ role_path }}/../../../../ci/make-release.sh", --out, "{{ ss_tmp.path }}"]
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: ss_release
+  changed_when: true
+  when: secure_sudo_source == 'controller'
+
+- name: Find the archive the controller built
+  ansible.builtin.find:
+    paths: "{{ ss_tmp.path }}"
+    patterns: "secure_sudo-*.tar.gz"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: ss_found
+  when: secure_sudo_source == 'controller'
+
+- name: Choose the archive and its expected hash
+  ansible.builtin.set_fact:
+    ss_archive_local: "{{ (secure_sudo_source == 'controller') | ternary(ss_found.files[0].path | default(''), secure_sudo_archive) }}"
+    ss_archive_sha256: >-
+      {{ (secure_sudo_source == 'controller')
+         | ternary(lookup('ansible.builtin.file', (ss_found.files[0].path | default('')) ~ '.sha256', errors='ignore').split() | first | default(''),
+                   secure_sudo_archive_sha256) | lower }}
+
+- name: Check an archive was found
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - ss_archive_local | length > 0
+      - ss_archive_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: no release archive or no SHA-256 for it (controller build output or secure_sudo_archive).
+
+- name: Name the unpack directory after the archive
+  ansible.builtin.set_fact:
+    ss_name: "{{ ss_archive_local | basename | regex_replace('\\.tar\\.gz$', '') }}"
+
+- name: Create the staging directory
+  ansible.builtin.file:
+    path: "{{ secure_sudo_remote_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy the archive to the target
+  ansible.builtin.copy:
+    src: "{{ ss_archive_local }}"
+    dest: "{{ secure_sudo_remote_dir }}/{{ ss_name }}.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check the archive's SHA-256 on the target
+  ansible.builtin.stat:
+    path: "{{ secure_sudo_remote_dir }}/{{ ss_name }}.tar.gz"
+    checksum_algorithm: sha256
+  register: ss_archive_stat
+
+- name: Refuse an archive whose hash does not match
+  ansible.builtin.assert:
+    quiet: true
+    that: [ss_archive_stat.stat.checksum == ss_archive_sha256]
+    fail_msg: "SHA-256 MISMATCH on {{ inventory_hostname }}: got {{ ss_archive_stat.stat.checksum }}, want {{ ss_archive_sha256 }}"
+
+- name: Unpack the verified archive
+  ansible.builtin.unarchive:
+    src: "{{ secure_sudo_remote_dir }}/{{ ss_name }}.tar.gz"
+    dest: "{{ secure_sudo_remote_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    creates: "{{ secure_sudo_remote_dir }}/KernelPatch-merged/install/install.sh"
+
+- name: Remember where install.sh is
+  ansible.builtin.set_fact:
+    ss_tree: "{{ secure_sudo_remote_dir }}/KernelPatch-merged"
+    ss_install: "{{ secure_sudo_remote_dir }}/KernelPatch-merged/install/install.sh"

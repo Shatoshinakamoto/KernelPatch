@@ -1,0 +1,52 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# Network mode, policy check and load, the daemon. The policy is only loaded
+# when the secure_sudo kernel is running (there is nothing to load into
+# otherwise) and only after `secure-sudo lint` passes (NIST CM-6).
+- name: Read the running kernel
+  ansible.builtin.command:
+    argv: [uname, -r]
+  register: ss_run
+  changed_when: false
+
+- name: Set the network mode
+  ansible.builtin.lineinfile:
+    path: /etc/secure_sudo/secure-sudo.conf
+    regexp: '^\s*net_mode\s*='
+    line: "net_mode = {{ secure_sudo_net_mode }}"
+    backup: true
+  notify: Restart secure-sudod
+
+- name: Enable and start secure-sudod
+  ansible.builtin.systemd:
+    name: secure-sudod
+    enabled: true
+    state: started
+
+- name: Check the policy (secure-sudo lint)
+  ansible.builtin.command:
+    argv: [secure-sudo, lint]
+  register: ss_lint
+  changed_when: false
+  when:
+    - secure_sudo_load_policy | bool
+    - ss_run.stdout is search('-secure-sudo$')
+
+- name: Load the policy into the kernel
+  ansible.builtin.command:
+    argv: [secure-sudo, load]
+  register: ss_load
+  changed_when: true
+  # secure-sudo load exits non-zero when any setting was refused or the load is
+  # incomplete (tests/vm/distro/recovery-exercises.sh E1, E4).
+  failed_when: ss_load.rc != 0
+  when:
+    - secure_sudo_load_policy | bool
+    - ss_run.stdout is search('-secure-sudo$')
+
+- name: Show the load result
+  ansible.builtin.debug:
+    var: ss_load.stdout_lines
+  when: ss_load is not skipped

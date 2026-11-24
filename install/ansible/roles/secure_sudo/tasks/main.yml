@@ -1,0 +1,57 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Johnathan Edward Brown
+#
+# secure_sudo role: the same steps as a manual install (docs/INSTALL.md),
+# in the same order, with the same safety rules: verified code, preflight
+# first, the new kernel next to the running one, a trial boot, commit only
+# after it came up. Kernel and bootloader work is done by install.sh itself;
+# this role orchestrates it and never reimplements it.
+#
+# Security: no shell strings are built from variables (ansible.builtin.command
+# with argv), every variable that selects behaviour is checked first
+# (validate.yml), and nothing secret is printed (the TPM lockout password is
+# deliberately not handled here: docs/INSTALL.md says why).
+
+- name: Check the role's variables
+  ansible.builtin.import_tasks: validate.yml
+  tags: [secure_sudo, validate]
+
+# "always": the later steps need the verified tree, so it is shipped even when
+# only some tags are selected (skip it with --skip-tags always).
+- name: Ship and verify the code
+  ansible.builtin.import_tasks: source.yml
+  tags: [secure_sudo, source, always]
+
+- name: Find out what is installed already
+  ansible.builtin.import_tasks: state.yml
+  tags: [secure_sudo, always]
+
+- name: Preflight, kernel and userspace
+  ansible.builtin.import_tasks: install.yml
+  when: not ss_committed
+  tags: [secure_sudo, install]
+
+- name: Trial boot and commit
+  ansible.builtin.import_tasks: trial_boot.yml
+  when: secure_sudo_trial_boot | bool and not ss_committed
+  tags: [secure_sudo, trial_boot]
+
+- name: Policy and service
+  ansible.builtin.import_tasks: config.yml
+  tags: [secure_sudo, config]
+
+- name: Optional add-ons
+  ansible.builtin.import_tasks: addons.yml
+  when: secure_sudo_addons | bool
+  tags: [secure_sudo, addons]
+
+- name: Optional PAM wiring
+  ansible.builtin.import_tasks: pam.yml
+  when: secure_sudo_enable_pam_cooldown | bool or secure_sudo_enable_pam_otp | bool
+  tags: [secure_sudo, pam]
+
+- name: Optional STIG scan
+  ansible.builtin.import_tasks: stig.yml
+  when: secure_sudo_stig == "scan"
+  tags: [secure_sudo, stig]
