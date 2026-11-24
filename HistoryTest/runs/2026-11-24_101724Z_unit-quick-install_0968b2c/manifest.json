@@ -1,0 +1,23 @@
+{
+  "area": "unit-quick-install",
+  "commit": "0968b2c",
+  "date": "2026-11-24T10:47:00+00:00",
+  "files": {
+    "RUN.md": "1dc29693794cac3797f1a2af964f7db7cb523337de13bc7ab04a04d07a1a1a1f",
+    "command.txt": "6a96b7815414fd47a2094326996b7a6434c620a4fd922a56ea59a887dc4d15e3",
+    "environment.md": "20ad9ebb8ba1f7d718385765498edad6e81ee1ca8c73ade09a1c72eeb91e4532",
+    "results/qi.tap": "5e34b59a447fbc5e7afae72f7cdf2ff55b30450ac7392c37aed3712c919477ac"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "9d765926332c7374d01180acccabe971de0ec5553eb4d8b4fc785d5a3b652dd7",
+  "previous_run": "2026-11-23_224258Z_gate_20f89d5",
+  "run_id": "2026-11-24_101724Z_unit-quick-install_0968b2c",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 37,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "owner PC (Docker container, root)"
+}

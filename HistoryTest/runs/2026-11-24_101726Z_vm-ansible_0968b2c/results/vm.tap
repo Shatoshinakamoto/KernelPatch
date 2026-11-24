@@ -1,0 +1,22 @@
+ok 1 - build host: kernel package built from this tree
+ok 2 - build host: userspace staged
+ok 3 - fresh guest boots
+ok 4 - ansible-playbook run 1 (install, trial boot, commit, config) succeeds
+# run 1 recap: guest                      : ok=43   changed=12   unreachable=0    failed=0    skipped=12   rescued=0    ignored=0   
+ok 5 - the guest runs the secure_sudo kernel after the role
+ok 6 - secure_sudo is an active LSM
+ok 7 - secure-sudod is active
+ok 8 - install.sh verify: OK and the kernel is committed
+ok 9 - run 1 went through the trial reboot and the commit task
+ok 10 - ansible-playbook run 2 succeeds
+# run 2 recap: guest                      : ok=25   changed=3    unreachable=0    failed=0    skipped=30   rescued=0    ignored=0   
+not ok 11 - run 2 sees the committed kernel and skips install and reboot (idempotent)
+ok 12 - quick-install.sh --dry-run on the guest: archive verified, preflight passes
+# quick-install: SHA-256 ok: cac4361547ce75578b532da7ca9280988ecf56901213354779a1ad3693e13990
+# preflight: OK
+# quick-install: dry run: verification and preflight passed; nothing was changed.
+ok 13 - ... and --dry-run changed nothing (/opt/qi not created)
+ok 14 - quick-install.sh refuses a tampered archive on the guest
+1..14
+0
+1

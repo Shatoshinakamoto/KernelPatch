@@ -1,0 +1,23 @@
+{
+  "area": "vm-ansible",
+  "commit": "0968b2c",
+  "date": "2026-11-24T10:05:00+00:00",
+  "files": {
+    "RUN.md": "3d7c8251a37ab162c7f6be20b89313e79869c0c10f14a8d766acb310d63a50eb",
+    "command.txt": "5a5a1799948a108a38618e5c1dfa029d3a7fb098d4953fe70d32674e5ef29f59",
+    "environment.md": "20ad9ebb8ba1f7d718385765498edad6e81ee1ca8c73ade09a1c72eeb91e4532",
+    "results/vm.tap": "e8c6b96f9c7c8bc06eaf8ed9c4d7948e29fd1ddd19fee538f1164c6fc1fb7db6"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "67f1b86bbf57432d954b21dd10969477164f272a0dae19499b3d794676eeec3d",
+  "previous_run": "2026-11-24_101725Z_unit-ansible_0968b2c",
+  "run_id": "2026-11-24_101726Z_vm-ansible_0968b2c",
+  "schema": 1,
+  "tap": {
+    "not_ok": 1,
+    "ok": 13,
+    "skipped": 0
+  },
+  "verdict": "partial",
+  "where": "owner PC (Docker, QEMU TCG)"
+}
