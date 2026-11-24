@@ -46,6 +46,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 import platform
 import re
 import socket
@@ -217,6 +218,12 @@ def new_run(area, commit, when):
     return rid, d
 
 
+def posix_rel(p, d):
+    """Manifest keys always use "/", whatever the OS separator: on Windows
+    os.path.relpath gives "logs\\stdout.log", which matched no key."""
+    return pathlib.PurePath(os.path.relpath(p, d)).as_posix()
+
+
 def seal(rid, meta):
     """Hash every file of the run into manifest.json, chained to the previous run."""
     d = os.path.join(RUNS, rid)
@@ -224,7 +231,7 @@ def seal(rid, meta):
     for top, _, names in os.walk(d):
         for name in sorted(names):
             p = os.path.join(top, name)
-            rel = os.path.relpath(p, d)
+            rel = posix_rel(p, d)
             if rel in ("manifest.json",) + MUTABLE:
                 continue
             files[rel] = sha256_file(p)
@@ -468,7 +475,7 @@ def cmd_verify(_a):
         for top, _, names in os.walk(d):
             for name in names:
                 p = os.path.join(top, name)
-                rel = os.path.relpath(p, d)
+                rel = posix_rel(p, d)
                 if rel not in listed and rel not in ("manifest.json",) + MUTABLE:
                     problems.append("%s: %s is not in the manifest" % (rid, rel))
                 try:

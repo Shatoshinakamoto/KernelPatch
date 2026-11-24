@@ -19,6 +19,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 - 2026-11-22: `ci/publish-release.sh`: GitHub Releases are built locally and uploaded with `gh`, as drafts unless `--publish` is given (#49).
 
 ### Fixed
+- 2026-11-24: `scripts/history_test.py` wrote manifest keys with backslashes on Windows (`logs\stdout.log`), so `verify` there reported every run as broken. Keys now always use `/` (found on the owner's PC).
 - 2026-11-23: an add-on shipping logs over `tcp` never reconnected, so after the collector restarted no more lines left the host until the add-on itself restarted. `tcp` and `tls` now reconnect before the next line (SECURITY_REVIEW #79).
 - 2026-11-23: the kernel silently stopped reading ten policy lists at its entry limit, so entries past it (for example the 1025th blacklist path) were not enforced. Each list write now fails with `E2BIG` and keeps the loaded list (SECURITY_REVIEW #78). The blacklist page now describes its content match correctly.
 - 2026-11-23: `test-cis-firewall.sh` check 8 failed when the build gate ran as root, because uid 65534 could not read the script inside the gate's 0700 scratch copy. The check now runs a readable copy. Found by the PC gate on 4b5474f (`HistoryTest/runs/2026-11-23_213828Z_gate_4b5474f/`), fixed run `HistoryTest/runs/2026-11-23_213829Z_unit-cis-firewall_d457f1f/` (29/0).
