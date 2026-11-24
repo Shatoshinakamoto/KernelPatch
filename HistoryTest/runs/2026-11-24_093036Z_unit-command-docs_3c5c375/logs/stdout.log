@@ -1,0 +1,9 @@
+ok 1 - the repository passes
+ok 2 - a CLI subcommand with no page
+ok 3 - a script no page names
+ok 4 - an add-on binary with no page
+ok 5 - a copied header that drifted from its script
+ok 6 - a feature page missing a required section
+ok 7 - a feature page not linked from docs/README.md
+ok 8 - a command page not linked from docs/README.md
+1..8

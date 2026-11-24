@@ -8,7 +8,8 @@
 #     manifest chained to the previous run;
 #   * secrets, e-mail addresses, home-directory user names and private IPv4
 #     addresses never reach the archive (CWE-532, CWE-200, NIST AU-9);
-#   * verify catches a changed file, an extra file, a broken chain, unredacted
+#   * verify accepts a fork from merged branches (each run links an earlier
+#     sealed manifest) but catches a changed file, an extra file, a broken chain, unredacted
 #     data and a stale index (NIST AU-10); note/invalidate stay append-only;
 #   * hostile run ids and areas cannot leave the archive (CWE-22);
 #   * HistoryTest/ is never part of a release (scripts/gen-sbom.sh --list).
@@ -97,6 +98,20 @@ echo "junk" >> "$SS_HISTORYTEST_DIR/INDEX.csv"
 refute_with "verify: a hand-edited index is caught" "INDEX.csv is out of date" H verify
 H index >/dev/null
 check "verify: clean again after the index is regenerated" H verify
+D4="$SS_HISTORYTEST_DIR/runs/$r4"; cp "$D4/manifest.json" "$T/m4"
+relink() { python3 -c "
+import hashlib,json,sys
+m=json.load(open(sys.argv[1])); m['previous_run']=sys.argv[2]
+m['previous_manifest_sha256']=hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest() if sys.argv[3] else 'f'*64
+json.dump(m,open(sys.argv[1],'w'),indent=2)" "$D4/manifest.json" "$@"; }
+relink "$r1" "$D1/manifest.json"
+check "verify: a merged branch fork (run linked to an earlier run, not the newest) verifies" H verify
+relink "nope_run" ""
+refute_with "verify: a link to a missing run breaks the chain" "chain broken" H verify
+relink "$r1" ""
+refute_with "verify: a link with the wrong manifest hash breaks the chain" "chain broken" H verify
+cp "$T/m4" "$D4/manifest.json"
+check "verify: clean after restoring the manifest" H verify
 
 refute_with "run: a hostile area is refused" "bad area" H run --area '../x' --commit abcdef1 -- true
 refute_with "note: a hostile run id is refused" "bad run id" H note '../../etc' --text x

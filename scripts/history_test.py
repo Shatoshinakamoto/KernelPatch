@@ -46,6 +46,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 import platform
 import re
 import socket
@@ -217,6 +218,12 @@ def new_run(area, commit, when):
     return rid, d
 
 
+def posix_rel(p, d):
+    """Manifest keys always use "/", whatever the OS separator: on Windows
+    os.path.relpath gives "logs\\stdout.log", which matched no key."""
+    return pathlib.PurePath(os.path.relpath(p, d)).as_posix()
+
+
 def seal(rid, meta):
     """Hash every file of the run into manifest.json, chained to the previous run."""
     d = os.path.join(RUNS, rid)
@@ -224,7 +231,7 @@ def seal(rid, meta):
     for top, _, names in os.walk(d):
         for name in sorted(names):
             p = os.path.join(top, name)
-            rel = os.path.relpath(p, d)
+            rel = posix_rel(p, d)
             if rel in ("manifest.json",) + MUTABLE:
                 continue
             files[rel] = sha256_file(p)
@@ -450,14 +457,23 @@ def cmd_index(_a=None):
 def cmd_verify(_a):
     """Recompute every hash and chain link, rescan for unredacted data, check the index."""
     problems = []
-    prev_id, prev_sha = None, None
+    # SECURITY: each run must link to an EARLIER sealed run by its exact
+    # manifest hash. Two branches that each add runs and are then merged
+    # produce a fork (two runs naming the same or different earlier parents);
+    # that is allowed, so sealed manifests never need rewriting. A link to a
+    # missing, later or altered manifest is still rejected (NIST AU-9, CWE-345).
+    seen = {}
     for rid in all_runs():
         d = os.path.join(RUNS, rid)
         m = load_manifest(rid)
         if m.get("run_id") != rid:
             problems.append("%s: manifest run_id is %r" % (rid, m.get("run_id")))
-        if m.get("previous_run") != prev_id or m.get("previous_manifest_sha256") != prev_sha:
-            problems.append("%s: manifest chain broken (previous run %r)" % (rid, prev_id))
+        pr, ps = m.get("previous_run"), m.get("previous_manifest_sha256")
+        if pr is None:
+            if seen or ps is not None:
+                problems.append("%s: manifest chain broken (no previous run)" % rid)
+        elif pr not in seen or seen[pr] != ps:
+            problems.append("%s: manifest chain broken (previous run %r)" % (rid, pr))
         listed = m.get("files", {})
         for rel, want in listed.items():
             p = os.path.join(d, rel)
@@ -468,7 +484,7 @@ def cmd_verify(_a):
         for top, _, names in os.walk(d):
             for name in names:
                 p = os.path.join(top, name)
-                rel = os.path.relpath(p, d)
+                rel = posix_rel(p, d)
                 if rel not in listed and rel not in ("manifest.json",) + MUTABLE:
                     problems.append("%s: %s is not in the manifest" % (rid, rel))
                 try:
@@ -480,7 +496,7 @@ def cmd_verify(_a):
         for need in ("RUN.md", "command.txt", "environment.md"):
             if need not in listed:
                 problems.append("%s: %s is missing" % (rid, need))
-        prev_id, prev_sha = rid, sha256_file(os.path.join(d, "manifest.json"))
+        seen[rid] = sha256_file(os.path.join(d, "manifest.json"))
     csv_text, _ = render_index()
     idx = os.path.join(HT, "INDEX.csv")
     if all_runs() and (not os.path.isfile(idx) or open(idx, encoding="utf-8").read() != csv_text):

@@ -8,6 +8,15 @@ stays the detailed record. Each entry here points to it.
 CVSS and EPSS scores are given only where a CVE exists. These are project
 findings without CVE IDs, so none are given; no scores are invented.
 
+## 2026-11-24 — HistoryTest chain accepts merged branches without rewriting sealed runs
+- **Type:** hardening (process, evidence integrity)
+- **CVE / CWE / advisory:** none; CWE-345 (insufficient verification of data authenticity) considered
+- **Severity:** no CVSS (no CVE). Development record only; never shipped.
+- **Affected:** `scripts/history_test.py verify`.
+- **What changed:** `verify` required each run to link the run immediately before it, so merging two branches that both archived runs failed it, and the only "fix" would have been rewriting sealed manifests. Each run must now link an earlier sealed run whose manifest hash matches exactly; the first run has no link.
+- **Why it is secure now:** any edit to a sealed manifest still breaks every run that links it, and a link to a missing or later run or a wrong hash is rejected (NIST AU-9, AU-10). Sealed runs are never rewritten.
+- **Verification:** `tests/userspace/test-history-test.sh` 49/0 (new fork, missing-run and wrong-hash checks); `history_test.py verify` 38 runs, 0 problems on the merged tree.
+
 ## 2026-11-24 — disclosure policy confirmed for a public repository
 - **Type:** hardening (process)
 - **CVE / CWE / advisory:** none

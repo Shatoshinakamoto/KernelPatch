@@ -38,7 +38,7 @@ check "LICENSES/GPL-2.0 notice names the holder and year" \
 	grep -qx 'Copyright (C) 2026  Johnathan Edward Brown' "$ROOT/LICENSES/GPL-2.0"
 eq "LICENSES/GPL-2.0 carries the unmodified GPL v2 text" \
 	"$(sed '1,/^-\{20,\}$/d' "$ROOT/LICENSES/GPL-2.0" 2>/dev/null | sed '1{/^$/d}' | sha256sum | cut -d' ' -f1)" "$GPL2_SHA"
-check "NOTICE names the project" grep -qx 'secure_sudo' "$ROOT/NOTICE"
+check "NOTICE names the project" grep -qx 'SatoshiNakamoto Kernel Patch (secure_sudo)' "$ROOT/NOTICE"
 check "NOTICE names the copyright holder" \
 	grep -q "^Copyright 2026 Johnathan Edward Brown$" "$ROOT/NOTICE"
 

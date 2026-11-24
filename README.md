@@ -1,4 +1,9 @@
-# secure_sudo — merged kernel security patch + userspace + installers
+# SatoshiNakamoto Kernel Patch
+
+**secure_sudo**: a Linux 6.12 LTS security module (LSM) with its userspace
+tools and installers. It stops non-sudo users from switching UID/GID, and
+adds allowlisting, tamper detection and repair, network modes and STIG
+hardening on top.
 
 A defensive Linux hardening stack built around one in-kernel LSM. It is the
 reconciled merge of the project's split-up v1 module and v2 LSM designs; see
@@ -225,6 +230,17 @@ In short:
   build in [TODO.md](TODO.md), "Doc promises to build".
 * Remote attestation of the boot chain (P2-1 part 1):
   [docs/ATTESTATION.md](docs/ATTESTATION.md).
+
+## History and name
+
+The project began as **KernelPatch** (the GitHub repository
+`Shatoshinakamoto/KernelPatch`, which keeps that name and URL): a set of
+split-up v1 and v2 kernel patch designs that were merged into one patch set
+in October 2026 ([docs/FEATURE_MAP.md](docs/FEATURE_MAP.md)). On 2026-11-24,
+before the repository went public, the owner named it **SatoshiNakamoto
+Kernel Patch**. `secure_sudo` stays the name of the kernel module, the
+`secure-sudo` commands and the files under `/etc/secure_sudo/`; the release
+archive still unpacks to `KernelPatch-merged/`.
 
 ## License
 

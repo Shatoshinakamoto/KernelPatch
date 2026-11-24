@@ -31,6 +31,11 @@ run_id,date,area,commit,verdict,where,ok,not_ok,skipped
 2026-11-23_220640Z_gate-lint_2894faf,2026-11-23T22:06:40+00:00,gate-lint,2894faf,pass,cloud container (Ubuntu),1,0,0
 2026-11-23_220703Z_suite_2894faf,2026-11-23T22:07:03+00:00,suite,2894faf,fail,cloud container (Ubuntu),1374,2,6
 2026-11-23_224258Z_gate_20f89d5,2026-11-23T22:42:58+00:00,gate,20f89d5,pass,"Pheonix's PC, Docker container on WSL2",0,0,0
+2026-11-24_093036Z_unit-command-docs_3c5c375,2026-11-24T09:30:36+00:00,unit-command-docs,3c5c375,pass,cloud container (Ubuntu),8,0,0
+2026-11-24_093037Z_gate-lint_3c5c375,2026-11-24T09:30:36+00:00,gate-lint,3c5c375,pass,cloud container (Ubuntu),1,0,0
+2026-11-24_093100Z_suite_3c5c375,2026-11-24T09:31:00+00:00,suite,3c5c375,fail,cloud container (Ubuntu),1382,2,6
 2026-11-24_101724Z_unit-quick-install_0968b2c,2026-11-24T10:47:00+00:00,unit-quick-install,0968b2c,pass,"owner PC (Docker container, root)",37,0,0
 2026-11-24_101725Z_unit-ansible_0968b2c,2026-11-24T10:48:00+00:00,unit-ansible,0968b2c,pass,owner PC (Docker container),25,0,0
 2026-11-24_101726Z_vm-ansible_0968b2c,2026-11-24T10:05:00+00:00,vm-ansible,0968b2c,partial,"owner PC (Docker, QEMU TCG)",13,1,0
+2026-11-24_103222Z_gate-lint_db69a49,2026-11-24T10:32:22+00:00,gate-lint,db69a49,pass,local,1,0,0
+2026-11-24_103237Z_unit-history-test_db69a49,2026-11-24T10:32:37+00:00,unit-history-test,db69a49,pass,local,49,0,0

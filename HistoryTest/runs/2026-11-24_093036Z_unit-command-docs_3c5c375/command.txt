@@ -1,0 +1,1 @@
+bash tests/userspace/test-command-docs.sh
