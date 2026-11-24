@@ -7,6 +7,9 @@ Entries start on 2026-11-22. For earlier history see the git log and
 
 ## [Unreleased]
 
+### Changed
+- 2026-11-24: the owner confirmed the disclosure and support policies: the response targets in `SECURITY.md` and `docs/MAINTENANCE.md` and the end-of-support policy in `docs/SUPPORT.md` are no longer marked proposed. `SECURITY.md` now names GitHub private vulnerability reporting as the only channel, for the repository going public. `docs/SUPPORT.md` cites the 2026-11-23 PC runs (in-kernel 305/0, install 71/71, STIG gate 16/16, add-ons 22/22, CIS Level 2) and says no hardware run is recorded yet.
+
 ### Added
 - 2026-11-23: TLS log shipping for the `temporary/` add-ons: `logging.conf` `remote_proto = tls` and `remote_ca_file`. The collector's certificate must come from that CA and name `remote_host`; an outage is noted in the local log and retried every 30 s (SECURITY_REVIEW #79). New suite `tests/userspace/test-addon-log-tls.sh`. The add-ons now link `libssl`.
 - 2026-11-23: configuration pages for the nine `temporary/` add-on config files and the ProcGuard allowlist (`docs/configuration/*-conf.md`, `docs/files/procguard_allow.md`). `ci/check-config-docs.py` now also checks them against each add-on's parser table and template. Found while writing them: add-on log shipping has no TLS (tracked in TODO P2-3).

@@ -3,8 +3,8 @@
 How a kernel regression, a vulnerability report or a dependency problem turns
 into a tracked, tested release. The reporting channel and response targets are
 in [SECURITY.md](../SECURITY.md); the supported kernels, distributions and
-the end-of-support policy are in [SUPPORT.md](SUPPORT.md). Targets in this
-file marked *proposed* are for the owner to confirm.
+the end-of-support policy are in [SUPPORT.md](SUPPORT.md). The owner
+confirmed the targets in this file, SECURITY.md and SUPPORT.md on 2026-11-24.
 
 Evidence rules that apply to every step: This project does not use GitHub
 Actions; everything is built and tested locally, so "tested" means the local gate plus the VM runs on
@@ -13,7 +13,7 @@ you did on the pull request. Pull requests go against `main`, one at a time.
 
 ## 1. Vulnerability triage
 
-1. **Acknowledge** within 3 days (proposed) in the private advisory.
+1. **Acknowledge** within 3 days in the private advisory.
 2. **Reproduce** on a clean install of a supported release. Write the failing
    test first: a unit test, a `tests/userspace` suite, an in-kernel test
    (`tests/vm`) or a VM guest check. A report that cannot be reproduced is
@@ -58,7 +58,7 @@ you did on the pull request. Pull requests go against `main`, one at a time.
   pinned signing keys in `install/keys/` before extraction; there is no bypass.
 * **LTS point releases:** when kernel.org publishes one, bump `KVER`, rebuild
   and boot-test it (the six `ci/kconfig` variants plus the boot test), and
-  update the kernel row in SUPPORT.md. Target: within 14 days (proposed), 3 days
+  update the kernel row in SUPPORT.md. Target: within 14 days, 3 days
   if the point release fixes a vulnerability in a subsystem secure_sudo hooks.
 * **New mainline releases:** run `ci/lsm-compile-check.sh` against the new
   headers. A new kernel starts as *expected* in SUPPORT.md, becomes
