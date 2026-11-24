@@ -87,6 +87,9 @@ stay on that machine, `RUN.md` says where they are kept.
 <!-- history-test:index:begin -->
 | Run | Date (UTC) | Area | Commit | Verdict | Where | ok / not ok / skipped |
 |---|---|---|---|---|---|---|
+| [`2026-11-24_093100Z_suite_3c5c375`](runs/2026-11-24_093100Z_suite_3c5c375/RUN.md) | 2026-11-24T09:31:00+00:00 | suite | `3c5c375` | **fail** | cloud container (Ubuntu) | 1382 / 2 / 6 |
+| [`2026-11-24_093037Z_gate-lint_3c5c375`](runs/2026-11-24_093037Z_gate-lint_3c5c375/RUN.md) | 2026-11-24T09:30:36+00:00 | gate-lint | `3c5c375` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
+| [`2026-11-24_093036Z_unit-command-docs_3c5c375`](runs/2026-11-24_093036Z_unit-command-docs_3c5c375/RUN.md) | 2026-11-24T09:30:36+00:00 | unit-command-docs | `3c5c375` | **pass** | cloud container (Ubuntu) | 8 / 0 / 0 |
 | [`2026-11-23_224258Z_gate_20f89d5`](runs/2026-11-23_224258Z_gate_20f89d5/RUN.md) | 2026-11-23T22:42:58+00:00 | gate | `20f89d5` | **pass** | Pheonix's PC, Docker container on WSL2 | 0 / 0 / 0 |
 | [`2026-11-23_220703Z_suite_2894faf`](runs/2026-11-23_220703Z_suite_2894faf/RUN.md) | 2026-11-23T22:07:03+00:00 | suite | `2894faf` | **fail** | cloud container (Ubuntu) | 1374 / 2 / 6 |
 | [`2026-11-23_220640Z_gate-lint_2894faf`](runs/2026-11-23_220640Z_gate-lint_2894faf/RUN.md) | 2026-11-23T22:06:40+00:00 | gate-lint | `2894faf` | **pass** | cloud container (Ubuntu) | 1 / 0 / 0 |
