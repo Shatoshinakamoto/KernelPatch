@@ -110,6 +110,10 @@ if stage_on lint; then
 	python3 -B "$SRC/ci/check-config-docs.py" "$SRC" > "$WORK/config-docs.log" 2>&1 ||
 		{ grep -v '^ok' "$WORK/config-docs.log"; bad=$((bad + 1)); }
 	tail -1 "$WORK/config-docs.log"
+	# one page per command, script and feature, in step with the code (CLAUDE.MD section 5)
+	python3 -B "$SRC/ci/check-command-docs.py" "$SRC" > "$WORK/command-docs.log" 2>&1 ||
+		{ grep -v '^ok' "$WORK/command-docs.log"; bad=$((bad + 1)); }
+	tail -1 "$WORK/command-docs.log"
 	# HistoryTest/ archive integrity (CLAUDE.MD section 9, NIST AU-10): every
 	# sealed run's hashes, the manifest chain, redaction and the index.
 	if [ -d "$SRC/HistoryTest" ]; then

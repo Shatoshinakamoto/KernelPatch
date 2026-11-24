@@ -8,6 +8,7 @@ Entries start on 2026-11-22. For earlier history see the git log and
 ## [Unreleased]
 
 ### Added
+- 2026-11-24: one page per command and script in `docs/commands/` (64 pages: every `secure-sudo` subcommand, every script in `scripts/`, `ci/` and the daemon helpers, the daemon, the add-on binaries and the console), and one page per feature in `docs/features/` (31 pages: the 23 core features, remote attestation and the 7 add-ons), each with overview, how it works, how it is secure, usage, dependencies, limits, troubleshooting and test evidence. `docs/COMMANDS.md` and `docs/SCRIPTS.md` are now indexes. New `ci/check-command-docs.py` (gate lint, `tests/userspace/test-command-docs.sh`) keeps the pages in step with the code.
 - 2026-11-23: TLS log shipping for the `temporary/` add-ons: `logging.conf` `remote_proto = tls` and `remote_ca_file`. The collector's certificate must come from that CA and name `remote_host`; an outage is noted in the local log and retried every 30 s (SECURITY_REVIEW #79). New suite `tests/userspace/test-addon-log-tls.sh`. The add-ons now link `libssl`.
 - 2026-11-23: configuration pages for the nine `temporary/` add-on config files and the ProcGuard allowlist (`docs/configuration/*-conf.md`, `docs/files/procguard_allow.md`). `ci/check-config-docs.py` now also checks them against each add-on's parser table and template. Found while writing them: add-on log shipping has no TLS (tracked in TODO P2-3).
 - 2026-11-23: `docs/files/` pages for all 12 policy lists: format, matching, kernel limits, how to change safely, security impact, NIST reference and every shipped entry with why, who and when (with the two TPM openers removed on 2026-11-01). `ci/check-config-docs.py` now holds them to the templates and kernel limits.
@@ -29,5 +30,6 @@ Entries start on 2026-11-22. For earlier history see the git log and
 - 2026-11-23: network-namespace tests skip instead of falsely failing without `ping`, and the builder prerequisites are documented (#53).
 
 ### Changed
+- 2026-11-24: the project is named **SatoshiNakamoto Kernel Patch** (owner's decision); it was KernelPatch. `secure_sudo` stays the kernel module and command name, and the repository URL is unchanged. README History section, docs index and NOTICE updated.
 - 2026-11-23: `stig-harden.sh` post_patch honours a `STIG_ROOT` test hook, which is empty by default (#51, #55).
 - 2026-11-22: the docs no longer list GitHub Actions as a blocker. The project builds and tests locally (#48). SECURITY.md says reports go to the owner while the repository is private (#50).
