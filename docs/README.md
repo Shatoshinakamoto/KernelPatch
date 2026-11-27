@@ -43,6 +43,7 @@ here (CLAUDE.MD section 5).
 | [files/node_allowed_children.md](files/node_allowed_children.md) | `node_allowed_children.conf`: what a Node.js process may start (#11) |
 | [files/node_sea_binaries.md](files/node_sea_binaries.md) | `node_sea_binaries.conf`: self-contained Node binaries to guard (#11) |
 | [files/driver_blacklist.md](files/driver_blacklist.md) | `driver_blacklist.conf`: kernel modules refused at load (#6) |
+| [files/modprobe-compatible-ubuntu.md](files/modprobe-compatible-ubuntu.md) | Method 7: the Ubuntu modprobe-compatible install wrapper, the modprobe.d finding and the signature-enforcement points |
 | [files/timevault_allow.md](files/timevault_allow.md) | `timevault_allow.conf`: the hash-pinned programs allowed while TimeVault is engaged (#13) |
 | [files/home_map.md](files/home_map.md) | `home_map.conf`: each user's writable home (#4) |
 | [files/home_write_allow.md](files/home_write_allow.md) | `home_write_allow.conf`: extra writable prefixes for all non-sudo users (#4) |
@@ -87,6 +88,7 @@ One page per command or script, with every option (CLAUDE.MD section 5).
 | [`scripts/history_test.py`: the HistoryTest recorder](commands/history-test.md) | `scripts/history_test.py`, the HistoryTest recorder. |
 | [`install/encrypted/install-encrypted.sh`](commands/install-encrypted.md) | The encrypted-source + Secure Boot (MOK-signed) install variant. |
 | [`install/install.sh`](commands/install-sh.md) | Build, install, verify, roll back and remove the kernel and userspace on every supported distro family. |
+| [`install/ubuntu-modprobe.sh`](commands/ubuntu-modprobe.md) | Ubuntu modprobe-compatible guided install of secure_sudo (Method 7): archive verification, signature check, single confirmation (--with-modprobe-check included) |
 | [`temporary/install-temporary.sh`](commands/install-temporary.md) | Opt-in installer for the temporary/ add-ons; installs everything, enables nothing. |
 | [`ci/lsm-compile-check.sh`](commands/lsm-compile-check.md) | Compile every LSM source file against a kernel header tree. |
 | [`ci/make-release.sh`](commands/make-release.md) | Build the byte-reproducible release tarball with its SHA-256 file and SPDX SBOM. |

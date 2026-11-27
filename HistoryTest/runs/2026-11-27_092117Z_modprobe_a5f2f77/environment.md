@@ -1,0 +1,1 @@
+- OS: Ubuntu 24.04 (Docker), uid=0 (root); shell: /usr/bin/bash; python: 3.14.10

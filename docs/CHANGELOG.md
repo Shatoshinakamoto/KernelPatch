@@ -21,6 +21,18 @@ Entries start on 2026-11-22. For earlier history see the git log and
 - 2026-11-23: regression tests for the STIG known-issue patches, profile and datastream selection, the summary, OSB-15, OSB-18 and package-install drift (#51, #52, #55, #56).
 - 2026-11-22: `ci/publish-release.sh`: GitHub Releases are built locally and uploaded with `gh`, as drafts unless `--publish` is given (#49).
 
+### Added
+- 2026-11-27: Method 7, the Ubuntu modprobe-compatible install. A guided
+  wrapper `install/ubuntu-modprobe.sh` verifies a release archive
+  (SHA-256 plus optional signature by a pinned fingerprint, refused unsafe
+  members), runs the preflight, asks once, then runs the same
+  `install.sh` subcommands as every other method. Signature-enforced
+  modules are a kernel build option (`CONFIG_MODULE_SIG_FORCE`),
+  not a file in `/etc/modprobe.d`; the wrapper's
+  `--with-modprobe-check` proves the installed kernel refuses unsigned
+  modules and loads signed ones with `modprobe --test`. Docs: INSTALL.md
+  method 7, docs/commands/ubuntu-modprobe.md, docs/files/modprobe-compatible-ubuntu.md. Test: tests/install/test-ubuntu-modprobe.sh (no install, stub install.sh; the real flow is VM-verified by tests/vm/distro/run-install-test.sh).
+
 ### Changed
 - 2026-11-24: the project is named **SatoshiNakamoto Kernel Patch** (owner's decision); it was KernelPatch. `secure_sudo` stays the kernel module and command name, and the repository URL is unchanged. README History section, docs index and NOTICE updated.
 - 2026-11-24: `install/ansible/secure_sudo.yml` is now a play using that role. The old single play pinned kernel 6.12.48, ran the whole installer without a trial reboot or commit, and ignored failures of the policy load and the service; its example inventory had an active `localhost ansible_connection=local` entry, so running it unedited targeted the controller. The new example inventory lists no host.

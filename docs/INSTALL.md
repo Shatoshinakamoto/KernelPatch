@@ -26,7 +26,8 @@ manifest, a trial boot, rollback and a clean uninstall
 7. [Method 4: Ansible (fleets)](#method-4-ansible-fleets)
 8. [Method 5: Secure Boot and an encrypted source bundle](#method-5-secure-boot-and-an-encrypted-source-bundle)
 9. [Method 6: offline or air-gapped](#method-6-offline-or-air-gapped)
-10. [Try it in a throwaway VM first](#try-it-in-a-throwaway-vm-first)
+10. [Method 7: Ubuntu modprobe-compatible install](#method-7-ubuntu-modprobe-compatible-install)
+11. [Try it in a throwaway VM first](#try-it-in-a-throwaway-vm-first)
 11. [After the install](#after-the-install)
 12. [Optional: add-ons, STIG and CIS hardening](#optional-add-ons-stig-and-cis-hardening)
 13. [Roll back or remove](#roll-back-or-remove)
@@ -65,6 +66,7 @@ debhelper rsync kmod cpio zstd gnupg xz-utils curl`, and for the TPM features
 | [4. Ansible](#method-4-ansible-fleets) | fleets, repeatable rollouts | SSH, Python 3 | one playbook run, one host at a time |
 | [5. Secure Boot / encrypted source](#method-5-secure-boot-and-an-encrypted-source-bundle) | Secure Boot on; source must not be on disk in clear | `age`, `mokutil`, `sbsigntool` | two runs around one MOK enrollment reboot |
 | [6. Offline](#method-6-offline-or-air-gapped) | no internet on the target | a kernel tree verified elsewhere | as method 2 or 3 |
+| [7. Ubuntu modprobe-compatible](#method-7-ubuntu-modprobe-compatible-install) | Ubuntu 24.04; modules loaded with modprobe after install | compiler, kernel build space | two commands, then a reboot |
 
 ## Verify a release
 
@@ -256,6 +258,75 @@ packages, then carry them over:
 - **Distro packages:** install the packages listed in
   [Before you start](#before-you-start) from your local mirror first;
   `install.sh preflight` then reports nothing to add.
+
+## Method 7: Ubuntu modprobe-compatible install
+
+The Debian/Ubuntu kernel ships a `modprobe.d` config that the packaging tools
+manage, and the file lives in `/etc/modprobe.d`. This installer must be
+**modprobe-compatible**, not modprobe-reliant: the secure_sudo kernel refuses
+unsigned modules, so a module the operator later loads with `modprobe` (a DKMS
+driver, a third-party module, a self-built out-of-tree module) is refused
+unless it is signed with the secure_sudo kernel's own key.
+
+The installer enforces signature verification as a kernel parameter, not as a
+file in modprobe.d. The kernel build sets
+`CONFIG_MODULE_SIG_FORCE=y`, which exposes `module.sig_enforce=Y` at run time,
+and the installer's `verify` checks it. That is why a modprobe.d file is the
+wrong place: the playbook's `options module.sig_enforce=1` in modprobe.d did
+nothing, and the documentation in [features/driver-blacklist.md](../features/driver-blacklist.md)
+says the same. Signing the out-of-tree modules is the operator's job - this
+install method documents how, it does not do it:
+
+| What | How it is modprobe-compatible |
+|---|---|
+| kernel build | `CONFIG_MODULE_SIG_FORCE=y`; the installer's `verify` then reports `module.sig_enforce=Y` |
+| installer | sets the parameter on the **kernel config** (a build-time config option), never in a modprobe.d file |
+| modprobe sysctl | frozen for root at boot by the KernelGuard feature (feature #23) |
+| out-of-tree modules | sign them with the kernel's key before loading: `dkms` settings, NVIDIA, ZFS, VirtualBox, any custom module |
+
+The method runs the same installer as the other methods with one extra, optional
+read-only check that proves the modprobe behaviour on the installed kernel:
+
+```sh
+# review the script first (it never changes a file before the question)
+bash install/ubuntu-modprobe.sh --archive ~/dl/secure_sudo-0.12.0.tar.gz \
+    --sha256 ~/dl/secure_sudo-0.12.0.tar.gz.sha256 --dry-run
+# without dry-run the question is asked once, then the install runs
+bash install/ubuntu-modprobe.sh --archive ~/dl/secure_sudo-0.12.0.tar.gz \
+    --sha256 ~/dl/secure_sudo-0.12.0.tar.gz
+```
+
+The script verifies the archive (SHA-256, optional GPG signature by a pinned
+fingerprint), runs `install.sh preflight`, keeps the verified archive under
+`--dest` (default `/opt/secure_sudo`), and then runs
+`install-kernel` (kernel build, install next to the running kernel, trial boot
+armed), `userspace` and `verify`. The `--with-modprobe-check` option adds a
+read-only exercise: it compiles two tiny loadable modules, leaves one unsigned
+on purpose, signs the other with the kernel build's own `scripts/sign-file`,
+and runs `modprobe --test` to show the unsigned one is refused and the signed
+one loads. Nothing is installed, and the temporary files are removed afterwards.
+
+```sh
+bash install/ubuntu-modprobe.sh --archive ~/dl/secure_sudo-0.12.0.tar.gz \
+    --sha256 ~/dl/secure_sudo-0.12.0.tar.gz --with-modprobe-check
+```
+
+Options (full list is in [commands/ubuntu-modprobe.md](commands/ubuntu-modprobe.md)):
+
+| Option | What it does |
+|---|---|
+| `--archive FILE --sha256 FILE` | verify a release archive against its checksum file |
+| `--signature FILE --signer-key FILE --signer-fpr FPR` | verify the checksum file's detached signature with a pinned fingerprint |
+| `--dest DIR` | keep the verified archive under this root (default `/opt/secure_sudo`) |
+| `--yes`, `--dry-run`, `--no-tpm-lockout`, `--stig scan\|remediate` | same meaning as method 1 |
+| `--with-addons` | afterwards run `temporary/install-temporary.sh` |
+| `--initramfs` | with `--with-addons`: also install the BootGuard initramfs stage |
+| `--with-modprobe-check` | optional read-only exercise of the modprobe behaviour on the installed kernel |
+
+After the install: [reboot once](#after-the-install), then
+`install.sh verify --commit`. The trial boot picks the newly built kernel the
+next boot (and only the next boot); without commit the machine comes back on
+the old kernel by itself.
 
 ## Try it in a throwaway VM first
 
