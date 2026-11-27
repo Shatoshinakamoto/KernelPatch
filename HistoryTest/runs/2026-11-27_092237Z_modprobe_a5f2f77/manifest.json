@@ -1,0 +1,22 @@
+{
+  "area": "modprobe",
+  "commit": "a5f2f77",
+  "date": "2026-11-27T00:00:00",
+  "files": {
+    "RUN.md": "265bbd2f7f94e7e2f8886870d1d586be1be8a02639d93b6c3012184cf5cee3e8",
+    "command.txt": "fc7a21449bddc1916431c7525ff841d6117744d9794cd00b34341baa1825e84d",
+    "environment.md": "af34359cd300e033fe1eee223f2127619f21abe0a2440915d30a82697615bd87"
+  },
+  "kind": "received",
+  "previous_manifest_sha256": "1ae7798424294bbb8f21f3d699a24c153cc3ffc9c088f8d5deddaabb52d41330",
+  "previous_run": "2026-11-27_092117Z_modprobe_a5f2f77",
+  "run_id": "2026-11-27_092237Z_modprobe_a5f2f77",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 24,
+    "skipped": 0
+  },
+  "verdict": "pass",
+  "where": "owner PC (Docker container, root)"
+}

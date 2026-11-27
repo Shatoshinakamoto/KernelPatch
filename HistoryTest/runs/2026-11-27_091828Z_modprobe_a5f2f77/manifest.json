@@ -1,0 +1,26 @@
+{
+  "area": "modprobe",
+  "commit": "a5f2f77",
+  "date": "2026-11-27T09:18:28+00:00",
+  "exit_code": 1,
+  "files": {
+    "RUN.md": "93e630e8977d32cbb8aa2b8934fdb4ab2e95e223400c56ae17f91a8d141a1fd9",
+    "command.txt": "fc7a21449bddc1916431c7525ff841d6117744d9794cd00b34341baa1825e84d",
+    "environment.md": "360adc76b1ce4debb2083e0b81865c210382c3bb2631264ed474c0f4925fbc68",
+    "logs/stderr.log": "6e68a809b0960e468d84254b89048eb77eee117bb75ff78bd6a66b6f5a0a95fe",
+    "logs/stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "results/tap-summary.txt": "58b336c75567cab873fc5968537e56c552e01a9b2b8f60418a06b29d9d253740"
+  },
+  "kind": "run",
+  "previous_manifest_sha256": "8858d3294188aea1305b92caa2dbd151e11e210c1ca87ed068bbff49c1f2197f",
+  "previous_run": "2026-11-27_091614Z_modprobe_a5f2f77",
+  "run_id": "2026-11-27_091828Z_modprobe_a5f2f77",
+  "schema": 1,
+  "tap": {
+    "not_ok": 0,
+    "ok": 0,
+    "skipped": 0
+  },
+  "verdict": "fail",
+  "where": "owner PC (Docker container, root)"
+}

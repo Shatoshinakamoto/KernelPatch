@@ -39,3 +39,8 @@ run_id,date,area,commit,verdict,where,ok,not_ok,skipped
 2026-11-24_101726Z_vm-ansible_0968b2c,2026-11-24T10:05:00+00:00,vm-ansible,0968b2c,partial,"owner PC (Docker, QEMU TCG)",13,1,0
 2026-11-24_103222Z_gate-lint_db69a49,2026-11-24T10:32:22+00:00,gate-lint,db69a49,pass,local,1,0,0
 2026-11-24_103237Z_unit-history-test_db69a49,2026-11-24T10:32:37+00:00,unit-history-test,db69a49,pass,local,49,0,0
+2026-11-27_091559Z_modprobe_a5f2f77,2026-11-27T09:15:59+00:00,modprobe,a5f2f77,fail,"owner PC (Docker container, root)",0,0,0
+2026-11-27_091614Z_modprobe_a5f2f77,2026-11-27T09:16:14+00:00,modprobe,a5f2f77,fail,"owner PC (Docker container, root)",0,0,0
+2026-11-27_091828Z_modprobe_a5f2f77,2026-11-27T09:18:28+00:00,modprobe,a5f2f77,fail,"owner PC (Docker container, root)",0,0,0
+2026-11-27_092117Z_modprobe_a5f2f77,2026-11-27T00:00:00,modprobe,a5f2f77,pass,"owner PC (Docker container, root)",0,0,0
+2026-11-27_092237Z_modprobe_a5f2f77,2026-11-27T00:00:00,modprobe,a5f2f77,pass,"owner PC (Docker container, root)",24,0,0

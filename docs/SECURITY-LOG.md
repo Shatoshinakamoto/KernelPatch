@@ -109,3 +109,40 @@ findings without CVE IDs, so none are given; no scores are invented.
 - **What changed:** the owner chose to keep the repository private. GitHub private vulnerability reporting is unavailable, so reports go to the owner directly.
 - **Why it is acceptable:** there are no outside users yet. Revisit when the repository goes public (NIST SSDF RV.1).
 - **Verification:** the gh API returned 404 for private vulnerability reporting on the private repository. PR #50.
+
+## 2026-11-27 — Method 7: modprobe.d does not set module signature enforcement
+- **Type:** hardening (design, documented)
+- **CVE / CWE / advisory:** none; the project finding is the playbook's
+  `options module.sig_enforce=1` in `/etc/modprobe.d`, which did nothing
+  (ss_driver.c:31-33). CWE-1328 (incorrect permission assignment for a
+  critical resource) is the nearest class; no CVE exists and no score is
+  given.
+- **Severity:** no CVSS (no CVE). Project rating: medium at the time the
+  playbook option was added (a `modprobe.d` file cannot enforce module
+  signature mode); now resolved by design and documented.
+- **Affected:** the earlier install guide's 6th method, the Ubuntu playbook
+  path with `modprobe.d`. The enforcement point is not a modprobe file.
+- **What changed:** `docs/INSTALL.md` now carries Method 7, the
+  Ubuntu modprobe-compatible install, and `install/ubuntu-modprobe.sh`
+  wraps the same `install.sh` subcommands (preflight, install-kernel,
+  userspace, verify) as every other method. The installer builds the kernel
+  with `CONFIG_MODULE_SIG_FORCE=y` (a kernel config option), passes
+  `module.sig_enforce=1` as a kernel parameter, verifies `module.sig_enforce=Y`
+  at run time, and the KernelGuard feature (#23) freezes
+  `/proc/sys/kernel/modprobe` so root cannot re-point modprobe at boot. The
+  method never writes `/etc/modprobe.d` and documents out-of-tree module
+  signing (DKMS / distro signing infrastructure) for signed modules. The
+  wrapper's `--with-modprobe-check` builds an unsigned and a signed test
+  module and shows `modprobe --test` refusing the unsigned one and loading
+  the signed one.
+- **Why it is secure now:** signature enforcement happens in the kernel
+  build and on the boot command line, exactly where the upstream kernel
+  applies it; there is no `modprobe.d` file to bypass or to leave broken.
+  NIST SSDF PS.2/BUILD, NIST SP 800-53 SI-7, CM-6.
+- **Verification:** `tests/install/test-ubuntu-modprobe.sh`
+  12/0 (root-only; a stub `install.sh` records the calls, nothing is
+  installed). VM-verified full flow: install, trial reboot, commit,
+  `module.sig_enforce=Y` check, the modprobe control and rollback, on a
+  clean Ubuntu 24.04 cloud image
+  (`tests/vm/distro/run-install-test.sh`, results under
+  `HistoryTest/runs/2026-11-27_*` and `tests/vm/distro/results/`).
